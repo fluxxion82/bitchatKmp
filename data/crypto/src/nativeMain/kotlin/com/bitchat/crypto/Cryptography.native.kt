@@ -1,0 +1,764 @@
+package com.bitchat.crypto
+
+import kotlinx.cinterop.CPointer
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.ULongVar
+import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
+import kotlinx.cinterop.reinterpret
+import kotlinx.cinterop.usePinned
+import kotlinx.cinterop.value
+import libsodium.crypto_aead_aes256gcm_ABYTES
+import libsodium.crypto_aead_aes256gcm_NPUBBYTES
+import libsodium.crypto_aead_aes256gcm_decrypt
+import libsodium.crypto_aead_aes256gcm_encrypt
+import libsodium.crypto_aead_aes256gcm_is_available
+import libsodium.crypto_aead_xchacha20poly1305_ietf_ABYTES
+import libsodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
+import libsodium.crypto_aead_xchacha20poly1305_ietf_decrypt
+import libsodium.crypto_aead_xchacha20poly1305_ietf_encrypt
+import libsodium.crypto_scalarmult_base
+import libsodium.crypto_sign_ed25519_detached
+import libsodium.crypto_sign_ed25519_seed_keypair
+import libsodium.crypto_sign_ed25519_verify_detached
+import libsodium.randombytes_buf
+import libsodium.sodium_init
+import platform.CoreCrypto.CCHmac
+import platform.CoreCrypto.CCKeyDerivationPBKDF
+import platform.CoreCrypto.CC_SHA256
+import platform.CoreCrypto.CC_SHA256_DIGEST_LENGTH
+import platform.CoreCrypto.kCCHmacAlgSHA256
+import platform.CoreCrypto.kCCPBKDF2
+import platform.CoreCrypto.kCCPRFHmacAlgSHA256
+import platform.CoreCrypto.kCCSuccess
+import platform.Foundation.NSDate
+import platform.Foundation.timeIntervalSince1970
+import platform.posix.uint8_tVar
+import secp256k1.SECP256K1_CONTEXT_SIGN
+import secp256k1.SECP256K1_CONTEXT_VERIFY
+import secp256k1.SECP256K1_EC_COMPRESSED
+import secp256k1.secp256k1_context
+import secp256k1.secp256k1_context_create
+import secp256k1.secp256k1_ec_pubkey_create
+import secp256k1.secp256k1_ec_pubkey_parse
+import secp256k1.secp256k1_ec_pubkey_serialize
+import secp256k1.secp256k1_ec_pubkey_tweak_mul
+import secp256k1.secp256k1_ec_seckey_verify
+import secp256k1.secp256k1_keypair
+import secp256k1.secp256k1_keypair_create
+import secp256k1.secp256k1_pubkey
+import secp256k1.secp256k1_schnorrsig_sign32
+import secp256k1.secp256k1_schnorrsig_verify
+import secp256k1.secp256k1_xonly_pubkey
+import secp256k1.secp256k1_xonly_pubkey_parse
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
+
+@OptIn(ExperimentalForeignApi::class)
+actual object Cryptography {
+    private val secpContext: CPointer<secp256k1_context> =
+        secp256k1_context_create((SECP256K1_CONTEXT_SIGN or SECP256K1_CONTEXT_VERIFY).toUInt())
+            ?: error("secp256k1_context_create failed")
+
+    private val sodiumReady: Boolean = run {
+        if (sodium_init() < 0) {
+            error("sodium_init failed")
+        }
+        true
+    }
+
+    actual fun generateKeyPair(): Pair<String, String> {
+        sodiumReady
+        val privateKey = ByteArray(32)
+        do {
+            privateKey.usePinned { pinned ->
+                randombytes_buf(pinned.addressOf(0).reinterpret<uint8_tVar>(), privateKey.size.toULong())
+            }
+        } while (!isValidPrivateKey(privateKey))
+
+        val publicKey = createPublicKey(privateKey)
+        val xOnly = publicKey.copyOfRange(1, publicKey.size)
+        return Pair(privateKey.toHexString(), xOnly.toHexString())
+    }
+
+    actual fun derivePublicKey(privateKeyHex: String): String {
+        val privateKey = privateKeyHex.hexToByteArray()
+        require(privateKey.size == 32) { "Private key must be 32 bytes" }
+        require(isValidPrivateKey(privateKey)) { "Invalid private key" }
+
+        val publicKey = createPublicKey(privateKey)
+        return publicKey.copyOfRange(1, publicKey.size).toHexString()
+    }
+
+    actual fun generateEd25519KeyPair(): Pair<String, String> {
+        sodiumReady
+        val seed = ByteArray(32)
+        seed.usePinned { pinned ->
+            randombytes_buf(pinned.addressOf(0).reinterpret<uint8_tVar>(), seed.size.toULong())
+        }
+
+        val publicKey = ByteArray(32)
+        val secretKey = ByteArray(64)
+        memScoped {
+            val result = seed.usePinned { seedPinned ->
+                publicKey.usePinned { pkPinned ->
+                    secretKey.usePinned { skPinned ->
+                        crypto_sign_ed25519_seed_keypair(
+                            pkPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            skPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            seedPinned.addressOf(0).reinterpret<uint8_tVar>()
+                        )
+                    }
+                }
+            }
+            check(result == 0) { "crypto_sign_ed25519_seed_keypair failed: $result" }
+        }
+
+        return Pair(seed.toHexString(), publicKey.toHexString())
+    }
+
+    actual fun deriveEd25519PublicKey(privateKeyHex: String): String {
+        sodiumReady
+        val seed = privateKeyHex.hexToByteArray()
+        require(seed.size == 32) { "Ed25519 private key must be 32 bytes" }
+
+        val publicKey = ByteArray(32)
+        val secretKey = ByteArray(64)
+        memScoped {
+            val result = seed.usePinned { seedPinned ->
+                publicKey.usePinned { pkPinned ->
+                    secretKey.usePinned { skPinned ->
+                        crypto_sign_ed25519_seed_keypair(
+                            pkPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            skPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            seedPinned.addressOf(0).reinterpret<uint8_tVar>()
+                        )
+                    }
+                }
+            }
+            check(result == 0) { "crypto_sign_ed25519_seed_keypair failed: $result" }
+        }
+
+        return publicKey.toHexString()
+    }
+
+    actual fun ed25519Sign(message: ByteArray, privateKeyHex: String): ByteArray {
+        sodiumReady
+        val seed = privateKeyHex.hexToByteArray()
+        require(seed.size == 32) { "Ed25519 private key must be 32 bytes" }
+
+        val publicKey = ByteArray(32)
+        val secretKey = ByteArray(64)
+        memScoped {
+            val result = seed.usePinned { seedPinned ->
+                publicKey.usePinned { pkPinned ->
+                    secretKey.usePinned { skPinned ->
+                        crypto_sign_ed25519_seed_keypair(
+                            pkPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            skPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            seedPinned.addressOf(0).reinterpret<uint8_tVar>()
+                        )
+                    }
+                }
+            }
+            check(result == 0) { "crypto_sign_ed25519_seed_keypair failed: $result" }
+        }
+
+        val signature = ByteArray(64)
+        memScoped {
+            val sigLen = alloc<ULongVar>()
+            val result = signature.usePinned { sigPinned ->
+                message.usePinned { msgPinned ->
+                    secretKey.usePinned { skPinned ->
+                        crypto_sign_ed25519_detached(
+                            sigPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            sigLen.ptr,
+                            msgPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            message.size.toULong(),
+                            skPinned.addressOf(0).reinterpret<uint8_tVar>()
+                        )
+                    }
+                }
+            }
+            check(result == 0) { "crypto_sign_ed25519_detached failed: $result" }
+        }
+
+        return signature
+    }
+
+    actual fun ed25519Verify(message: ByteArray, signature: ByteArray, publicKeyHex: String): Boolean {
+        sodiumReady
+        val publicKey = publicKeyHex.hexToByteArray()
+        if (publicKey.size != 32 || signature.size != 64) return false
+
+        return memScoped {
+            val result = signature.usePinned { sigPinned ->
+                message.usePinned { msgPinned ->
+                    publicKey.usePinned { pkPinned ->
+                        crypto_sign_ed25519_verify_detached(
+                            sigPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            msgPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            message.size.toULong(),
+                            pkPinned.addressOf(0).reinterpret<uint8_tVar>()
+                        )
+                    }
+                }
+            }
+            result == 0
+        }
+    }
+
+    actual fun deriveNIP44Key(sharedSecret: ByteArray): ByteArray {
+        val prk = hkdfExtract(ByteArray(0), sharedSecret)
+        return hkdfExpand(prk, "nip44-v2".encodeToByteArray(), 32)
+    }
+
+    actual fun encryptNIP44(
+        plaintext: String,
+        recipientPublicKeyHex: String,
+        senderPrivateKeyHex: String
+    ): String {
+        sodiumReady
+        val shared = computeSharedPointCompressed(
+            senderPrivateKeyHex,
+            recipientPublicKeyHex,
+            preferOddY = false
+        )
+        val key = deriveNIP44Key(shared)
+
+        val nonce = ByteArray(crypto_aead_xchacha20poly1305_ietf_NPUBBYTES.toInt())
+        nonce.usePinned { pinned ->
+            randombytes_buf(pinned.addressOf(0).reinterpret<uint8_tVar>(), nonce.size.toULong())
+        }
+
+        val message = plaintext.encodeToByteArray()
+        val cipher = ByteArray(message.size + crypto_aead_xchacha20poly1305_ietf_ABYTES.toInt())
+        memScoped {
+            val clen = alloc<ULongVar>()
+            val result = message.usePinned { msgPinned ->
+                cipher.usePinned { cipherPinned ->
+                    nonce.usePinned { noncePinned ->
+                        key.usePinned { keyPinned ->
+                            crypto_aead_xchacha20poly1305_ietf_encrypt(
+                                cipherPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                                clen.ptr,
+                                msgPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                                message.size.toULong(),
+                                null,
+                                0u,
+                                null,
+                                noncePinned.addressOf(0).reinterpret<uint8_tVar>(),
+                                keyPinned.addressOf(0).reinterpret<uint8_tVar>()
+                            )
+                        }
+                    }
+                }
+            }
+            check(result == 0) { "NIP-44 v2 encryption failed" }
+            val combined = nonce + cipher.copyOf(clen.value.toInt())
+            return "v2:${base64UrlNoPad(combined)}"
+        }
+    }
+
+    actual fun decryptNIP44(
+        ciphertext: String,
+        senderPublicKeyHex: String,
+        recipientPrivateKeyHex: String
+    ): String {
+        sodiumReady
+        require(ciphertext.startsWith("v2:")) { "Invalid NIP-44 version prefix" }
+        val encoded = ciphertext.substring(3)
+        val data = base64UrlDecode(encoded) ?: error("Invalid base64url payload")
+
+        val nonceSize = crypto_aead_xchacha20poly1305_ietf_NPUBBYTES.toInt()
+        val tagSize = crypto_aead_xchacha20poly1305_ietf_ABYTES.toInt()
+        require(data.size > nonceSize + tagSize) { "Invalid ciphertext length" }
+
+        val nonce = data.copyOfRange(0, nonceSize)
+        val cipher = data.copyOfRange(nonceSize, data.size)
+
+        var lastError: Throwable? = null
+        for (preferOdd in listOf(false, true)) {
+            try {
+                val shared = computeSharedPointCompressed(
+                    recipientPrivateKeyHex,
+                    senderPublicKeyHex,
+                    preferOddY = preferOdd
+                )
+                val key = deriveNIP44Key(shared)
+                val plaintext = decryptAeadXChaCha(cipher, nonce, key)
+                return plaintext.decodeToString()
+            } catch (e: Throwable) {
+                lastError = e
+            }
+        }
+
+        throw lastError ?: RuntimeException("NIP-44 v2 decryption failed")
+    }
+
+    actual fun randomizeTimestampUpToPast(maxPastSeconds: Int): Int {
+        val now = NSDate().timeIntervalSince1970.toLong()
+        val offset = if (maxPastSeconds > 0) {
+            randomInt(maxPastSeconds + 1)
+        } else {
+            0
+        }
+        return (now - offset).toInt()
+    }
+
+    actual fun isValidPrivateKey(privateKeyHex: String): Boolean {
+        return try {
+            val privateKey = privateKeyHex.hexToByteArray()
+            isValidPrivateKey(privateKey)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    actual fun isValidPublicKey(publicKeyHex: String): Boolean {
+        return try {
+            val publicKey = publicKeyHex.hexToByteArray()
+            if (publicKey.size != 32) return false
+
+            val compressed = ByteArray(33)
+            publicKey.copyInto(compressed, 1, 0, 32)
+
+            memScoped {
+                val pubkey = alloc<secp256k1_pubkey>()
+                compressed[0] = 0x02
+                if (parsePublicKey(pubkey, compressed)) return true
+
+                compressed[0] = 0x03
+                parsePublicKey(pubkey, compressed)
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    @OptIn(ExperimentalForeignApi::class)
+    actual fun getDigestHash(data: ByteArray): ByteArray {
+        memScoped {
+            val digestLength = CC_SHA256_DIGEST_LENGTH
+            val hashBytes = UByteArray(digestLength)
+
+            data.usePinned { pinnedData ->
+                hashBytes.usePinned { pinnedHash ->
+                    CC_SHA256(
+                        pinnedData.addressOf(0),
+                        data.size.toUInt(),
+                        pinnedHash.addressOf(0)
+                    )
+                }
+            }
+
+            return hashBytes.asByteArray()
+        }
+    }
+
+    actual fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray {
+        val mac = ByteArray(CC_SHA256_DIGEST_LENGTH)
+        key.usePinned { keyPinned ->
+            message.usePinned { messagePinned ->
+                mac.usePinned { macPinned ->
+                    CCHmac(
+                        kCCHmacAlgSHA256,
+                        keyPinned.addressOf(0),
+                        key.size.toULong(),
+                        messagePinned.addressOf(0),
+                        message.size.toULong(),
+                        macPinned.addressOf(0)
+                    )
+                }
+            }
+        }
+        return mac
+    }
+
+    actual fun createAESSecretKey(password: String, salt: ByteArray): ByteArray {
+        val output = ByteArray(32)
+
+        val status = salt.usePinned { saltPinned ->
+            output.usePinned { outputPinned ->
+                CCKeyDerivationPBKDF(
+                    kCCPBKDF2,
+                    password,
+                    password.length.toULong(),
+                    saltPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                    salt.size.toULong(),
+                    kCCPRFHmacAlgSHA256,
+                    100_000u,
+                    outputPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                    output.size.toULong()
+                )
+            }
+        }
+        check(status == kCCSuccess) { "PBKDF2 failed: $status" }
+        return output
+    }
+
+    actual fun encryptAESGCM(plaintext: String, key: ByteArray): ByteArray {
+        sodiumReady
+        require(key.size == 32) { "AES key must be 32 bytes (256-bit)" }
+        require(crypto_aead_aes256gcm_is_available() == 1) { "AES-256-GCM is not available" }
+
+        val nonce = ByteArray(crypto_aead_aes256gcm_NPUBBYTES.toInt())
+        nonce.usePinned { pinned ->
+            randombytes_buf(pinned.addressOf(0).reinterpret<uint8_tVar>(), nonce.size.toULong())
+        }
+
+        val message = plaintext.encodeToByteArray()
+        val cipher = ByteArray(message.size + crypto_aead_aes256gcm_ABYTES.toInt())
+
+        memScoped {
+            val clen = alloc<ULongVar>()
+            val result = message.usePinned { msgPinned ->
+                cipher.usePinned { cipherPinned ->
+                    nonce.usePinned { noncePinned ->
+                        key.usePinned { keyPinned ->
+                            crypto_aead_aes256gcm_encrypt(
+                                cipherPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                                clen.ptr,
+                                msgPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                                message.size.toULong(),
+                                null,
+                                0u,
+                                null,
+                                noncePinned.addressOf(0).reinterpret<uint8_tVar>(),
+                                keyPinned.addressOf(0).reinterpret<uint8_tVar>()
+                            )
+                        }
+                    }
+                }
+            }
+            check(result == 0) { "AES-GCM encryption failed" }
+            return nonce + cipher.copyOf(clen.value.toInt())
+        }
+    }
+
+    actual fun decryptAESGCM(encryptedData: ByteArray, key: ByteArray): String? {
+        return try {
+            sodiumReady
+            require(key.size == 32) { "AES key must be 32 bytes (256-bit)" }
+            if (encryptedData.size < crypto_aead_aes256gcm_NPUBBYTES.toInt()) return null
+            require(crypto_aead_aes256gcm_is_available() == 1) { "AES-256-GCM is not available" }
+
+            val nonceSize = crypto_aead_aes256gcm_NPUBBYTES.toInt()
+            val nonce = encryptedData.copyOfRange(0, nonceSize)
+            val cipher = encryptedData.copyOfRange(nonceSize, encryptedData.size)
+
+            val message = decryptAeadAesGcm(cipher, nonce, key)
+            message.decodeToString()
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    actual fun schnorrSign(messageHash: ByteArray, privateKeyHex: String): String {
+        require(messageHash.size == 32) { "Message hash must be 32 bytes" }
+        val privateKey = privateKeyHex.hexToByteArray()
+        require(privateKey.size == 32) { "Private key must be 32 bytes" }
+        require(isValidPrivateKey(privateKey)) { "Invalid private key" }
+
+        val signature = ByteArray(64)
+        val auxRand = ByteArray(32)
+        auxRand.usePinned { pinned ->
+            randombytes_buf(pinned.addressOf(0).reinterpret<uint8_tVar>(), auxRand.size.toULong())
+        }
+
+        memScoped {
+            val keypair = alloc<secp256k1_keypair>()
+            val created = privateKey.usePinned { keyPinned ->
+                secp256k1_keypair_create(secpContext, keypair.ptr, keyPinned.addressOf(0).reinterpret<uint8_tVar>())
+            }
+            check(created == 1) { "Failed to create keypair" }
+
+            val result = signature.usePinned { sigPinned ->
+                messageHash.usePinned { msgPinned ->
+                    auxRand.usePinned { auxPinned ->
+                        secp256k1_schnorrsig_sign32(
+                            secpContext,
+                            sigPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            msgPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            keypair.ptr,
+                            auxPinned.addressOf(0).reinterpret<uint8_tVar>()
+                        )
+                    }
+                }
+            }
+            check(result == 1) { "Schnorr signing failed" }
+        }
+
+        return signature.toHexString()
+    }
+
+    actual fun schnorrVerify(messageHash: ByteArray, signatureHex: String, publicKeyHex: String): Boolean {
+        return try {
+            require(messageHash.size == 32) { "Message hash must be 32 bytes" }
+            val signature = signatureHex.hexToByteArray()
+            require(signature.size == 64) { "Signature must be 64 bytes" }
+            val publicKey = publicKeyHex.hexToByteArray()
+            require(publicKey.size == 32) { "Public key must be 32 bytes" }
+
+            memScoped {
+                val xonly = alloc<secp256k1_xonly_pubkey>()
+                val parsed = publicKey.usePinned { pubPinned ->
+                    secp256k1_xonly_pubkey_parse(
+                        secpContext,
+                        xonly.ptr,
+                        pubPinned.addressOf(0).reinterpret<uint8_tVar>()
+                    )
+                }
+                if (parsed != 1) return false
+
+                val verified = signature.usePinned { sigPinned ->
+                    messageHash.usePinned { msgPinned ->
+                        secp256k1_schnorrsig_verify(
+                            secpContext,
+                            sigPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            msgPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                            32u,
+                            xonly.ptr
+                        )
+                    }
+                }
+                verified == 1
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun hkdfExtract(salt: ByteArray, ikm: ByteArray): ByteArray =
+        hmacSha256(salt, ikm)
+
+    private fun hkdfExpand(prk: ByteArray, info: ByteArray, length: Int): ByteArray {
+        val input = if (info.isNotEmpty()) {
+            info + byteArrayOf(0x01)
+        } else {
+            byteArrayOf(0x01)
+        }
+        return hmacSha256(prk, input).copyOf(length)
+    }
+
+    private fun computeSharedPointCompressed(
+        privateKeyHex: String,
+        publicKeyHex: String,
+        preferOddY: Boolean
+    ): ByteArray {
+        val privateKey = privateKeyHex.hexToByteArray()
+        val publicKey = publicKeyHex.hexToByteArray()
+        require(privateKey.size == 32) { "Private key must be 32 bytes" }
+        require(publicKey.size == 32) { "Public key must be 32 bytes" }
+        require(isValidPrivateKey(privateKey)) { "Invalid private key" }
+
+        val compressed = ByteArray(33)
+        compressed[0] = if (preferOddY) 0x03 else 0x02
+        publicKey.copyInto(compressed, 1, 0, 32)
+
+        memScoped {
+            val pubkey = alloc<secp256k1_pubkey>()
+            check(parsePublicKey(pubkey, compressed)) { "Invalid public key" }
+
+            val tweaked = privateKey.usePinned { keyPinned ->
+                secp256k1_ec_pubkey_tweak_mul(
+                    secpContext,
+                    pubkey.ptr,
+                    keyPinned.addressOf(0).reinterpret<uint8_tVar>()
+                )
+            }
+            check(tweaked == 1) { "ECDH multiplication failed" }
+
+            return serializeCompressed(pubkey)
+        }
+    }
+
+    private fun createPublicKey(privateKey: ByteArray): ByteArray {
+        memScoped {
+            val pubkey = alloc<secp256k1_pubkey>()
+            val created = privateKey.usePinned { keyPinned ->
+                secp256k1_ec_pubkey_create(secpContext, pubkey.ptr, keyPinned.addressOf(0).reinterpret<uint8_tVar>())
+            }
+            check(created == 1) { "Public key creation failed" }
+            return serializeCompressed(pubkey)
+        }
+    }
+
+    private fun parsePublicKey(pubkey: secp256k1_pubkey, compressed: ByteArray): Boolean {
+        val parsed = compressed.usePinned { compressedPinned ->
+            secp256k1_ec_pubkey_parse(
+                secpContext,
+                pubkey.ptr,
+                compressedPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                compressed.size.toULong()
+            )
+        }
+        return parsed == 1
+    }
+
+    private fun serializeCompressed(pubkey: secp256k1_pubkey): ByteArray {
+        val output = ByteArray(33)
+        memScoped {
+            val outputLen = alloc<ULongVar>()
+            outputLen.value = output.size.toULong()
+            val serialized = output.usePinned { outputPinned ->
+                secp256k1_ec_pubkey_serialize(
+                    secpContext,
+                    outputPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                    outputLen.ptr,
+                    pubkey.ptr,
+                    SECP256K1_EC_COMPRESSED.toUInt()
+                )
+            }
+            check(serialized == 1) { "Public key serialization failed" }
+        }
+        return output
+    }
+
+    private fun decryptAeadXChaCha(cipher: ByteArray, nonce: ByteArray, key: ByteArray): ByteArray {
+        val message = ByteArray(cipher.size - crypto_aead_xchacha20poly1305_ietf_ABYTES.toInt())
+        memScoped {
+            val mlen = alloc<ULongVar>()
+            val result = message.usePinned { msgPinned ->
+                cipher.usePinned { cipherPinned ->
+                    nonce.usePinned { noncePinned ->
+                        key.usePinned { keyPinned ->
+                            crypto_aead_xchacha20poly1305_ietf_decrypt(
+                                msgPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                                mlen.ptr,
+                                null,
+                                cipherPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                                cipher.size.toULong(),
+                                null,
+                                0u,
+                                noncePinned.addressOf(0).reinterpret<uint8_tVar>(),
+                                keyPinned.addressOf(0).reinterpret<uint8_tVar>()
+                            )
+                        }
+                    }
+                }
+            }
+            check(result == 0) { "NIP-44 v2 decryption failed" }
+            return message.copyOf(mlen.value.toInt())
+        }
+    }
+
+    private fun decryptAeadAesGcm(cipher: ByteArray, nonce: ByteArray, key: ByteArray): ByteArray {
+        val message = ByteArray(cipher.size - crypto_aead_aes256gcm_ABYTES.toInt())
+        memScoped {
+            val mlen = alloc<ULongVar>()
+            val result = message.usePinned { msgPinned ->
+                cipher.usePinned { cipherPinned ->
+                    nonce.usePinned { noncePinned ->
+                        key.usePinned { keyPinned ->
+                            crypto_aead_aes256gcm_decrypt(
+                                msgPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                                mlen.ptr,
+                                null,
+                                cipherPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                                cipher.size.toULong(),
+                                null,
+                                0u,
+                                noncePinned.addressOf(0).reinterpret<uint8_tVar>(),
+                                keyPinned.addressOf(0).reinterpret<uint8_tVar>()
+                            )
+                        }
+                    }
+                }
+            }
+            check(result == 0) { "AES-GCM decryption failed" }
+            return message.copyOf(mlen.value.toInt())
+        }
+    }
+
+    private fun isValidPrivateKey(privateKey: ByteArray): Boolean {
+        if (privateKey.size != 32) return false
+        val valid = privateKey.usePinned { keyPinned ->
+            secp256k1_ec_seckey_verify(secpContext, keyPinned.addressOf(0).reinterpret<uint8_tVar>())
+        }
+        return valid == 1
+    }
+
+    private fun randomInt(boundExclusive: Int): Int {
+        val buffer = ByteArray(4)
+        buffer.usePinned { pinned ->
+            randombytes_buf(pinned.addressOf(0).reinterpret<uint8_tVar>(), buffer.size.toULong())
+        }
+        val value = ((buffer[0].toInt() and 0xff) shl 24) or
+                ((buffer[1].toInt() and 0xff) shl 16) or
+                ((buffer[2].toInt() and 0xff) shl 8) or
+                (buffer[3].toInt() and 0xff)
+        val nonNegative = value ushr 1
+        return nonNegative % boundExclusive
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    private fun base64UrlNoPad(data: ByteArray): String {
+        val b64 = Base64.Default.encode(data)
+        return b64.replace('+', '-').replace('/', '_').replace("=", "")
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    private fun base64UrlDecode(s: String): ByteArray? {
+        var str = s.replace('-', '+').replace('_', '/')
+        val pad = (4 - (str.length % 4)) % 4
+        if (pad > 0) str += "=".repeat(pad)
+        return try {
+            Base64.Default.decode(str)
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
+
+    private fun ByteArray.toHexString(): String {
+        val hexChars = "0123456789abcdef"
+        val out = StringBuilder(size * 2)
+        for (b in this) {
+            val i = b.toInt() and 0xff
+            out.append(hexChars[i ushr 4])
+            out.append(hexChars[i and 0x0f])
+        }
+        return out.toString()
+    }
+
+    private fun String.hexToByteArray(): ByteArray {
+        check(length % 2 == 0) { "Hex string must have an even length" }
+        return ByteArray(length / 2) {
+            val i = it * 2
+            ((digitToInt(this[i]) shl 4) + digitToInt(this[i + 1])).toByte()
+        }
+    }
+
+    private fun digitToInt(c: Char): Int = when (c) {
+        in '0'..'9' -> c - '0'
+        in 'a'..'f' -> c - 'a' + 10
+        in 'A'..'F' -> c - 'A' + 10
+        else -> error("Invalid hex character: $c")
+    }
+
+    actual fun deriveX25519PublicKey(privateKeyHex: String): String {
+        val privateKeyBytes = privateKeyHex.hexToByteArray()
+        require(privateKeyBytes.size == 32) { "X25519 private key must be 32 bytes" }
+
+        // Clamp according to X25519 spec
+        privateKeyBytes[0] = (privateKeyBytes[0].toInt() and 248).toByte()
+        privateKeyBytes[31] = (privateKeyBytes[31].toInt() and 127).toByte()
+        privateKeyBytes[31] = (privateKeyBytes[31].toInt() or 64).toByte()
+
+        // Use libsodium's crypto_scalarmult_base
+        val publicKeyBytes = ByteArray(32)
+        val result = publicKeyBytes.usePinned { pkPinned ->
+            privateKeyBytes.usePinned { skPinned ->
+                crypto_scalarmult_base(
+                    pkPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                    skPinned.addressOf(0).reinterpret<uint8_tVar>()
+                )
+            }
+        }
+        check(result == 0) { "crypto_scalarmult_base failed: $result" }
+
+        return publicKeyBytes.toHexString()
+    }
+}

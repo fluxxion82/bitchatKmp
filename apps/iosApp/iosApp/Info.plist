@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Bitchat uses Bluetooth to discover and connect to nearby peers.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Bitchat needs microphone access to record voice messages.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Bitchat needs location access to discover nearby peers via geohashing.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
+	</array>
+</dict>
+</plist>

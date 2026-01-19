@@ -1,0 +1,27 @@
+headers = sodium.h
+headerFilter = sodium.h sodium/**
+package = libsodium
+compilerOpts = -framework Security
+
+# iOS device (arm64)
+compilerOpts.ios_arm64 = -I/Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/libsodium/libsodium-apple/Clibsodium.xcframework/ios-arm64_arm64e/Headers
+staticLibraries.ios_arm64 = libsodium.a
+libraryPaths.ios_arm64 = /Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/libsodium/libsodium-apple/Clibsodium.xcframework/ios-arm64_arm64e
+
+# iOS simulator (x86_64)
+compilerOpts.ios_x64 = -I/Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/libsodium/libsodium-apple/Clibsodium.xcframework/ios-arm64_arm64e_x86_64-simulator/Headers
+staticLibraries.ios_x64 = libsodium.a
+libraryPaths.ios_x64 = /Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/libsodium/libsodium-apple/Clibsodium.xcframework/ios-arm64_arm64e_x86_64-simulator
+
+# iOS simulator (arm64)
+compilerOpts.ios_simulator_arm64 = -I/Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/libsodium/libsodium-apple/Clibsodium.xcframework/ios-arm64_arm64e_x86_64-simulator/Headers
+staticLibraries.ios_simulator_arm64 = libsodium.a
+libraryPaths.ios_simulator_arm64 = /Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/libsodium/libsodium-apple/Clibsodium.xcframework/ios-arm64_arm64e_x86_64-simulator
+
+# macOS (for development)
+compilerOpts.macos_x64 = -I/Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/libsodium/libsodium-apple/Clibsodium.xcframework/macos-arm64_arm64e_x86_64/Headers
+compilerOpts.macos_arm64 = -I/Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/libsodium/libsodium-apple/Clibsodium.xcframework/macos-arm64_arm64e_x86_64/Headers
+staticLibraries.macos_x64 = libsodium.a
+staticLibraries.macos_arm64 = libsodium.a
+libraryPaths.macos_x64 = /Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/libsodium/libsodium-apple/Clibsodium.xcframework/macos-arm64_arm64e_x86_64
+libraryPaths.macos_arm64 = /Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/libsodium/libsodium-apple/Clibsodium.xcframework/macos-arm64_arm64e_x86_64

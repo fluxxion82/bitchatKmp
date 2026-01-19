@@ -1,0 +1,24 @@
+[package]
+name = "arti-ios-wrapper"
+version = "1.7.0"
+edition = "2021"
+
+[workspace]
+# Empty workspace table to exclude from parent workspace
+
+[lib]
+crate-type = ["staticlib"]
+name = "arti_ios"
+
+[dependencies]
+arti-client = { path = "../arti/crates/arti-client", default-features = false, features = ["tokio", "rustls", "compression", "bridge-client", "onion-service-client", "static-sqlite"] }
+tor-rtcompat = { path = "../arti/crates/tor-rtcompat", features = ["tokio", "rustls"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1.0"
+
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = true          # Link-time optimization
+codegen-units = 1   # Better optimization
+strip = true        # Strip symbols
+panic = "abort"     # Smaller panic handler

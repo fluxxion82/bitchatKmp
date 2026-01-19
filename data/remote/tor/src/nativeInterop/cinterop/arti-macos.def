@@ -1,0 +1,3 @@
+headers = arti_ios.h
+staticLibraries = libarti_macos.a
+package = com.bitchat.tor.native

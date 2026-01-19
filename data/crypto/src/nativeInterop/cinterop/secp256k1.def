@@ -1,0 +1,24 @@
+headers = secp256k1.h secp256k1_extrakeys.h secp256k1_schnorrsig.h secp256k1_ecdh.h secp256k1_recovery.h
+headerFilter = secp256k1*.h
+package = secp256k1
+
+# iOS device (arm64)
+compilerOpts.ios_arm64 = -I/Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/secp256k1/build/ios-arm64/include
+staticLibraries.ios_arm64 = libsecp256k1.a
+libraryPaths.ios_arm64 = /Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/secp256k1/build/ios-arm64/lib
+
+# iOS simulator (x86_64)
+compilerOpts.ios_x64 = -I/Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/secp256k1/build/ios-simulator-fat/include
+staticLibraries.ios_x64 = libsecp256k1.a
+libraryPaths.ios_x64 = /Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/secp256k1/build/ios-simulator-fat/lib
+
+# iOS simulator (arm64)
+compilerOpts.ios_simulator_arm64 = -I/Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/secp256k1/build/ios-simulator-fat/include
+staticLibraries.ios_simulator_arm64 = libsecp256k1.a
+libraryPaths.ios_simulator_arm64 = /Users/fluxxion/Development/workspace/multiplatform/bitchat/bitchatKmp/data/crypto/native/secp256k1/build/ios-simulator-fat/lib
+
+# macOS (for development) - using homebrew
+compilerOpts.macos_x64 = -I/opt/homebrew/opt/secp256k1/include
+compilerOpts.macos_arm64 = -I/opt/homebrew/opt/secp256k1/include
+linkerOpts.macos_x64 = -L/opt/homebrew/opt/secp256k1/lib -lsecp256k1
+linkerOpts.macos_arm64 = -L/opt/homebrew/opt/secp256k1/lib -lsecp256k1

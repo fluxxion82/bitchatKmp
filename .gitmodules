@@ -1,0 +1,12 @@
+[submodule "data/noise/native/noise-c"]
+	path = data/noise/native/noise-c
+	url = https://github.com/rweather/noise-c.git
+[submodule "data/crypto/native/libsodium"]
+	path = data/crypto/native/libsodium
+	url = https://github.com/jedisct1/libsodium.git
+[submodule "data/crypto/native/secp256k1"]
+	path = data/crypto/native/secp256k1
+	url = https://github.com/bitcoin-core/secp256k1.git
+[submodule "data/remote/tor/native/arti"]
+	path = data/remote/tor/native/arti
+	url = https://gitlab.torproject.org/tpo/core/arti.git

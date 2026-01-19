@@ -1,0 +1,25 @@
+[package]
+name = "arti-desktop-wrapper"
+version = "1.7.0"
+edition = "2021"
+
+[workspace]
+# Empty workspace table to exclude from parent workspace
+
+[lib]
+crate-type = ["cdylib"]
+name = "arti_desktop"
+
+[dependencies]
+arti-client = { path = "../arti/crates/arti-client", default-features = false, features = ["tokio", "rustls", "compression", "bridge-client", "onion-service-client", "static-sqlite"] }
+tor-rtcompat = { path = "../arti/crates/tor-rtcompat", features = ["tokio", "rustls"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1.0"
+# NO jni crate - we use raw FFI types
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

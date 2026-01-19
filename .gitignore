@@ -1,0 +1,62 @@
+.gradle
+.kotlin
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+kotlin-js-store/
+CLAUDE.md
+AGENTS.md
+
+# Rust/Cargo build output                                                                                                                                                                                    
+**/target/ 
+
+data/remote/tor/jniLibs
+data/remote/tor/native/libs/
+
+### Android ###
+apps/droid/debug
+apps/droid/release
+local.properties
+
+### Desktop ###
+apps/desktop/kcef-bundle
+apps/desktop/kcef-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+### VS Code ###
+.vscode/  
+
+### Mac OS ###
+.DS_Store
+
+### Xcode ###
+presentation/iosApp/iosApp.xcodeproj/project.xcworkspace/xcuserdata/
+

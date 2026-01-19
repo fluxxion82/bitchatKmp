@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest>
+    <!-- This module provides Tor functionality via Arti (Tor-in-Rust) -->
+</manifest>

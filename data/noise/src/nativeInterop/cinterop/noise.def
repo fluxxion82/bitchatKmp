@@ -1,0 +1,21 @@
+headers = noise/protocol.h \
+          noise/protocol/constants.h \
+          noise/protocol/errors.h \
+          noise/protocol/names.h \
+          noise/protocol/buffer.h \
+          noise/protocol/cipherstate.h \
+          noise/protocol/hashstate.h \
+          noise/protocol/dhstate.h \
+          noise/protocol/signstate.h \
+          noise/protocol/randstate.h \
+          noise/protocol/symmetricstate.h \
+          noise/protocol/handshakestate.h \
+          noise/protocol/util.h \
+          noise/keys.h \
+          noise/keys/certificate.h \
+          noise/keys/loader.h \
+          noise/protobufs.h
+
+staticLibraries = libnoiseprotocol.a libnoisekeys.a libnoiseprotobufs.a
+
+package = noise.c
