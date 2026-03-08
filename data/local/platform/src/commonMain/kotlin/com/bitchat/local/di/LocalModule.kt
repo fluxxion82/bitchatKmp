@@ -8,6 +8,7 @@ import com.bitchat.local.prefs.BlockListPreferences
 import com.bitchat.local.prefs.BookmarkPreferences
 import com.bitchat.local.prefs.ChannelPreferences
 import com.bitchat.local.prefs.GeohashPreferences
+import com.bitchat.local.prefs.LoRaPreferences
 import com.bitchat.local.prefs.SecureIdentityPreferences
 import com.bitchat.local.prefs.TorPreferences
 import com.bitchat.local.prefs.UserPreferences
@@ -17,6 +18,7 @@ import com.bitchat.local.prefs.impl.LocalBlockListPreferences
 import com.bitchat.local.prefs.impl.LocalBookmarkPreferences
 import com.bitchat.local.prefs.impl.LocalChannelPreferences
 import com.bitchat.local.prefs.impl.LocalGeohashPreferences
+import com.bitchat.local.prefs.impl.LocalLoRaPreferences
 import com.bitchat.local.prefs.impl.LocalNostrPreferences
 import com.bitchat.local.prefs.impl.LocalSecureIdentityPreferences
 import com.bitchat.local.prefs.impl.LocalTorPreferences
@@ -43,6 +45,7 @@ val commonLocal = module {
     single<TorPreferences> { LocalTorPreferences(settingsFactory = get()) }
     single<BackgroundPreferences> { LocalBackgroundPreferences(settingsFactory = get()) }
     single<BlockListPreferences> { LocalBlockListPreferences(encryptedPreferenceFactory = get()) }
+    single<LoRaPreferences> { LocalLoRaPreferences(settingsFactory = get()) }
 
     single<ConnectivityRepository> { LocalConnectivityRepository(connectEventBus = get()) }
     single<TransportIdentityProvider> { SecureTransportIdentityProvider(securePrefs = get()) }

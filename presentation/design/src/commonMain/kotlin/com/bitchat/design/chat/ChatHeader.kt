@@ -19,20 +19,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Group
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.PinDrop
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.BookmarkBorder
-import androidx.compose.material.icons.outlined.NoEncryption
-import androidx.compose.material.icons.outlined.Public
-import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material.icons.outlined.Sync
-import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -81,6 +67,20 @@ import bitchatkmp.presentation.design.generated.resources.chat_channel_prefix
 import bitchatkmp.presentation.design.generated.resources.chat_leave
 import com.bitchat.design.core.PoWIndicatorStyle
 import com.bitchat.design.core.PoWStatusIndicator
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.ArrowBack
+import com.bitchat.design.icons.filled.Bookmark
+import com.bitchat.design.icons.filled.Email
+import com.bitchat.design.icons.filled.Group
+import com.bitchat.design.icons.filled.Lock
+import com.bitchat.design.icons.filled.PinDrop
+import com.bitchat.design.icons.filled.Star
+import com.bitchat.design.icons.outlined.BookmarkBorder
+import com.bitchat.design.icons.outlined.NoEncryption
+import com.bitchat.design.icons.outlined.Public
+import com.bitchat.design.icons.outlined.Star
+import com.bitchat.design.icons.outlined.Sync
+import com.bitchat.design.icons.outlined.Warning
 import com.bitchat.design.location.LocationNotesButton
 import com.bitchat.design.util.DebouncedSaver
 import com.bitchat.design.util.singleOrTripleClickable
@@ -258,23 +258,43 @@ fun PeerCounter(
     isConnected: Boolean,
     selectedLocationChannel: Channel?,
     geohashPeople: List<GeoPerson>,
+    loraPeers: List<GeoPerson> = emptyList(),
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
+    // Color constants
+    val meshBlue = Color(0xFF007AFF)
+    val green = Color(0xFF00C851)
+    val loraOrange = Color(0xFFFF9500)
+
     val (peopleCount, countColor) = when (selectedLocationChannel) {
         is Channel.Location -> {
             val count = geohashPeople.size
-            val green = Color(0xFF00C851)
             Pair(count, if (count > 0) green else Color.Gray)
         }
 
         is Channel.Mesh,
+        is Channel.Meshtastic,
         null -> {
-            val count = connectedPeers.size
-            val meshBlue = Color(0xFF007AFF)
-            Pair(count, if (isConnected && count > 0) meshBlue else Color.Gray)
+            val bleCount = connectedPeers.size
+            val loraCount = loraPeers.size
+
+            when {
+                // BLE connected with peers - show BLE count in blue
+                isConnected && bleCount > 0 -> {
+                    Pair(bleCount + loraCount, meshBlue)
+                }
+                // BLE not connected/no peers, but LoRa has peers - show LoRa count in orange
+                loraCount > 0 -> {
+                    Pair(loraCount, loraOrange)
+                }
+                // No peers at all
+                else -> {
+                    Pair(0, Color.Gray)
+                }
+            }
         }
 
         is Channel.NostrDM,
@@ -362,6 +382,7 @@ fun ChatHeaderContent(
     isConnected: Boolean = false,
     isCurrentChannelBookmarked: Boolean = false,
     onToggleBookmark: (String) -> Unit = {},
+    loraPeers: List<GeoPerson> = emptyList(),
 ) {
     when {
         selectedPrivatePeer != null -> {
@@ -432,6 +453,7 @@ fun ChatHeaderContent(
                 hasUnreadPrivateMessages = hasUnreadPrivateMessages,
                 isConnected = isConnected,
                 geohashPeople = geohashPeople,
+                loraPeers = loraPeers,
                 isCurrentChannelBookmarked = isCurrentChannelBookmarked,
                 onToggleBookmark = onToggleBookmark,
             )
@@ -631,6 +653,7 @@ private fun MainHeader(
     hasUnreadPrivateMessages: Boolean = false,
     isConnected: Boolean = false,
     geohashPeople: List<GeoPerson> = emptyList(),
+    loraPeers: List<GeoPerson> = emptyList(),
     isCurrentChannelBookmarked: Boolean = false,
     onToggleBookmark: (String) -> Unit = {},
     onNicknameChange: (String) -> Unit,
@@ -750,6 +773,7 @@ private fun MainHeader(
                 isConnected = isConnected,
                 selectedLocationChannel = selectedLocationChannel,
                 geohashPeople = geohashPeople,
+                loraPeers = loraPeers,
                 onClick = onSidebarClick
             )
         }
@@ -765,6 +789,11 @@ private fun LocationChannelsButton(
     val (badgeText, badgeColor) = when (selectedChannel) {
         is Channel.Mesh -> {
             "#mesh" to Color(0xFF007AFF)
+        }
+
+        is Channel.Meshtastic -> {
+            val nodeLabel = selectedChannel.nodeNum?.toString(16)?.padStart(8, '0') ?: "mesh"
+            "#meshtastic:$nodeLabel" to Color(0xFFFF9500)
         }
 
         is Channel.Location -> {

@@ -1,0 +1,495 @@
+/**
+ * Meshtastic mesh.proto - Core protocol definitions
+ * Simplified for BitChat integration
+ *
+ * Based on https://github.com/meshtastic/protobufs
+ */
+
+syntax = "proto3";
+
+package meshtastic;
+
+option java_package = "com.bitchat.lora.meshtastic.proto";
+option java_outer_classname = "MeshProtos";
+
+/**
+ * A position message
+ */
+message Position {
+    // Latitude: multiply by 1e-7 to get degrees
+    sfixed32 latitude_i = 1;
+
+    // Longitude: multiply by 1e-7 to get degrees
+    sfixed32 longitude_i = 2;
+
+    // Altitude in meters above MSL
+    int32 altitude = 3;
+
+    // Time the position was taken (seconds since 1970)
+    fixed32 time = 4;
+}
+
+/**
+ * User identity information
+ */
+message User {
+    // Unique ID for the user (8 bytes, displayed as hex)
+    string id = 1;
+
+    // Long name - full display name
+    string long_name = 2;
+
+    // Short name - 4 character max abbreviation
+    string short_name = 3;
+
+    // Hardware model
+    HardwareModel hw_model = 6;
+
+    // Is this node licensed as an amateur radio?
+    bool is_licensed = 7;
+}
+
+/**
+ * Hardware model types
+ */
+enum HardwareModel {
+    UNSET = 0;
+    TLORA_V2 = 1;
+    TLORA_V1 = 2;
+    TLORA_V2_1_1P6 = 3;
+    TBEAM = 4;
+    HELTEC_V2_0 = 5;
+    TBEAM_V0P7 = 6;
+    T_ECHO = 7;
+    TLORA_V1_1P3 = 8;
+    RAK4631 = 9;
+    HELTEC_V2_1 = 10;
+    HELTEC_V1 = 11;
+    LILYGO_TBEAM_S3_CORE = 12;
+    RAK11200 = 13;
+    NANO_G1 = 14;
+    TLORA_V2_1_1P8 = 15;
+    STATION_G1 = 25;
+    LORA_RELAY_V1 = 32;
+    NRF52840DK = 33;
+    PPR = 34;
+    GENIEBLOCKS = 35;
+    NRF52_UNKNOWN = 36;
+    PORTDUINO = 37;
+    ANDROID_SIM = 38;
+    DIY_V1 = 39;
+    NRF52840_PCA10059 = 40;
+    DR_DEV = 41;
+    M5STACK = 42;
+    HELTEC_V3 = 43;
+    HELTEC_WSL_V3 = 44;
+    BETAFPV_2400_TX = 45;
+    BETAFPV_900_NANO_TX = 46;
+    RPI_PICO = 47;
+    HELTEC_WIRELESS_TRACKER = 48;
+    HELTEC_WIRELESS_PAPER = 49;
+    T_DECK = 50;
+    T_WATCH_S3 = 51;
+    PICOMPUTER_S3 = 52;
+    HELTEC_HT62 = 53;
+    EBYTE_ESP32_S3 = 54;
+    ESP32_S3_PICO = 55;
+    CHATTER_2 = 56;
+    PRIVATE_HW = 255;
+}
+
+/**
+ * Information about a node on the mesh
+ */
+message NodeInfo {
+    // Node number (unique ID on mesh)
+    uint32 num = 1;
+
+    // User info
+    User user = 2;
+
+    // Position info
+    Position position = 3;
+
+    // SNR of last received packet
+    float snr = 4;
+
+    // Last time we heard from this node (seconds since 1970)
+    fixed32 last_heard = 5;
+
+    // Device metrics
+    DeviceMetrics device_metrics = 6;
+
+    // Hops away (0 = direct)
+    uint32 hops_away = 7;
+}
+
+/**
+ * Device metrics
+ */
+message DeviceMetrics {
+    // Battery level (0-100)
+    uint32 battery_level = 1;
+
+    // Voltage
+    float voltage = 2;
+
+    // Channel utilization percent
+    float channel_utilization = 3;
+
+    // Airtime utilization percent
+    float air_util_tx = 4;
+}
+
+/**
+ * A mesh packet
+ */
+message MeshPacket {
+    // Sending node number
+    fixed32 from = 1;
+
+    // Destination node number (0xFFFFFFFF = broadcast)
+    fixed32 to = 2;
+
+    // Channel index
+    uint32 channel = 3;
+
+    // Payload
+    oneof payload_variant {
+        // Decoded data
+        Data decoded = 4;
+
+        // Encrypted payload
+        bytes encrypted = 5;
+    }
+
+    // Unique packet ID
+    fixed32 id = 6;
+
+    // Time packet was received (seconds since boot)
+    fixed32 rx_time = 7;
+
+    // SNR of received packet
+    float rx_snr = 8;
+
+    // Hop limit
+    uint32 hop_limit = 9;
+
+    // Want acknowledgment?
+    bool want_ack = 10;
+
+    // Priority
+    Priority priority = 11;
+
+    // RSSI of received packet
+    int32 rx_rssi = 12;
+}
+
+/**
+ * Packet priority
+ */
+enum Priority {
+    UNSET_PRIORITY = 0;
+    MIN_PRIORITY = 1;
+    BACKGROUND = 10;
+    DEFAULT_PRIORITY = 64;
+    RELIABLE = 70;
+    ACK_PRIORITY = 120;
+    MAX_PRIORITY = 127;
+}
+
+/**
+ * Application-layer data
+ */
+message Data {
+    // Port number this is addressed to
+    PortNum portnum = 1;
+
+    // Payload bytes
+    bytes payload = 2;
+
+    // Want response?
+    bool want_response = 3;
+
+    // Destination node number for response
+    fixed32 dest = 4;
+
+    // Source node number
+    fixed32 source = 5;
+
+    // Request ID if this is a response
+    fixed32 request_id = 6;
+
+    // Reply ID
+    fixed32 reply_id = 7;
+
+    // Emoji response
+    fixed32 emoji = 8;
+}
+
+/**
+ * Channel role
+ */
+enum Channel_Role {
+    DISABLED = 0;
+    PRIMARY = 1;
+    SECONDARY = 2;
+}
+
+/**
+ * Channel settings (encryption, naming)
+ */
+message ChannelSettings {
+    // Deprecated channel number (use Channel.index instead)
+    uint32 channel_num = 1;
+
+    // Pre-shared key: 0 bytes (none), 16 bytes (AES128), or 32 bytes (AES256)
+    bytes psk = 2;
+
+    // Channel name (for display)
+    string name = 3;
+
+    // Fixed 8-byte ID (derived from name+psk if not set)
+    fixed32 id = 4;
+
+    // Uplink enabled (for MQTT gateway)
+    bool uplink_enabled = 5;
+
+    // Downlink enabled (for MQTT gateway)
+    bool downlink_enabled = 6;
+}
+
+/**
+ * A channel configuration
+ */
+message Channel {
+    // Channel index (0 = PRIMARY, 1-7 = SECONDARY)
+    int32 index = 1;
+
+    // Channel settings
+    ChannelSettings settings = 2;
+
+    // Channel role
+    Channel_Role role = 3;
+}
+
+/**
+ * LoRa modem presets
+ */
+enum ModemPreset {
+    LONG_FAST = 0;
+    LONG_SLOW = 1;
+    VERY_LONG_SLOW = 2;
+    MEDIUM_SLOW = 3;
+    MEDIUM_FAST = 4;
+    SHORT_SLOW = 5;
+    SHORT_FAST = 6;
+    LONG_MODERATE = 7;
+}
+
+/**
+ * Region codes for LoRa frequency bands
+ */
+enum RegionCode {
+    UNSET_REGION = 0;
+    US = 1;
+    EU_433 = 2;
+    EU_868 = 3;
+    CN = 4;
+    JP = 5;
+    ANZ = 6;
+    KR = 7;
+    TW = 8;
+    RU = 9;
+    IN = 10;
+    NZ_865 = 11;
+    TH = 12;
+    LORA_24 = 13;
+    UA_433 = 14;
+    UA_868 = 15;
+    MY_433 = 16;
+    MY_919 = 17;
+    SG_923 = 18;
+}
+
+/**
+ * LoRa radio configuration
+ */
+message LoRaConfig {
+    // Use preset (if true, ignore bandwidth/spread_factor/coding_rate)
+    bool use_preset = 1;
+
+    // Modem preset
+    ModemPreset modem_preset = 2;
+
+    // Bandwidth in kHz (125, 250, 500)
+    uint32 bandwidth = 3;
+
+    // Spread factor (7-12)
+    uint32 spread_factor = 4;
+
+    // Coding rate (5-8)
+    uint32 coding_rate = 5;
+
+    // Frequency offset in Hz
+    float frequency_offset = 6;
+
+    // Region
+    RegionCode region = 7;
+
+    // Hop limit
+    uint32 hop_limit = 8;
+
+    // TX enabled
+    bool tx_enabled = 9;
+
+    // TX power in dBm
+    int32 tx_power = 10;
+
+    // FREQUENCY SLOT (channel_num) - determines the RF frequency
+    uint32 channel_num = 11;
+
+    // Override duty cycle (for testing only)
+    bool override_duty_cycle = 12;
+
+    // Ignore incoming messages (for testing)
+    bool ignore_incoming = 103;
+}
+
+/**
+ * Device configuration container
+ */
+message Config {
+    oneof payload_variant {
+        // LoRa radio configuration
+        LoRaConfig lora = 3;
+    }
+}
+
+/**
+ * Admin message for device configuration
+ * Field numbers must match official Meshtastic protobufs
+ */
+message AdminMessage {
+    oneof payload_variant {
+        // Get channel by index (request)
+        uint32 get_channel_request = 1;
+
+        // Get channel response
+        Channel get_channel_response = 2;
+
+        // Get config request (ConfigType enum value)
+        uint32 get_config_request = 5;
+
+        // Get config response
+        Config get_config_response = 6;
+
+        // Set channel configuration
+        Channel set_channel = 33;
+
+        // Set config
+        Config set_config = 34;
+    }
+}
+
+/**
+ * Port numbers for different message types
+ */
+enum PortNum {
+    UNKNOWN_APP = 0;
+    TEXT_MESSAGE_APP = 1;
+    REMOTE_HARDWARE_APP = 2;
+    POSITION_APP = 3;
+    NODEINFO_APP = 4;
+    ROUTING_APP = 5;
+    ADMIN_APP = 6;
+    TEXT_MESSAGE_COMPRESSED_APP = 7;
+    WAYPOINT_APP = 8;
+    AUDIO_APP = 9;
+    DETECTION_SENSOR_APP = 10;
+    REPLY_APP = 32;
+    IP_TUNNEL_APP = 33;
+    PAXCOUNTER_APP = 34;
+    SERIAL_APP = 64;
+    STORE_FORWARD_APP = 65;
+    RANGE_TEST_APP = 66;
+    TELEMETRY_APP = 67;
+    ZPS_APP = 68;
+    SIMULATOR_APP = 69;
+    TRACEROUTE_APP = 70;
+    NEIGHBORINFO_APP = 71;
+    ATAK_FORWARDER = 257;
+    PRIVATE_APP = 256;
+    ATAK_PLUGIN = 72;
+    MAX_PORTNUM = 511;
+}
+
+/**
+ * My node info (local device)
+ */
+message MyNodeInfo {
+    // My node number
+    uint32 my_node_num = 1;
+
+    // Firmware version
+    string firmware_version = 6;
+
+    // Reboot count
+    uint32 reboot_count = 8;
+
+    // Min app version supported
+    uint32 min_app_version = 11;
+}
+
+/**
+ * Message from radio to app
+ */
+message FromRadio {
+    // Packet ID
+    uint32 id = 1;
+
+    oneof payload_variant {
+        // Received mesh packet
+        MeshPacket packet = 2;
+
+        // My node info
+        MyNodeInfo my_info = 3;
+
+        // Node info update
+        NodeInfo node_info = 4;
+
+        // Config (field 5 - we skip it but need placeholder)
+        // Config config = 5;
+
+        // Log message (field 6)
+        string log_record = 6;
+
+        // Config complete marker (field 7)
+        uint32 config_complete_id = 7;
+
+        // Rebooted indicator (field 8)
+        bool rebooted = 8;
+
+        // Channel (field 10)
+        Channel channel = 10;
+    }
+}
+
+/**
+ * Message from app to radio
+ */
+message ToRadio {
+    oneof payload_variant {
+        // Packet to send
+        MeshPacket packet = 1;
+
+        // Request config (send node's ID)
+        uint32 want_config_id = 3;
+
+        // Disconnect (for BLE)
+        bool disconnect = 4;
+
+        // Heartbeat (keep connection alive)
+        bool heartbeat = 5;
+    }
+}

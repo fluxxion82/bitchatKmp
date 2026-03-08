@@ -77,7 +77,8 @@ class SaveUserStateAction(
                     Channel.Mesh,
                     is Channel.MeshDM,
                     is Channel.NostrDM,
-                    is Channel.NamedChannel -> {
+                    is Channel.NamedChannel,
+                    is Channel.Meshtastic -> {
                         locationRepository.unregisterSelfFromCurrentGeohash()
                     }
                 }

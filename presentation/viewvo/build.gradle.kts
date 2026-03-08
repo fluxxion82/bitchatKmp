@@ -4,11 +4,18 @@ plugins {
 }
 
 version = "0.0.1"
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
 
 kotlin {
     applyDefaultHierarchyTemplate()
     jvm()
 
+    if (embeddedEnabled) {
+        linuxArm64()
+    }
     listOf(
         iosX64(),
         iosArm64(),
@@ -24,7 +31,6 @@ kotlin {
         val commonMain by getting {
             dependencies {
                 implementation(project(":domain"))
-                implementation(libs.kotlinx.datetime)
                 implementation(libs.kotlinx.serialization)
             }
         }

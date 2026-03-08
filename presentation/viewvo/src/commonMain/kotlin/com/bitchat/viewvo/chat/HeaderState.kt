@@ -26,6 +26,7 @@ data class HeaderState(
 
     val selectedLocationChannel: LocationChannel = LocationChannel.Mesh,
     val geohashPeople: List<GeoPerson> = emptyList(),
+    val loraPeers: List<GeoPerson> = emptyList(),
     val permissionState: PermissionState = PermissionState.DENIED,
     val locationServicesEnabled: Boolean = false,
     val isCurrentChannelBookmarked: Boolean = false,

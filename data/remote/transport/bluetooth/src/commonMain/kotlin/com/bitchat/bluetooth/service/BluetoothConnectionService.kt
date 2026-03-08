@@ -12,8 +12,13 @@ interface BluetoothConnectionService {
 
     fun setConnectionEstablishedCallback(callback: ConnectionEstablishedCallback)
     fun setConnectionReadyCallback(callback: ConnectionReadyCallback)
+    fun setOnPacketReceivedCallback(callback: OnPacketReceivedCallback)
 }
 
 interface ConnectionReadyCallback {
     fun onConnectionReady(deviceAddress: String)
+}
+
+interface OnPacketReceivedCallback {
+    fun onPacketReceived(data: ByteArray, deviceAddress: String)
 }

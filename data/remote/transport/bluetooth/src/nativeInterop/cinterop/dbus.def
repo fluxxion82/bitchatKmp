@@ -1,0 +1,9 @@
+package = dbus
+
+# D-Bus - Message bus system for inter-process communication
+# Used for BlueZ GATT Server (Peripheral role) and Advertising since
+# GattLib only supports Central role operations
+
+headers = dbus/dbus.h
+
+linkerOpts.linux_arm64 = -ldbus-1 -lpthread

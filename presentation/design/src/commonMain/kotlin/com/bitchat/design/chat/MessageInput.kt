@@ -13,9 +13,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +40,9 @@ import bitchatkmp.presentation.design.generated.resources.Res
 import bitchatkmp.presentation.design.generated.resources.send_message
 import bitchatkmp.presentation.design.generated.resources.type_a_message_placeholder
 import com.bitchat.design.chat.media.VoiceRecordButton
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Add
+import com.bitchat.design.icons.filled.ArrowUpward
 import com.bitchat.design.imagepicker.SelectionMode
 import com.bitchat.design.imagepicker.rememberImagePickerLauncher
 import kotlinx.coroutines.launch

@@ -3,6 +3,11 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+
 kotlin {
     applyDefaultHierarchyTemplate()
     jvm()
@@ -17,6 +22,9 @@ kotlin {
     }
     macosX64()
     macosArm64()
+    if (embeddedEnabled) {
+        linuxArm64()
+    }
 
     sourceSets {
         val commonMain by getting {
@@ -24,8 +32,17 @@ kotlin {
                 implementation(project(":domain"))
 
                 implementation(libs.kotlinx.serialization)
-                implementation(libs.kotlinx.datetime)
                 // implementation("app.softwork:kotlinx-uuid-core:0.0.26")
+            }
+        }
+
+        // Apple-specific (uses platform.zlib)
+        val appleMain by getting {
+        }
+
+        if (embeddedEnabled) {
+            // Linux-specific (stub implementation - no zlib cinterop)
+            val linuxMain by getting {
             }
         }
     }

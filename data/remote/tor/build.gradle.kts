@@ -6,6 +6,11 @@ plugins {
     alias(libs.plugins.android.library)
 }
 
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+
 kotlin {
     applyDefaultHierarchyTemplate()
 
@@ -47,6 +52,33 @@ kotlin {
             }
         }
     }
+    if (embeddedEnabled) {
+        // Linux ARM64 target with Arti native support
+        // Build native library first: ./scripts/build-native-linux-arm64.sh
+        linuxArm64 {
+            val archDir = "linux-arm64"
+            val libDir = "${project.projectDir}/native/libs/$archDir/lib"
+
+            compilations.get("main").cinterops {
+                create("arti") {
+                    defFile(project.file("src/nativeInterop/cinterop/arti-linux.def"))
+                    includeDirs("${project.projectDir}/native/arti-linux-wrapper")
+                    extraOpts("-libraryPath", libDir)
+                }
+            }
+
+            binaries.all {
+                linkerOpts(
+                    "-L$libDir",
+                    "-larti_linux",
+                    "-lpthread",
+                    "-ldl",
+                    "-lm"
+                )
+            }
+        }
+    }
+
     listOf(
         macosX64(),
         macosArm64()
@@ -123,9 +155,19 @@ kotlin {
 
             }
         }
-        val nativeMain by getting {
+        // Apple-specific (iOS + macOS) - uses Arti native libs
+        val appleMain by getting {
             dependencies {
                 implementation(libs.ktor.client.darwin)
+            }
+        }
+
+        if (embeddedEnabled) {
+            // Linux-specific - uses Arti native libs (cross-compiled)
+            val linuxMain by getting {
+                dependencies {
+                    // Arti native library linked via cinterop
+                }
             }
         }
     }
@@ -163,8 +205,9 @@ val checkArtiLibraries by tasks.registering {
         val macosLibsExist = listOf("macos-arm64", "macos-x64").any { arch ->
             File(baseDir, "native/libs/$arch/lib/libarti_macos.a").exists()
         }
+        val linuxLibsExist = File(baseDir, "native/libs/linux-arm64/lib/libarti_linux.a").exists()
 
-        if (!androidLibsExist && !iosLibsExist && !macosLibsExist) {
+        if (!androidLibsExist && !iosLibsExist && !macosLibsExist && !linuxLibsExist) {
             logger.warn(
                 """
                 ============================================================
@@ -177,6 +220,9 @@ val checkArtiLibraries by tasks.registering {
                   ./native/build-desktop.sh  (for Desktop/JVM)
                   ./native/build-all.sh      (for all platforms)
 
+                For Linux ARM64 (cross-compiled):
+                  ./scripts/build-native-linux-arm64.sh
+
                 Or see native/ARTI_VERSION for version info.
                 ============================================================
             """.trimIndent()
@@ -186,6 +232,7 @@ val checkArtiLibraries by tasks.registering {
             if (androidLibsExist) logger.lifecycle("  - Android libraries: ✓")
             if (iosLibsExist) logger.lifecycle("  - iOS libraries: ✓")
             if (macosLibsExist) logger.lifecycle("  - macOS libraries: ✓")
+            if (linuxLibsExist) logger.lifecycle("  - Linux ARM64 libraries: ✓")
         }
     }
 }

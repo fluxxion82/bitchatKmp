@@ -1,0 +1,18 @@
+headers = xf86drm.h xf86drmMode.h drm_mode.h
+headerFilter = xf86drm.h xf86drmMode.h drm.h drm_mode.h
+package = drm
+
+linkerOpts.linux_arm64 = -ldrm
+
+---
+
+// Ensure DRM_EVENT_CONTEXT_VERSION is available as a constant
+// (defined in xf86drm.h but may not be exported as a constant)
+static inline int drm_event_context_version() {
+    return DRM_EVENT_CONTEXT_VERSION;
+}
+
+// Ensure page flip flags are available
+static inline unsigned int drm_mode_page_flip_event() {
+    return DRM_MODE_PAGE_FLIP_EVENT;
+}

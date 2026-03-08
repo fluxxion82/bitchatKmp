@@ -6,10 +6,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -27,6 +23,10 @@ import bitchatkmp.presentation.design.generated.resources.about_pow
 import bitchatkmp.presentation.design.generated.resources.about_pow_tip
 import bitchatkmp.presentation.design.generated.resources.about_tor_route
 import bitchatkmp.presentation.design.generated.resources.tor_not_available_in_this_build
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Bluetooth
+import com.bitchat.design.icons.filled.Security
+import com.bitchat.design.icons.filled.Speed
 import org.jetbrains.compose.resources.stringResource
 
 @Composable

@@ -7,7 +7,6 @@ interface CoroutinesContextFacade {
     val main: CoroutineContext
     val default: CoroutineContext
     val unconfined: CoroutineContext
-    val compatScoreDispatcher: CoroutineContext
     // val errorHandler: CoroutineContext
 }
 

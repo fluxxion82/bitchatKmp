@@ -9,6 +9,10 @@ plugins {
 }
 
 version = "0.0.1"
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
 
 kotlin {
     applyDefaultHierarchyTemplate()
@@ -19,6 +23,9 @@ kotlin {
     }
 
     jvm()
+    if (embeddedEnabled) {
+        linuxArm64()
+    }
     listOf(
         iosX64(),
         iosArm64(),
@@ -34,7 +41,6 @@ kotlin {
         val commonMain by getting {
             dependencies {
                 api(compose.runtime)
-                implementation(libs.kotlinx.datetime)
                 implementation(project(":domain"))
                 implementation(project(":data:mediautils"))
 //                implementation(project(":logging:logger"))

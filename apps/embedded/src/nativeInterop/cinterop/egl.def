@@ -1,0 +1,5 @@
+headers = EGL/egl.h EGL/eglext.h
+headerFilter = EGL/egl.h EGL/eglext.h EGL/eglplatform.h
+package = egl
+
+linkerOpts.linux_arm64 = -lEGL

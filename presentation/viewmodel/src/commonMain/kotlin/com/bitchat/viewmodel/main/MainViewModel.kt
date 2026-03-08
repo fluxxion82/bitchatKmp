@@ -11,6 +11,7 @@ import com.bitchat.domain.base.invoke
 import com.bitchat.domain.chat.GetJoinedChannels
 import com.bitchat.domain.chat.LeaveChannel
 import com.bitchat.domain.chat.MarkPrivateChatRead
+import com.bitchat.domain.chat.ObserveLoRaPeers
 import com.bitchat.domain.chat.ObserveLatestUnreadPrivatePeer
 import com.bitchat.domain.chat.ObservePeerSessionStates
 import com.bitchat.domain.chat.ObservePrivateChats
@@ -82,6 +83,7 @@ class MainViewModel(
     private val saveUserStateAction: SaveUserStateAction,
     private val markPrivateChatRead: MarkPrivateChatRead,
     private val clearAllData: ClearAllData,
+    private val observeLoRaPeers: ObserveLoRaPeers,
 ) : ViewModel() {
     val navigation = Channel<MainNavigation>(Channel.RENDEZVOUS)
 
@@ -263,6 +265,14 @@ class MainViewModel(
         }
 
         viewModelScope.launch {
+            observeLoRaPeers().collect { loraPeers ->
+                _headerState.update {
+                    it.copy(loraPeers = loraPeers)
+                }
+            }
+        }
+
+        viewModelScope.launch {
             refreshFavorites()
         }
     }
@@ -321,6 +331,14 @@ class MainViewModel(
                                         selectedChannel = channel,
                                         currentChannel = channel.peerID,
                                         selectedPrivatePeer = channel.peerID,
+                                    )
+                                }
+
+                                is BitchatChannel.Meshtastic -> _headerState.update {
+                                    it.copy(
+                                        selectedChannel = channel,
+                                        currentChannel = channel.nodeNum?.toString(16)?.padStart(8, '0'),
+                                        selectedPrivatePeer = channel.nodeNum?.toString(16)?.padStart(8, '0'),
                                     )
                                 }
                             }
@@ -390,6 +408,13 @@ class MainViewModel(
                                     val previous = activeState.previousChannel
                                     saveUserStateAction(
                                         UserStateAction.Chat(previous ?: BitchatChannel.Mesh)
+                                    )
+                                }
+
+                                is BitchatChannel.Meshtastic -> {
+                                    val previous = activeState.previousChannel
+                                    saveUserStateAction(
+                                        UserStateAction.Chat(previous ?: BitchatChannel.Meshtastic())
                                     )
                                 }
                             }
@@ -587,6 +612,10 @@ private fun describeChannel(channel: BitchatChannel?): String = when (channel) {
     }
 
     is BitchatChannel.NamedChannel -> "Named(${channel.channelName})"
+    is BitchatChannel.Meshtastic -> {
+        val nodeLabel = channel.nodeNum?.toString(16)?.padStart(8, '0') ?: "broadcast"
+        "Meshtastic($nodeLabel)"
+    }
     null -> "Unknown"
 }
 

@@ -27,4 +27,5 @@ fun Channel.toNavigationString(): String = when (this) {
     is Channel.MeshDM -> peerID
     is Channel.NostrDM -> peerID
     is Channel.NamedChannel -> channelName
+    is Channel.Meshtastic -> nodeNum?.toString(16)?.padStart(8, '0') ?: "meshtastic"
 }

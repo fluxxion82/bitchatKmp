@@ -5,6 +5,11 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+
 kotlin {
     applyDefaultHierarchyTemplate()
     jvm()
@@ -63,6 +68,30 @@ kotlin {
             }
         }
     }
+    if (embeddedEnabled) {
+        // Linux ARM64 target with noise-c cinterop (cross-compiled via Docker)
+        linuxArm64 {
+            val libDir = "${project.projectDir}/native/noise-c/build/linux-arm64/lib"
+
+            compilations.get("main").cinterops {
+                create("noise") {
+                    defFile(project.file("src/nativeInterop/cinterop/noise.def"))
+                    includeDirs("native/noise-c/include")
+                    extraOpts("-libraryPath", libDir)
+                }
+            }
+
+            binaries.all {
+                linkerOpts(
+                    "-L$libDir",
+                    "-lnoiseprotocol",
+                    "-lnoisekeys",
+                    "-lnoiseprotobufs"
+                )
+            }
+        }
+    }
+
     listOf(
         macosX64(),
         macosArm64()
@@ -142,9 +171,19 @@ kotlin {
 
             }
         }
-        val nativeMain by getting {
+        // Apple-specific (iOS + macOS) - uses noise-c via cinterop
+        val appleMain by getting {
             dependencies {
                 implementation(libs.ktor.client.darwin)
+            }
+        }
+
+        if (embeddedEnabled) {
+            // Linux-specific - uses noise-c via cinterop (cross-compiled)
+            val linuxMain by getting {
+                dependencies {
+                    // noise-c linked via cinterop
+                }
             }
         }
     }

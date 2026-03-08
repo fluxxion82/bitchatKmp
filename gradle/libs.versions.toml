@@ -1,6 +1,8 @@
 [versions]
 ## SDK Versions
 jna = "5.18.1"
+jserialcomm = "2.10.4"
+usb-serial-android = "3.8.1"
 targetSdk = "36"
 compileSdk = "36"
 minSdk = "26"
@@ -8,7 +10,7 @@ agp = "8.12.3"
 ios-deploymentTarget = "13.0"
 
 # Dependencies
-kotlin = "2.3.0"
+kotlin = "2.2.10"
 ksp = "2.3.0"
 
 coroutines = "1.10.2"
@@ -54,6 +56,7 @@ camerax = "1.5.2"
 bouncy = "1.83"
 tink = "1.20.0"
 javafx = "21.0.2"
+wire = "5.3.1"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
@@ -104,6 +107,7 @@ ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "kto
 ktor-kotlinx-serialization = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 ktor-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
 ktor-client-websocket = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
+ktor-client-curl = { module = "io.ktor:ktor-client-curl", version.ref = "ktor" }
 
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose-bom" }
 ktor-server-cio-jvm = { module = "io.ktor:ktor-server-cio-jvm", version.ref = "ktorServerCioJvm" }
@@ -149,6 +153,13 @@ javafx-controls = { module = "org.openjfx:javafx-controls", version.ref = "javaf
 javafx-swing = { module = "org.openjfx:javafx-swing", version.ref = "javafx" }
 javafx-web = { module = "org.openjfx:javafx-web", version.ref = "javafx" }
 
+# LoRa serial communication
+jserialcomm = { module = "com.fazecast:jSerialComm", version.ref = "jserialcomm" }
+usb-serial-android = { module = "com.github.mik3y:usb-serial-for-android", version.ref = "usb-serial-android" }
+
+# Wire for protobuf (Meshtastic)
+wire-runtime = { module = "com.squareup.wire:wire-runtime", version.ref = "wire" }
+
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 jetbrains-compose = { id = "org.jetbrains.compose", version.ref = "compose-multiplatorm" }
@@ -162,3 +173,4 @@ jetbrains-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = 
 google-services = { id = "com.google.gms.google-services", version = "4.4.4" }
 cocoapods = { id = "org.jetbrains.kotlin.native.cocoapods", version.ref = "kotlin" }
 composeHotReload = { id = "org.jetbrains.compose.hot-reload", version.ref = "composeHotReload" }
+wire = { id = "com.squareup.wire", version.ref = "wire" }

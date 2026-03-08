@@ -6,6 +6,11 @@ plugins {
     alias(libs.plugins.android.kotlin.multiplatform.library)
 }
 
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+
 kotlin {
     applyDefaultHierarchyTemplate()
     androidLibrary {
@@ -27,6 +32,11 @@ kotlin {
     macosX64()
     macosArm64()
 
+    if (embeddedEnabled) {
+        // Linux ARM64 target
+        linuxArm64()
+    }
+
     sourceSets {
         val commonMain by getting {
             dependencies {
@@ -40,7 +50,6 @@ kotlin {
                 implementation(libs.koin.core)
                 implementation(libs.kotlinx.coroutines.core)
                 implementation(libs.kotlinx.serialization)
-                implementation(libs.kotlinx.datetime)
 
                 implementation(libs.ktor.content.negotiation)
                 implementation(libs.ktor.client.logging)
@@ -81,9 +90,19 @@ kotlin {
 
             }
         }
-        val nativeMain by getting {
+        // Apple-specific (iOS + macOS) - uses Darwin engine and Foundation APIs
+        val appleMain by getting {
             dependencies {
                 implementation(libs.ktor.client.darwin)
+            }
+        }
+
+        if (embeddedEnabled) {
+            // Linux-specific - uses Curl engine (CIO doesn't support TLS on Native)
+            val linuxMain by getting {
+                dependencies {
+                    implementation(libs.ktor.client.curl)
+                }
             }
         }
     }

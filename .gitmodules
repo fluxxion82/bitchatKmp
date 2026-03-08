@@ -10,3 +10,6 @@
 [submodule "data/remote/tor/native/arti"]
 	path = data/remote/tor/native/arti
 	url = https://gitlab.torproject.org/tpo/core/arti.git
+[submodule "data/remote/transport/bluetooth/native/gattlib"]
+	path = data/remote/transport/bluetooth/native/gattlib
+	url = https://github.com/labapart/gattlib.git

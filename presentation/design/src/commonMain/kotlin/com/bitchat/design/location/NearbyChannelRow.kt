@@ -1,9 +1,6 @@
 package com.bitchat.design.location
 
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -14,6 +11,9 @@ import androidx.compose.ui.unit.dp
 import bitchatkmp.presentation.design.generated.resources.Res
 import bitchatkmp.presentation.design.generated.resources.cd_add_bookmark
 import bitchatkmp.presentation.design.generated.resources.cd_remove_bookmark
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Bookmark
+import com.bitchat.design.icons.outlined.BookmarkBorder
 import com.bitchat.domain.location.model.GeohashChannel
 import org.jetbrains.compose.resources.stringResource
 import kotlin.math.pow

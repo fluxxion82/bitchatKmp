@@ -24,8 +24,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -43,6 +41,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.ArrowUpward
 import com.bitchat.domain.location.model.Note
 import com.bitchat.viewvo.location.LocationNotesState
 
@@ -361,7 +361,7 @@ private fun formatTimestamp(createdAt: Int): String {
         }
 
         else -> {
-            // Format as MM/DD/YY - simple date formatting without kotlinx.datetime
+            // Format as MM/DD/YY - simple date formatting without kotlin.time
             // For now just show days ago for older notes
             // TODO: Implement proper date formatting when needed
             "${diffDays.toInt()}d ago"

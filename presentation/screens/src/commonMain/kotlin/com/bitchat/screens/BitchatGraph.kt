@@ -77,6 +77,7 @@ import com.bitchat.viewmodel.permissions.PermissionsViewModel
 import com.bitchat.viewmodel.settings.SettingsViewModel
 import com.bitchat.viewvo.chat.HeaderState
 import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.receiveAsFlow
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.parameter.parametersOf
@@ -109,6 +110,11 @@ fun BitchatGraph(mainViewModel: MainViewModel) {
     val navController = rememberNavController(bottomSheetNavigator)
 
     LaunchedEffect(Unit) {
+        // Wait for NavHost to set up the navigation graph before processing events
+        while (navController.currentDestination == null) {
+            delay(16) // Wait one frame (~16ms)
+        }
+
         mainViewModel.navigation.receiveAsFlow().collect { event ->
             println("main nav event: $event")
             when (event) {
@@ -199,7 +205,8 @@ fun BitchatGraph(mainViewModel: MainViewModel) {
                                         isConnected = headerState.isConnected,
                                         hasNotes = headerState.hasNotes,
                                         isCurrentChannelBookmarked = headerState.isCurrentChannelBookmarked,
-                                        onToggleBookmark = mainViewModel::toggleBookmark
+                                        onToggleBookmark = mainViewModel::toggleBookmark,
+                                        loraPeers = headerState.loraPeers
                                     )
                                 }
                                 HorizontalDivider(
@@ -375,7 +382,7 @@ fun NavGraphBuilder.homeGraph(
         }
 
         bottomSheet<Routes.Settings> {
-            val viewModel: SettingsViewModel = koinViewModel()
+            val viewModel: SettingsViewModel = koinViewModel { parametersOf(getPlatform() == Platform.ANDROID) }
             SettingsScreen(
                 navController = navController,
                 viewModel = viewModel

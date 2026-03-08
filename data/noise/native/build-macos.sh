@@ -3,6 +3,7 @@ set -euo pipefail
 
 # ---- tweak these if you need to ----
 MACOS_MIN=11.0
+BUILD_TRIPLE="$(uname -m)-apple-darwin"  # make host != build so configure skips running test binaries
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NOISE_DIR="${SCRIPT_DIR}/noise-c"
@@ -16,9 +17,9 @@ OUT_ROOT="${NOISE_DIR}/build"
 mkdir -p "$OUT_ROOT"
 
 sdk_path() { xcrun --sdk macosx --show-sdk-path; }
-cc_for()   { xcrun --sdk macosx clang; }
-ar_for()   { xcrun --sdk macosx ar; }
-ranlib_for(){ xcrun --sdk macosx ranlib; }
+cc_for()   { xcrun --sdk macosx --find clang; }
+ar_for()   { xcrun --sdk macosx --find ar; }
+ranlib_for(){ xcrun --sdk macosx --find ranlib; }
 
 build_one () {
   local NAME="$1" ARCH="$2" HOST="$3"
@@ -30,6 +31,7 @@ build_one () {
 
   ./configure \
     --host="${HOST}" \
+    --build="${BUILD_TRIPLE}" \
     --disable-shared --enable-static \
     CC="$(cc_for)" \
     AR="$(ar_for)" \

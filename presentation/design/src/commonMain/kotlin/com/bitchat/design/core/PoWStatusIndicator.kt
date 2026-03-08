@@ -10,8 +10,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -32,6 +30,8 @@ import bitchatkmp.presentation.design.generated.resources.cd_proof_of_work
 import bitchatkmp.presentation.design.generated.resources.pow_label_format
 import bitchatkmp.presentation.design.generated.resources.pow_mining_ellipsis
 import bitchatkmp.presentation.design.generated.resources.pow_time_estimate
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Security
 import com.bitchat.design.mapper.toMiningTimeEstimate
 import org.jetbrains.compose.resources.stringResource
 

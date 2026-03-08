@@ -1,0 +1,4 @@
+headers = linux/i2c-dev.h linux/i2c.h
+headerFilter = linux/i2c-dev.h linux/i2c.h
+package = i2c
+

@@ -10,8 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -31,6 +29,8 @@ import bitchatkmp.presentation.design.generated.resources.progress_bar_brackets
 import bitchatkmp.presentation.design.generated.resources.progress_empty
 import bitchatkmp.presentation.design.generated.resources.progress_filled
 import bitchatkmp.presentation.design.generated.resources.underscore
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Description
 import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.stringResource
 

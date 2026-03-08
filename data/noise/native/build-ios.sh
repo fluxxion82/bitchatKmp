@@ -16,9 +16,9 @@ OUT_ROOT="${NOISE_DIR}/build"
 mkdir -p "$OUT_ROOT"
 
 sdk_path() { xcrun --sdk "$1" --show-sdk-path; }
-cc_for()   { xcrun --sdk "$1" clang; }
-ar_for()   { xcrun --sdk "$1" ar; }
-ranlib_for(){ xcrun --sdk "$1" ranlib; }
+cc_for()   { xcrun --sdk "$1" --find clang; }
+ar_for()   { xcrun --sdk "$1" --find ar; }
+ranlib_for(){ xcrun --sdk "$1" --find ranlib; }
 
 build_one () {
   local NAME="$1" SDK="$2" ARCH="$3" HOST="$4" MINFLAG="$5"

@@ -1,11 +1,5 @@
 package com.bitchat.design.mapper
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.Camera
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.vector.ImageVector
 import bitchatkmp.presentation.design.generated.resources.Res
@@ -19,6 +13,12 @@ import bitchatkmp.presentation.design.generated.resources.perm_type_microphone
 import bitchatkmp.presentation.design.generated.resources.perm_type_nearby_devices
 import bitchatkmp.presentation.design.generated.resources.perm_type_notifications
 import bitchatkmp.presentation.design.generated.resources.perm_type_precise_location
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Bluetooth
+import com.bitchat.design.icons.filled.Camera
+import com.bitchat.design.icons.filled.LocationOn
+import com.bitchat.design.icons.filled.Mic
+import com.bitchat.design.icons.filled.Notifications
 import com.bitchat.viewvo.permissions.PermissionType
 import org.jetbrains.compose.resources.stringResource
 

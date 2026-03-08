@@ -6,11 +6,18 @@ plugins {
 }
 
 version = "0.0.1"
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
 
 kotlin {
     applyDefaultHierarchyTemplate()
     jvm("desktop")
     androidTarget()
+    if (embeddedEnabled) {
+        linuxArm64()
+    }
     listOf(
         iosX64(),
         iosArm64(),

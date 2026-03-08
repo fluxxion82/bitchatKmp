@@ -20,10 +20,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BatteryStd
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Power
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -63,6 +59,10 @@ import bitchatkmp.presentation.design.generated.resources.cd_not_supported_batte
 import bitchatkmp.presentation.design.generated.resources.check_again
 import bitchatkmp.presentation.design.generated.resources.continue_btn
 import bitchatkmp.presentation.design.generated.resources.disable_battery_optimization
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.BatteryStd
+import com.bitchat.design.icons.filled.CheckCircle
+import com.bitchat.design.icons.filled.Power
 import com.bitchat.domain.app.model.BatteryOptimizationStatus
 import org.jetbrains.compose.resources.stringResource
 

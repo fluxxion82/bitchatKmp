@@ -1,0 +1,94 @@
+# Docker image for cross-compiling native libraries for linuxArm64
+# Based on skiko's pattern: forks/jake/skiko/skiko/docker/linux-amd64/Dockerfile
+#
+# IMPORTANT: This image must run on linux/amd64 because the cross-compiler
+# is an x86_64 binary. On Apple Silicon Macs, Docker will use QEMU.
+#
+# Usage:
+#   docker build --platform linux/amd64 -t bitchat-linux-arm64-cross -f docker/Dockerfile.linux-arm64-cross .
+#   docker run --platform linux/amd64 --rm -v $(pwd)/data/crypto/native:/build bitchat-linux-arm64-cross bash build-libsodium-linux-arm64.sh
+
+FROM --platform=linux/amd64 ubuntu:20.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies (x86_64) - needed for build tools like gdbus-codegen
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    autoconf \
+    automake \
+    libtool \
+    wget \
+    curl \
+    git \
+    pkg-config \
+    xz-utils \
+    bison \
+    flex \
+    python3 \
+    ca-certificates \
+    libglib2.0-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Enable ARM64 multiarch and install cross-compiler + ARM64 libraries
+# 1. Restrict main sources.list to amd64 only
+# 2. Add ARM64 packages from ports.ubuntu.com
+# 3. Install Ubuntu's cross-compiler (GLIBC-compatible with ARM64 libs)
+RUN dpkg --add-architecture arm64 && \
+    sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list && \
+    echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main restricted universe multiverse" > /etc/apt/sources.list.d/arm64.list && \
+    echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main restricted universe multiverse" >> /etc/apt/sources.list.d/arm64.list && \
+    echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main restricted universe multiverse" >> /etc/apt/sources.list.d/arm64.list && \
+    apt-get update && apt-get install -y \
+    gcc-aarch64-linux-gnu \
+    g++-aarch64-linux-gnu \
+    libglib2.0-dev:arm64 \
+    libdbus-1-dev:arm64 \
+    libbluetooth-dev:arm64 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install CMake 3.28 (GattLib requires 3.22+, Ubuntu 20.04 only has 3.16)
+ENV CMAKE_VERSION=3.28.3
+RUN wget -q https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz && \
+    tar -xzf cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz && \
+    cp -r cmake-${CMAKE_VERSION}-linux-x86_64/bin/* /usr/local/bin/ && \
+    cp -r cmake-${CMAKE_VERSION}-linux-x86_64/share/* /usr/local/share/ && \
+    rm -rf cmake-${CMAKE_VERSION}-linux-x86_64*
+
+# Install Rust toolchain for cross-compiling Arti
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Add linuxArm64 target for Rust
+RUN rustup target add aarch64-unknown-linux-gnu
+
+# Configure Cargo for cross-compilation
+RUN mkdir -p /root/.cargo && \
+    echo '[target.aarch64-unknown-linux-gnu]' >> /root/.cargo/config.toml && \
+    echo 'linker = "aarch64-linux-gnu-gcc"' >> /root/.cargo/config.toml
+
+# Verify Rust installation
+RUN rustc --version && cargo --version
+
+# ARM64 multiarch paths
+# Libraries: /usr/lib/aarch64-linux-gnu/
+# Headers: /usr/include/aarch64-linux-gnu/ (arch-specific) + /usr/include/ (shared)
+# pkg-config: /usr/lib/aarch64-linux-gnu/pkgconfig/
+ENV ARM64_LIB_DIR=/usr/lib/aarch64-linux-gnu
+ENV ARM64_INCLUDE_DIR=/usr/include
+
+# Set pkg-config to find ARM64 packages
+ENV PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+ENV PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
+ENV PKG_CONFIG_SYSROOT_DIR=
+
+# Verify cross-compiler installation
+RUN aarch64-linux-gnu-gcc --version && \
+    aarch64-linux-gnu-g++ --version
+
+# Verify ARM64 libraries are available
+RUN ls -la /usr/lib/aarch64-linux-gnu/libglib-2.0.* && \
+    ls -la /usr/lib/aarch64-linux-gnu/libgio-2.0.* && \
+    ls -la /usr/lib/aarch64-linux-gnu/libbluetooth.*
+
+WORKDIR /build

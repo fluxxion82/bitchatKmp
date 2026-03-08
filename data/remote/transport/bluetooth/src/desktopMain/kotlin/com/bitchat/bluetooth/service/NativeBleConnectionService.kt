@@ -133,6 +133,10 @@ class NativeBleConnectionService(
         fallback.setConnectionReadyCallback(callback)
     }
 
+    override fun setOnPacketReceivedCallback(callback: OnPacketReceivedCallback) {
+        fallback.setOnPacketReceivedCallback(callback)
+    }
+
     companion object {
         // Chunking constants for large data transfers
         // BLE MTU is typically 512-517, leave room for headers

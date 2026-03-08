@@ -1,0 +1,5 @@
+headers = gbm.h
+headerFilter = gbm.h
+package = gbm
+
+linkerOpts.linux_arm64 = -lgbm

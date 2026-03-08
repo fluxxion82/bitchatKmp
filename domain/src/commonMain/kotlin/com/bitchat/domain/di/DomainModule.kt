@@ -23,12 +23,14 @@ import com.bitchat.domain.chat.GetChannelMembers
 import com.bitchat.domain.chat.GetGeohashParticipants
 import com.bitchat.domain.chat.GetJoinedChannels
 import com.bitchat.domain.chat.GetJoinedNamedChannels
+import com.bitchat.domain.chat.GetLoRaPeers
 import com.bitchat.domain.chat.GetMeshPeers
 import com.bitchat.domain.chat.JoinChannel
 import com.bitchat.domain.chat.LeaveChannel
 import com.bitchat.domain.chat.MarkPrivateChatRead
 import com.bitchat.domain.chat.ObserveChannelMessages
 import com.bitchat.domain.chat.ObserveLatestUnreadPrivatePeer
+import com.bitchat.domain.chat.ObserveLoRaPeers
 import com.bitchat.domain.chat.ObservePeerSessionStates
 import com.bitchat.domain.chat.ObservePrivateChats
 import com.bitchat.domain.chat.ObserveSelectedPrivatePeer
@@ -65,6 +67,12 @@ import com.bitchat.domain.location.ToggleBookmark
 import com.bitchat.domain.location.ToggleLocationServices
 import com.bitchat.domain.location.eventbus.InMemoryLocationEventBus
 import com.bitchat.domain.location.eventbus.LocationEventBus
+import com.bitchat.domain.lora.GetLoRaSettings
+import com.bitchat.domain.lora.SetLoRaEnabled
+import com.bitchat.domain.lora.SetLoRaRegion
+import com.bitchat.domain.lora.SetLoRaTxPower
+import com.bitchat.domain.lora.SetShowLoRaPeers
+import com.bitchat.domain.lora.SwitchLoRaProtocol
 import com.bitchat.domain.nostr.GetPowSettings
 import com.bitchat.domain.nostr.SetPowSettings
 import com.bitchat.domain.nostr.eventbus.InMemoryNostrEventBus
@@ -161,6 +169,8 @@ val domainModule = module {
     single { GetJoinedNamedChannels(chatRepository = get(), chatEventBus = get()) }
     single { GetGeohashParticipants(chatRepository = get()) }
     single { GetMeshPeers(chatRepository = get()) }
+    single { GetLoRaPeers(chatRepository = get()) }
+    single { ObserveLoRaPeers(chatRepository = get()) }
     single { GetChannelKeyCommitment(chatRepository = get()) }
     single { GetAvailableNamedChannels(chatRepository = get()) }
     single { GetChannelMembers(chatRepository = get()) }
@@ -219,4 +229,11 @@ val domainModule = module {
 
     single { GetAllFavorites(userRepository = get()) }
     single { ToggleFavorite(userRepository = get(), chatRepository = get(), userEventBus = get()) }
+
+    single { GetLoRaSettings(loraSettingsRepository = get()) }
+    single { SetLoRaEnabled(loraSettingsRepository = get()) }
+    single { SetLoRaRegion(loraSettingsRepository = get(), chatRepository = get()) }
+    single { SetLoRaTxPower(loraSettingsRepository = get(), chatRepository = get()) }
+    single { SetShowLoRaPeers(loraSettingsRepository = get()) }
+    single { SwitchLoRaProtocol(loraSettingsRepository = get(), chatRepository = get()) }
 }

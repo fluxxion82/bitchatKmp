@@ -19,6 +19,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.bitchat.domain.lora.model.LoRaProtocolType
+import com.bitchat.domain.lora.model.LoRaRegion
+import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.viewvo.settings.SettingsState
 import com.bitchat.viewvo.settings.ThemePreference
 
@@ -30,6 +33,11 @@ fun SettingsContent(
     onProofOfWorkToggled: (Boolean) -> Unit,
     onTorNetworkToggled: (Boolean) -> Unit,
     onPowDifficultyChanged: (Int) -> Unit,
+    onLoRaEnabledToggled: (Boolean) -> Unit,
+    onLoRaRegionSelected: (LoRaRegion) -> Unit,
+    onLoRaTxPowerSelected: (LoRaTxPower) -> Unit,
+    onLoRaShowPeersToggled: (Boolean) -> Unit,
+    onLoRaProtocolSelected: (LoRaProtocolType) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
     onShowDebug: (() -> Unit)? = null
@@ -99,6 +107,23 @@ fun SettingsContent(
                         torRunning = state.torRunning,
                         torBootstrapPercent = state.torBootstrapPercent,
                         torLastLogLine = state.torLastLogLine
+                    )
+                }
+            }
+
+            if (state.loraAvailable) {
+                item(key = "lora_settings") {
+                    LoRaSettingsCard(
+                        loraEnabled = state.loraEnabled,
+                        loraRegion = state.loraRegion,
+                        loraTxPower = state.loraTxPower,
+                        loraShowPeers = state.loraShowPeers,
+                        loraProtocol = state.loraProtocol,
+                        onLoRaEnabledToggled = onLoRaEnabledToggled,
+                        onLoRaRegionSelected = onLoRaRegionSelected,
+                        onLoRaTxPowerSelected = onLoRaTxPowerSelected,
+                        onLoRaShowPeersToggled = onLoRaShowPeersToggled,
+                        onLoRaProtocolSelected = onLoRaProtocolSelected
                     )
                 }
             }

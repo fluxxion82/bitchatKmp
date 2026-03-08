@@ -5,6 +5,10 @@ plugins {
 }
 
 version = "0.0.1"
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
 
 kotlin {
     applyDefaultHierarchyTemplate()
@@ -31,6 +35,41 @@ kotlin {
         }
     }
 
+    if (embeddedEnabled) {
+        // Linux ARM64 target for embedded devices with BlueZ BLE support
+        linuxArm64 {
+            val gattlibLibDir = "${project.projectDir}/native/gattlib/build/linux-arm64/install/lib"
+            val sysrootLib = "${project.projectDir}/native/sysroot/lib/aarch64-linux-gnu"
+
+            compilations.getByName("main") {
+                cinterops {
+                    val gattlib by creating {
+                        defFile(project.file("src/nativeInterop/cinterop/gattlib.def"))
+                        includeDirs(
+                            project.file("native/gattlib/include"),
+                            project.file("native/include")
+                        )
+                        compilerOpts("-DBLUEZ_VERSION_MAJOR=5")
+                        extraOpts("-libraryPath", gattlibLibDir)
+                        extraOpts("-libraryPath", sysrootLib)
+                    }
+                    val dbus by creating {
+                        defFile(project.file("src/nativeInterop/cinterop/dbus.def"))
+                        includeDirs(project.file("native/include/dbus-1.0"))
+                        extraOpts("-libraryPath", sysrootLib)
+                    }
+                    val glib by creating {
+                        defFile(project.file("src/nativeInterop/cinterop/glib.def"))
+                        includeDirs(
+                            project.file("native/sysroot/usr/include/glib-2.0"),
+                            project.file("native/sysroot/usr/lib/aarch64-linux-gnu/glib-2.0/include")
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     jvm("desktop")
     androidTarget()
     sourceSets {
@@ -46,7 +85,6 @@ kotlin {
                 implementation(libs.koin.core)
                 implementation(libs.kotlinx.serialization)
                 implementation(libs.kotlinx.coroutines.core)
-                implementation(libs.kotlinx.datetime)
             }
         }
         val commonTest by getting {

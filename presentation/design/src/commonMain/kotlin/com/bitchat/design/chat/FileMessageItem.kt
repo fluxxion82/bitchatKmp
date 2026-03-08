@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -23,6 +21,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import bitchatkmp.presentation.design.generated.resources.Res
 import bitchatkmp.presentation.design.generated.resources.cd_file
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Description
 import com.bitchat.design.util.formatFileSize
 import com.bitchat.domain.chat.model.BitchatFilePacket
 import org.jetbrains.compose.resources.stringResource

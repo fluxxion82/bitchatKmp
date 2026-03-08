@@ -13,8 +13,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -39,6 +37,8 @@ import bitchatkmp.presentation.design.generated.resources.bluetooth_needs_for
 import bitchatkmp.presentation.design.generated.resources.bluetooth_required
 import bitchatkmp.presentation.design.generated.resources.cd_bluetooth
 import bitchatkmp.presentation.design.generated.resources.enable_bluetooth
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.outlined.Bluetooth
 import org.jetbrains.compose.resources.stringResource
 
 @Composable

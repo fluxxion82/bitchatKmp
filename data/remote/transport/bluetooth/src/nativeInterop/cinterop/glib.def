@@ -1,0 +1,6 @@
+package = glib
+
+# GLib - core utility library used by GattLib for main loop and signals
+# We need this to pump the main loop so GattLib callbacks fire
+
+headers = glib.h

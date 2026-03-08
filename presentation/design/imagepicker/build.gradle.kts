@@ -6,11 +6,21 @@ plugins {
 }
 
 version = "0.0.1"
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+val embeddedComposeVersion = providers.gradleProperty("embedded.composeForkVersion")
+    .orElse("9999.0.0-SNAPSHOT")
+    .get()
 
 kotlin {
     applyDefaultHierarchyTemplate()
     androidTarget()
     jvm()
+    if (embeddedEnabled) {
+        linuxArm64()
+    }
     listOf(
         iosX64(),
         iosArm64(),
@@ -36,10 +46,8 @@ kotlin {
                 implementation(compose.material3)
                 implementation(compose.ui)
                 implementation(compose.animation)
-                implementation(compose.components.uiToolingPreview)
-                implementation(compose.components.resources)
-                implementation(compose.materialIconsExtended)
-
+                // Note: compose.components.resources moved to platform source sets
+                // because linuxArm64 needs explicit artifact (multiplatform module lacks this target)
                 implementation(libs.kotlinx.coroutines.core)
             }
         }
@@ -52,6 +60,7 @@ kotlin {
         }
         val androidMain by getting {
             dependencies {
+                implementation(compose.components.resources)
                 implementation(libs.androidx.activity.compose)
                 implementation(libs.androidx.lifecycle.runtime.ktx)
                 implementation("androidx.compose.foundation:foundation")
@@ -64,7 +73,20 @@ kotlin {
         }
         val iosMain by getting {
             dependencies {
-
+                implementation(compose.components.resources)
+            }
+        }
+        val jvmMain by getting {
+            dependencies {
+                implementation(compose.components.resources)
+            }
+        }
+        if (embeddedEnabled) {
+            val linuxArm64Main by getting {
+                dependencies {
+                    // Compose Resources - explicit artifact since multiplatform module lacks this target
+                    implementation("org.jetbrains.compose.components:components-resources-linuxArm64:$embeddedComposeVersion")
+                }
             }
         }
     }

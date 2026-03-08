@@ -1,7 +1,7 @@
 Pod::Spec.new do |spec|
     spec.name                     = 'crypto'
     spec.version                  = '1.0.0'
-    spec.homepage                 = 'https://github.com/fluxxion82'
+    spec.homepage                 = 'https://github.com/permissionlesstech/bitchat'
     spec.source                   = { :http=> ''}
     spec.authors                  = ''
     spec.license                  = ''

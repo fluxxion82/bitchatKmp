@@ -4,12 +4,38 @@ import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.BitchatMessageType
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.GeoPerson
+import com.bitchat.domain.lora.model.LoRaRegion
+import com.bitchat.domain.lora.model.LoRaTxPower
 import kotlinx.coroutines.flow.Flow
 
 interface ChatRepository {
     suspend fun getGeohashMessages(geohash: String): List<BitchatMessage>
     suspend fun getMeshMessages(): List<BitchatMessage>
     suspend fun getMeshPeers(): List<GeoPerson>
+    suspend fun getLoRaPeers(): List<GeoPerson>
+    fun observeLoRaPeers(): Flow<List<GeoPerson>>
+
+    /**
+     * Switch the active LoRa protocol at runtime.
+     *
+     * @param protocol Protocol name: "BITCHAT" or "MESHTASTIC"
+     * @return true if the protocol was switched successfully
+     */
+    suspend fun switchLoRaProtocol(protocol: String): Boolean
+
+    /**
+     * Reconfigure active LoRa transport at runtime (frequency + tx power).
+     *
+     * @return true if the transport was restarted/reconfigured successfully
+     */
+    suspend fun reconfigureLoRa(region: LoRaRegion, txPower: LoRaTxPower): Boolean
+
+    /**
+     * Get the currently active LoRa protocol name.
+     *
+     * @return Current protocol name: "BITCHAT" or "MESHTASTIC"
+     */
+    fun getActiveLoRaProtocol(): String
 
     suspend fun getGeohashParticipants(geohash: String): Map<String, String>
     suspend fun getPrivateChats(): Map<String, List<BitchatMessage>>

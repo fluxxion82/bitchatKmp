@@ -35,4 +35,21 @@ sealed interface Channel {
     @Serializable
     @SerialName("namedChannel")
     data class NamedChannel(val channelName: String) : Channel
+
+    /**
+     * Meshtastic network channel.
+     *
+     * Used for messages sent over Meshtastic protocol to the mesh network.
+     * When nodeNum is null, messages are broadcast. When nodeNum is set,
+     * messages are sent to a specific node (DM).
+     *
+     * @property nodeNum Target node number for DM, or null for broadcast
+     * @property displayName User-friendly name of the node (from NodeInfo)
+     */
+    @Serializable
+    @SerialName("meshtastic")
+    data class Meshtastic(
+        val nodeNum: Int? = null,
+        val displayName: String? = null
+    ) : Channel
 }

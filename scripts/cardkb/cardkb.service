@@ -1,0 +1,26 @@
+[Unit]
+Description=CardKb I2C to uinput keyboard driver
+Documentation=file:///opt/bitchat/docs/CARDKB_SETUP.md
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/bitchat/cardkb-driver.py --quiet
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Run as root for I2C and uinput access
+User=root
+
+# Hardening options
+NoNewPrivileges=no
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/dev
+
+[Install]
+WantedBy=multi-user.target

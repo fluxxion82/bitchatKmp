@@ -6,6 +6,7 @@ set -euo pipefail
 
 # ---- Configuration ----
 IOS_MIN=13.0
+BUILD_TRIPLE="$(uname -m)-apple-darwin"  # avoid executing test binaries
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SECP256K1_DIR="${SCRIPT_DIR}/secp256k1"
@@ -20,9 +21,9 @@ OUT_ROOT="${SECP256K1_DIR}/build"
 mkdir -p "$OUT_ROOT"
 
 sdk_path() { xcrun --sdk "$1" --show-sdk-path; }
-cc_for()   { xcrun --sdk "$1" clang; }
-ar_for()   { xcrun --sdk "$1" ar; }
-ranlib_for(){ xcrun --sdk "$1" ranlib; }
+cc_for()   { xcrun --sdk "$1" --find clang; }
+ar_for()   { xcrun --sdk "$1" --find ar; }
+ranlib_for(){ xcrun --sdk "$1" --find ranlib; }
 
 build_one () {
   local NAME="$1" SDK="$2" ARCH="$3" HOST="$4" MINFLAG="$5"
@@ -43,6 +44,7 @@ build_one () {
   fi
 
   ./configure \
+    --build="${BUILD_TRIPLE}" \
     --host="${HOST}" \
     --disable-shared --enable-static \
     --enable-module-recovery \

@@ -10,7 +10,6 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.sp
 import com.bitchat.design.BASE_FONT_SIZE
 import com.bitchat.domain.chat.model.BitchatMessage
-import io.ktor.utils.io.core.*
 import kotlin.time.Instant
 
 const val MAX_NICKNAME_LENGTH: Int = 15
@@ -283,8 +282,8 @@ fun getPeerColor(message: BitchatMessage, isDark: Boolean): Color {
 fun colorForPeerSeed(seed: String, isDark: Boolean): Color {
     // djb2 hash algorithm (matches iOS implementation)
     var hash = 5381UL
-    for (byte in seed.toByteArray()) {
-        hash = ((hash shl 5) + hash) + byte.toULong()
+    for (byte in seed.encodeToByteArray()) {
+        hash = ((hash shl 5) + hash) + byte.toInt().and(0xFF).toULong()
     }
 
     var hue = (hash % 360UL).toDouble() / 360.0

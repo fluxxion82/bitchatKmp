@@ -2,18 +2,18 @@ package com.bitchat.domain.app.eventbus
 
 import com.bitchat.domain.app.model.AppEvent
 import com.bitchat.domain.base.CoroutinesContextFacade
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.withContext
 
 class InMemoryAppEventBus(
     private val contextFacade: CoroutinesContextFacade,
 ) : AppEventBus {
-    private val eventFlow = Channel<AppEvent>()
+    private val eventFlow = MutableSharedFlow<AppEvent>(replay = 1)
 
-    override fun getAppEvent(): ReceiveChannel<AppEvent> = eventFlow
+    override fun getAppEvent(): SharedFlow<AppEvent> = eventFlow
 
     override suspend fun update(event: AppEvent) = withContext(contextFacade.default) {
-        eventFlow.send(event)
+        eventFlow.emit(event)
     }
 }

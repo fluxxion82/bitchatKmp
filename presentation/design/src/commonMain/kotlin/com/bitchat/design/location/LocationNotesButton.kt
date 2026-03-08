@@ -1,8 +1,6 @@
 package com.bitchat.design.location
 
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -12,6 +10,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import bitchatkmp.presentation.design.generated.resources.Res
 import bitchatkmp.presentation.design.generated.resources.cd_location_notes
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.outlined.Description
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.PermissionState
 import org.jetbrains.compose.resources.stringResource

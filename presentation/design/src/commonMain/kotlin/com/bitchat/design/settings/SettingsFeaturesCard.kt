@@ -4,10 +4,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -21,6 +17,10 @@ import bitchatkmp.presentation.design.generated.resources.about_offline_mesh_des
 import bitchatkmp.presentation.design.generated.resources.about_offline_mesh_title
 import bitchatkmp.presentation.design.generated.resources.about_online_geohash_desc
 import bitchatkmp.presentation.design.generated.resources.about_online_geohash_title
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Bluetooth
+import com.bitchat.design.icons.filled.Lock
+import com.bitchat.design.icons.filled.Public
 import org.jetbrains.compose.resources.stringResource
 
 @Composable

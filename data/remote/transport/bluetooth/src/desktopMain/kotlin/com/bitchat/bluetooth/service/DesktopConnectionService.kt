@@ -50,4 +50,8 @@ class DesktopConnectionService : BluetoothConnectionService {
     override fun setConnectionReadyCallback(callback: ConnectionReadyCallback) {
         readyCallback = callback
     }
+
+    override fun setOnPacketReceivedCallback(callback: OnPacketReceivedCallback) {
+        // No-op for desktop stub
+    }
 }

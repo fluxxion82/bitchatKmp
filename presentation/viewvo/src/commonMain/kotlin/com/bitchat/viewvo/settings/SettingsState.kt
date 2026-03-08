@@ -1,5 +1,9 @@
 package com.bitchat.viewvo.settings
 
+import com.bitchat.domain.lora.model.LoRaProtocolType
+import com.bitchat.domain.lora.model.LoRaRegion
+import com.bitchat.domain.lora.model.LoRaTxPower
+
 data class SettingsState(
     val appVersion: String = "1.0.0",
     val selectedTheme: ThemePreference = ThemePreference.SYSTEM,
@@ -11,7 +15,14 @@ data class SettingsState(
     val torAvailable: Boolean = false,
     val torRunning: Boolean = false,
     val torBootstrapPercent: Int = 0,
-    val torLastLogLine: String = ""
+    val torLastLogLine: String = "",
+    // LoRa settings
+    val loraAvailable: Boolean = false,
+    val loraEnabled: Boolean = true,
+    val loraRegion: LoRaRegion = LoRaRegion.US_915,
+    val loraTxPower: LoRaTxPower = LoRaTxPower.MEDIUM,
+    val loraShowPeers: Boolean = true,
+    val loraProtocol: LoRaProtocolType = LoRaProtocolType.BITCHAT
 )
 
 enum class ThemePreference {

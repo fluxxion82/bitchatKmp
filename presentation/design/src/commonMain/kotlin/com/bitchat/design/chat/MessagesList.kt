@@ -16,8 +16,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -49,6 +47,8 @@ import bitchatkmp.presentation.design.generated.resources.status_pending
 import bitchatkmp.presentation.design.generated.resources.status_sending
 import bitchatkmp.presentation.design.generated.resources.status_sent
 import com.bitchat.design.core.FileSendingAnimation
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Close
 import com.bitchat.design.media.AudioMessageItem
 import com.bitchat.design.media.ImageMessageItem
 import com.bitchat.design.util.formatMessageAsAnnotatedString
@@ -58,6 +58,7 @@ import com.bitchat.domain.chat.model.BitchatMessageType
 import com.bitchat.domain.chat.model.DeliveryStatus
 import com.bitchat.domain.location.model.GeohashChannel
 import com.bitchat.domain.location.model.GeohashChannelLevel
+import kotlinx.coroutines.yield
 import org.jetbrains.compose.resources.stringResource
 
 @Composable
@@ -80,6 +81,9 @@ fun MessagesList(
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
+            // Yield to let initial layout complete before scrolling
+            yield()
+
             val layoutInfo = listState.layoutInfo
             val firstVisibleIndex = layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: -1
 
@@ -107,6 +111,8 @@ fun MessagesList(
 
     LaunchedEffect(forceScrollToBottom) {
         if (messages.isNotEmpty()) {
+            // Yield to ensure layout is complete before scrolling
+            yield()
             listState.animateScrollToItem(0)
         }
     }

@@ -6,6 +6,11 @@ plugins {
     alias(libs.plugins.android.kotlin.multiplatform.library)
 }
 
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+
 kotlin {
     applyDefaultHierarchyTemplate()
     jvm()
@@ -35,6 +40,11 @@ kotlin {
         }
     }
 
+    if (embeddedEnabled) {
+        // Linux ARM64 target
+        linuxArm64()
+    }
+
     sourceSets {
         val commonMain by getting {
             dependencies {
@@ -47,7 +57,6 @@ kotlin {
                 implementation(libs.koin.core)
                 implementation(libs.kotlinx.coroutines.core)
                 implementation(libs.kotlinx.serialization)
-                implementation(libs.kotlinx.datetime)
                 // implementation("app.softwork:kotlinx-uuid-core:0.0.21")
 
                 implementation(libs.kotlinx.atomicfu)
@@ -79,6 +88,16 @@ kotlin {
         val iosMain by getting {
         }
         val macosMain by getting {
+        }
+
+        // Apple-specific (iOS + macOS) - uses KeychainSettings
+        val appleMain by getting {
+        }
+
+        if (embeddedEnabled) {
+            // Linux-specific - uses file-based settings
+            val linuxMain by getting {
+            }
         }
 //        val iosTest by getting
     }

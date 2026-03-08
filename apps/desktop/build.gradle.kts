@@ -75,6 +75,9 @@ dependencies {
     implementation(project(":data:remote:transport:bluetooth"))
     implementation(project(":data:local:platform"))
     implementation(project(":data:remote:transport:nostr"))
+    implementation(project(":data:remote:transport:lora"))
+    implementation(project(":data:remote:transport:lora:bitchat"))
+    implementation(project(":data:remote:transport:lora:meshtastic"))
     implementation(project(":data:remote:tor"))
     implementation(project(":data:repo"))
     implementation(project(":presentation:design"))
@@ -83,6 +86,7 @@ dependencies {
 
     implementation(libs.koin.core)
     implementation(libs.koin.compose)
+    compileOnly(libs.lifecycle.viewmodel)
 }
 
 tasks.test {

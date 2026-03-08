@@ -14,14 +14,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.Camera
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ColorScheme
@@ -56,6 +48,14 @@ import bitchatkmp.presentation.design.generated.resources.perm_type_precise_loca
 import bitchatkmp.presentation.design.generated.resources.permissions_header
 import bitchatkmp.presentation.design.generated.resources.privacy_bullets
 import bitchatkmp.presentation.design.generated.resources.privacy_protected
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Bluetooth
+import com.bitchat.design.icons.filled.Camera
+import com.bitchat.design.icons.filled.LocationOn
+import com.bitchat.design.icons.filled.Mic
+import com.bitchat.design.icons.filled.Notifications
+import com.bitchat.design.icons.filled.Security
+import com.bitchat.design.icons.filled.Warning
 import com.bitchat.viewvo.permissions.PermissionType
 import org.jetbrains.compose.resources.stringResource
 

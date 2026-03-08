@@ -4,6 +4,7 @@ import android.app.Application
 import com.bitchat.android.di.appModule
 import com.bitchat.android.di.buildConfigModule
 import com.bitchat.android.di.buildTypeModule
+import com.bitchat.android.di.LoRaProtocolSelector
 import com.bitchat.bluetooth.di.bluetoothModule
 import com.bitchat.client.di.clientModule
 import com.bitchat.domain.base.invoke
@@ -11,6 +12,9 @@ import com.bitchat.domain.di.domainModule
 import com.bitchat.domain.initialization.InitializeApplication
 import com.bitchat.local.di.commonLocal
 import com.bitchat.local.di.localModule
+import com.bitchat.lora.bitchat.di.bitChatLoraModule
+import com.bitchat.lora.di.loraProtocolManagerModule
+import com.bitchat.lora.meshtastic.di.meshtasticLoraModule
 import com.bitchat.mediautils.initMediaFileUtils
 import com.bitchat.nostr.di.nostrModule
 import com.bitchat.repo.di.commonRepoModule
@@ -38,6 +42,9 @@ class BitchatApplication : Application(), KoinComponent {
     }
 
     private fun registerKoin() {
+        // Get preferred protocol for initial selection
+        val initialProtocol = LoRaProtocolSelector.getPreferredProtocol(this)
+
         startKoin {
             androidContext(this@BitchatApplication)
 
@@ -55,6 +62,11 @@ class BitchatApplication : Application(), KoinComponent {
                     bluetoothModule,
                     nostrModule,
                     torModule,
+                    // Load both LoRa protocol modules
+                    bitChatLoraModule,
+                    meshtasticLoraModule,
+                    // Protocol manager for runtime switching
+                    loraProtocolManagerModule(initialProtocol),
                 )
             )
         }

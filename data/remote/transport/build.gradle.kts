@@ -6,6 +6,11 @@ plugins {
     alias(libs.plugins.android.kotlin.multiplatform.library)
 }
 
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+
 kotlin {
     applyDefaultHierarchyTemplate()
     jvm()
@@ -26,6 +31,9 @@ kotlin {
     }
     macosX64()
     macosArm64()
+    if (embeddedEnabled) {
+        linuxArm64()
+    }
 
     sourceSets {
         val commonMain by getting {

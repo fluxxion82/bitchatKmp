@@ -88,7 +88,8 @@ class ObserveChannelParticipants(
         when (channel) {
             is Channel.Location -> send(locationRepository.getCurrentGeohashPeople())
             Channel.Mesh,
-            is Channel.MeshDM -> send(chatRepository.getMeshPeers())
+            is Channel.MeshDM,
+            is Channel.Meshtastic -> send(chatRepository.getMeshPeers())
 
             is Channel.NostrDM -> {
                 val geohash = channel.sourceGeohash

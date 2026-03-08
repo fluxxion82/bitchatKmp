@@ -484,7 +484,7 @@ class NostrRelay(
                             if (handlers.isNotEmpty()) {
                                 println("NostrRelay: Invoking ${handlers.size} handler(s) for subscription $subId")
                                 handlers.forEach { handler ->
-                                    scope.launch(Dispatchers.Main) {
+                                    scope.launch {
                                         handler(event)
                                     }
                                 }

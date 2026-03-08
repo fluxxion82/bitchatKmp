@@ -1,5 +1,8 @@
 package com.bitchat.nostr
 
+import com.bitchat.nostr.Bech32.convertBits
+
+
 /**
  * Bech32 encoding/decoding implementation for Nostr
  * Used for npub/nsec encoding

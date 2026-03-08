@@ -11,8 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -33,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import bitchatkmp.presentation.design.generated.resources.Res
 import bitchatkmp.presentation.design.generated.resources.cd_cancel
 import com.bitchat.design.core.VoiceNotePlayer
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Close
 import com.bitchat.design.util.formatMessageHeaderAnnotatedString
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.DeliveryStatus

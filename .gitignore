@@ -13,11 +13,41 @@ AGENTS.md
 
 data/remote/tor/jniLibs
 data/remote/tor/native/libs/
+firmware/rangepi-lora/.pio/
+firmware/teensy-lora/.pio/
+
+### Native library build outputs ###
+# Cross-compiled static libraries
+data/crypto/native/libsodium/build/
+data/crypto/native/secp256k1/build/
+data/noise/native/noise-c/build/
+
+data/remote/transport/bluetooth/native/sysroot/                                                                                                                                                                   
+data/remote/transport/bluetooth/native/gattlib/build/                                                                                                                                                             
+data/remote/transport/bluetooth/native/stubs/*.o                                                                                                                                                                  
+data/remote/transport/bluetooth/native/stubs/*.a 
+
+# Apple xcframework outputs
+data/crypto/native/libsodium/libsodium-apple/
+
+# Legacy duplicate download (use libsodium/ source instead)
+data/crypto/native/libsodium-src/
+
+# Autotools generated files
+data/crypto/native/libsodium/autom4te.cache/
+data/crypto/native/secp256k1/autom4te.cache/
+data/noise/native/noise-c/autom4te.cache/
 
 ### Android ###
 apps/droid/debug
 apps/droid/release
 local.properties
+
+### Embedded ###
+apps/embedded/sysroot
+apps/embedded/docs/MESHCORE_RUNBOOK.md
+apps/embedded/docs/MESHTASTIC_RUNBOOK.md
+apps/embedded/docs/MESHTASTIC_RECOVERY_2026-02-17.md
 
 ### Desktop ###
 apps/desktop/kcef-bundle
@@ -60,3 +90,4 @@ bin/
 ### Xcode ###
 presentation/iosApp/iosApp.xcodeproj/project.xcworkspace/xcuserdata/
 
+apps/embedded/maven/

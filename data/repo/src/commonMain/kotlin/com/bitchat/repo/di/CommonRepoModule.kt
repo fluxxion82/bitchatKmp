@@ -7,6 +7,7 @@ import com.bitchat.domain.app.repository.AppRepository
 import com.bitchat.domain.chat.repository.ChatRepository
 import com.bitchat.domain.initialization.AppInitializer
 import com.bitchat.domain.location.repository.LocationRepository
+import com.bitchat.domain.lora.repository.LoRaSettingsRepository
 import com.bitchat.domain.nostr.repository.NostrRepository
 import com.bitchat.domain.tor.repository.TorRepository
 import com.bitchat.domain.user.repository.BlockListRepository
@@ -16,9 +17,11 @@ import com.bitchat.repo.repositories.AppRepo
 import com.bitchat.repo.repositories.BlockListRepo
 import com.bitchat.repo.repositories.ChatRepo
 import com.bitchat.repo.repositories.LocationRepo
+import com.bitchat.repo.repositories.LoRaSettingsRepo
 import com.bitchat.repo.repositories.NostrRepo
 import com.bitchat.repo.repositories.TorRepo
 import com.bitchat.repo.repositories.UserRepo
+import com.bitchat.lora.LoRaProtocol
 import com.bitchat.repo.tor.TorRelayLogSink
 import org.koin.core.qualifier.named
 import org.koin.dsl.bind
@@ -58,6 +61,7 @@ val commonRepoModule = module {
             userEventBus = get(),
             connectEventBus = get(),
             torManager = getOrNull(),
+            lora = getOrNull(),
         )
     }
 
@@ -121,6 +125,14 @@ val commonRepoModule = module {
             userRepository = get(),
         )
     } bind AppInitializer::class
+    single {
+        LoRaAppInitializer(
+            loraTransport = getOrNull(),
+            userRepository = get(),
+            loraPreferences = getOrNull(),
+            userEventBus = get(),
+        )
+    } bind AppInitializer::class
 
     single {
         TorRepo(
@@ -132,6 +144,9 @@ val commonRepoModule = module {
         )
     }
     single<TorRepository> { get<TorRepo>() }
+    single<LoRaSettingsRepository> {
+        LoRaSettingsRepo(loraPreferences = get())
+    }
     single<RelayLogSink> {
         TorRelayLogSink(
             torRepo = get(),

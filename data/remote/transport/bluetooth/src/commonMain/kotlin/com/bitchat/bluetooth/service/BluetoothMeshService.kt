@@ -80,13 +80,21 @@ class BluetoothMeshService(
         setupComponents()
         setupDelegates()
         wireConnectionService()
-        wireGattServerDelegate()
 
         connectionService.setConnectionEstablishedCallback(this)
 
         connectionService.setConnectionReadyCallback(object : ConnectionReadyCallback {
             override fun onConnectionReady(deviceAddress: String) {
                 this@BluetoothMeshService.onConnectionReady(deviceAddress)
+            }
+        })
+
+        // Use connection service's packet callback instead of directly setting GATT server delegate
+        // This allows the connection service to track server client connections properly
+        connectionService.setOnPacketReceivedCallback(object : OnPacketReceivedCallback {
+            override fun onPacketReceived(data: ByteArray, deviceAddress: String) {
+                logInfo("BluetoothMeshService", "📥 Data received from $deviceAddress (${data.size} bytes)")
+                this@BluetoothMeshService.onPacketReceived(data, deviceAddress)
             }
         })
 
@@ -107,23 +115,6 @@ class BluetoothMeshService(
     private fun wireConnectionService() {
         // Android-specific wiring happens in BleModule
         // iOS-specific wiring will happen in iOS DI module
-    }
-
-    private fun wireGattServerDelegate() {
-        gattServerService.setDelegate(object : GattServerDelegate {
-            override fun onDataReceived(data: ByteArray, deviceAddress: String) {
-                logInfo("BluetoothMeshService", "📥 Data received from $deviceAddress (${data.size} bytes)")
-                onPacketReceived(data, deviceAddress)
-            }
-
-            override fun onClientConnected(deviceAddress: String) {
-                logInfo("BluetoothMeshService", "📱 GATT client connected: $deviceAddress")
-            }
-
-            override fun onClientDisconnected(deviceAddress: String) {
-                logInfo("BluetoothMeshService", "📱 GATT client disconnected: $deviceAddress")
-            }
-        })
     }
 
     fun onPacketReceived(data: ByteArray, deviceAddress: String) {

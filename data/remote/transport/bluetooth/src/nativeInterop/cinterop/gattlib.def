@@ -1,0 +1,30 @@
+package = gattlib
+
+# GattLib - BLE GATT client library for BlueZ
+# Provides Central role (scanning, connecting, GATT client operations)
+# Does NOT provide Peripheral role (advertising, GATT server) - use D-Bus directly for that
+
+headers = gattlib.h
+
+linkerOpts.linux_arm64 = \
+    -lgattlib \
+    -lgio-2.0 \
+    -lgmodule-2.0 \
+    -lgobject-2.0 \
+    -lglib-2.0 \
+    -ldbus-1 \
+    -lsystemd_stubs \
+    -lbluetooth \
+    -lmount \
+    -lselinux \
+    -lsepol \
+    -lblkid \
+    -luuid \
+    -lpcre \
+    -lffi \
+    -lz \
+    -lresolv \
+    -lpthread \
+    -lm \
+    -lrt \
+    -ldl

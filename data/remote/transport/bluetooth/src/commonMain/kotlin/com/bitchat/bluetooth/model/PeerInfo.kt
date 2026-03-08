@@ -1,6 +1,6 @@
 package com.bitchat.bluetooth.model
 
-import kotlinx.datetime.Instant
+import kotlin.time.Instant
 
 data class PeerInfo(
     val id: String,
@@ -10,7 +10,7 @@ data class PeerInfo(
     var noisePublicKey: ByteArray?,
     var signingPublicKey: ByteArray?,      // Ed25519 public key for verification
     var isVerifiedNickname: Boolean,       // Verification status flag
-    var lastSeen: Instant                   // Using kotlinx.datetime instead of Long
+    var lastSeen: Instant                   // Using kotlin.time instead of Long
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

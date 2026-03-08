@@ -8,9 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Map
-import androidx.compose.material.icons.filled.PinDrop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -32,6 +29,9 @@ import bitchatkmp.presentation.design.generated.resources.geohash_placeholder
 import bitchatkmp.presentation.design.generated.resources.hash_symbol
 import bitchatkmp.presentation.design.generated.resources.invalid_geohash
 import bitchatkmp.presentation.design.generated.resources.teleport
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Map
+import com.bitchat.design.icons.filled.PinDrop
 import org.jetbrains.compose.resources.stringResource
 
 @Composable

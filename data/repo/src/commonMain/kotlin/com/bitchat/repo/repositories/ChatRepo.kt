@@ -28,6 +28,8 @@ import com.bitchat.domain.location.eventbus.LocationEventBus
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.location.model.LocationEvent
+import com.bitchat.domain.lora.model.LoRaRegion
+import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.domain.user.model.AppUser
 import com.bitchat.domain.user.model.UserEvent
 import com.bitchat.local.prefs.BlockListPreferences
@@ -55,6 +57,11 @@ import com.bitchat.nostr.model.NostrKind
 import com.bitchat.nostr.participant.NostrParticipantTracker
 import com.bitchat.nostr.util.hexStringToByteArray
 import com.bitchat.nostr.util.toHexString
+import com.bitchat.lora.LoRaPeer
+import com.bitchat.lora.LoRaProtocol
+import com.bitchat.lora.LoRaProtocolManager
+import com.bitchat.lora.LoRaProtocolType
+import com.bitchat.lora.radio.LoRaConfig
 import com.bitchat.tor.TorManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.FlowPreview
@@ -103,6 +110,7 @@ class ChatRepo(
     private val userEventBus: com.bitchat.domain.user.eventbus.UserEventBus,
     private val connectEventBus: com.bitchat.domain.connectivity.eventbus.ConnectionEventBus,
     private val torManager: TorManager? = null,
+    private val lora: LoRaProtocol? = null,
 ) : ChatRepository, BluetoothMeshDelegate {
     private val outbox = mutableMapOf<String, MutableList<Triple<String, String, String>>>()
 
@@ -187,6 +195,15 @@ class ChatRepo(
         observeTorReadyAndEstablishConnections()
         subscribeToDirectMessages()
 
+        // Listen for incoming LoRa packets
+        lora?.let { loraTransport ->
+            coroutineScopeFacade.applicationScope.launch {
+                loraTransport.incomingMessages.collect { packetBytes ->
+                    handleLoRaPacket(packetBytes)
+                }
+            }
+        }
+
         coroutineScopeFacade.applicationScope.launch {
             val persistedEventIds = channelPreferences.getChannelEventIds()
             persistedEventIds.forEach { (channelName, eventId) ->
@@ -235,6 +252,83 @@ class ChatRepo(
 
     override suspend fun getMeshPeers(): List<GeoPerson> = withContext(coroutinesContextFacade.io) {
         meshPeers.filter { !blockListPreferences.isMeshUserBlocked(it.id) }.toList()
+    }
+
+    override suspend fun getLoRaPeers(): List<GeoPerson> = withContext(coroutinesContextFacade.io) {
+        lora?.peers?.value?.map { peer: LoRaPeer ->
+            GeoPerson(
+                id = "lora-${peer.deviceId}",
+                displayName = peer.nickname,
+                lastSeen = peer.lastSeen
+            )
+        } ?: emptyList()
+    }
+
+    override fun observeLoRaPeers(): Flow<List<GeoPerson>> {
+        return lora?.peers?.map { peers ->
+            peers.map { peer: LoRaPeer ->
+                GeoPerson(
+                    id = "lora-${peer.deviceId}",
+                    displayName = peer.nickname,
+                    lastSeen = peer.lastSeen
+                )
+            }
+        } ?: kotlinx.coroutines.flow.flowOf(emptyList())
+    }
+
+    override suspend fun switchLoRaProtocol(protocol: String): Boolean = withContext(coroutinesContextFacade.io) {
+        val manager = lora as? LoRaProtocolManager
+        if (manager == null) {
+            println("⚠️ ChatRepo: Cannot switch protocol - LoRaProtocolManager not available")
+            return@withContext false
+        }
+
+        val protocolType = when (protocol.uppercase()) {
+            "MESHTASTIC" -> LoRaProtocolType.MESHTASTIC
+            "MESHCORE" -> LoRaProtocolType.MESHCORE
+            else -> LoRaProtocolType.BITCHAT
+        }
+
+        println("📡 ChatRepo: Switching LoRa protocol to $protocol")
+        manager.switchProtocol(protocolType)
+    }
+
+    override suspend fun reconfigureLoRa(region: LoRaRegion, txPower: LoRaTxPower): Boolean =
+        withContext(coroutinesContextFacade.io) {
+            val manager = lora as? LoRaProtocolManager
+            if (manager == null) {
+                println("⚠️ ChatRepo: Cannot reconfigure LoRa - LoRaProtocolManager not available")
+                return@withContext false
+            }
+
+            val config = LoRaConfig(
+                frequency = when (region) {
+                    LoRaRegion.US_915 -> 915_125_000L
+                    LoRaRegion.EU_868 -> 868_125_000L
+                    LoRaRegion.AU_915 -> 915_125_000L
+                    LoRaRegion.AS_923 -> 923_125_000L
+                },
+                txPower = txPower.dBm,
+                syncWord = when (region) {
+                    LoRaRegion.EU_868 -> 0x12
+                    else -> 0xBC
+                },
+                spreadingFactor = when (region) {
+                    LoRaRegion.EU_868 -> 10
+                    else -> 9
+                }
+            )
+
+            println(
+                "📡 ChatRepo: Reconfiguring LoRa runtime (region=$region, txPower=$txPower, " +
+                    "freq=${config.frequency}, sf=${config.spreadingFactor}, sync=0x${config.syncWord.toString(16)})"
+            )
+            manager.switchProtocol(manager.activeType.value, config)
+        }
+
+    override fun getActiveLoRaProtocol(): String {
+        val manager = lora as? LoRaProtocolManager
+        return manager?.activeType?.value?.name ?: lora?.protocolName ?: "BITCHAT"
     }
 
     override suspend fun getGeohashParticipants(geohash: String): Map<String, String> = withContext(coroutinesContextFacade.io) {
@@ -547,52 +641,80 @@ class ChatRepo(
             chatEventBus.update(ChatEvent.MeshMessagesUpdated)
             println("✅ ChatRepo: Added local echo to mesh messages, total: ${meshChannelMessages.size}")
 
+            // Send via LoRa FIRST (independent of BLE state)
+            println("📻 ChatRepo: LoRa check - lora=${lora != null}, isReady=${lora?.isReady}, messageType=$messageType")
+            if (lora != null && lora.isReady && messageType == BitchatMessageType.Message) {
+                try {
+                    // Format: "nickname:content" for simple text protocol
+                    val loraPayload = "$nickname:$content".encodeToByteArray()
+                    println("📻 ChatRepo: Sending via LoRa: ${loraPayload.size} bytes")
+                    val sent = lora.send(loraPayload)
+                    if (sent) {
+                        println("📻 ChatRepo: Message broadcast via LoRa SUCCESS (${loraPayload.size} bytes)")
+                    } else {
+                        println("⚠️ ChatRepo: LoRa send returned false (radio not ready or busy)")
+                    }
+                } catch (e: Exception) {
+                    println("⚠️ ChatRepo: LoRa send error: ${e.message}")
+                    e.printStackTrace()
+                }
+            } else if (lora != null && messageType == BitchatMessageType.Message) {
+                println("📻 ChatRepo: LoRa available but not ready (isReady=${lora.isReady}), skipping")
+            } else if (lora == null) {
+                println("📻 ChatRepo: LoRa transport is null")
+            }
+
             // Send via Bluetooth - handle file types specially
-            when (messageType) {
-                BitchatMessageType.Image -> {
-                    // Compress image for BLE transfer (max 100KB)
-                    val preparedImage = compressImageForTransfer(content)
-                    if (preparedImage != null) {
-                        val filePacket = BitchatFilePacket(
-                            fileName = preparedImage.fileName,
-                            fileSize = preparedImage.bytes.size.toLong(),
-                            mimeType = preparedImage.mimeType,
-                            content = preparedImage.bytes
-                        )
-                        // Log first bytes to verify JPEG format (should start with FF D8 FF)
-                        val firstBytes = preparedImage.bytes.take(10).joinToString(" ") { byte ->
-                            (byte.toInt() and 0xFF).toString(16).padStart(2, '0').uppercase()
+            try {
+                when (messageType) {
+                    BitchatMessageType.Image -> {
+                        // Compress image for BLE transfer (max 100KB)
+                        val preparedImage = compressImageForTransfer(content)
+                        if (preparedImage != null) {
+                            val filePacket = BitchatFilePacket(
+                                fileName = preparedImage.fileName,
+                                fileSize = preparedImage.bytes.size.toLong(),
+                                mimeType = preparedImage.mimeType,
+                                content = preparedImage.bytes
+                            )
+                            // Log first bytes to verify JPEG format (should start with FF D8 FF)
+                            val firstBytes = preparedImage.bytes.take(10).joinToString(" ") { byte ->
+                                (byte.toInt() and 0xFF).toString(16).padStart(2, '0').uppercase()
+                            }
+                            println("📎 ChatRepo: Image first bytes: $firstBytes")
+                            mesh.sendFileBroadcast(filePacket)
+                            println("📎 ChatRepo: Compressed image broadcast sent: ${preparedImage.fileName} (${preparedImage.bytes.size} bytes, ${preparedImage.mimeType})")
+                        } else {
+                            println("❌ ChatRepo: Failed to compress image for BLE transfer: $content")
                         }
-                        println("📎 ChatRepo: Image first bytes: $firstBytes")
-                        mesh.sendFileBroadcast(filePacket)
-                        println("📎 ChatRepo: Compressed image broadcast sent: ${preparedImage.fileName} (${preparedImage.bytes.size} bytes, ${preparedImage.mimeType})")
-                    } else {
-                        println("❌ ChatRepo: Failed to compress image for BLE transfer: $content")
+                    }
+                    BitchatMessageType.Audio -> {
+                        // Audio files - read as-is (already compressed)
+                        val fileBytes = readFileBytes(content)
+                        if (fileBytes != null) {
+                            val fileName = getFileName(content)
+                            val mimeType = getMimeType(content)
+                            val filePacket = BitchatFilePacket(
+                                fileName = fileName,
+                                fileSize = fileBytes.size.toLong(),
+                                mimeType = mimeType,
+                                content = fileBytes
+                            )
+                            mesh.sendFileBroadcast(filePacket)
+                            println("📎 ChatRepo: Audio file broadcast sent: $fileName (${fileBytes.size} bytes)")
+                        } else {
+                            println("❌ ChatRepo: Failed to read audio file: $content")
+                        }
+                    }
+                    else -> {
+                        // Regular text message
+                        mesh.sendMessage(content, mentions = emptyList())
+                        println("📡 ChatRepo: Message broadcast via Bluetooth mesh")
                     }
                 }
-                BitchatMessageType.Audio -> {
-                    // Audio files - read as-is (already compressed)
-                    val fileBytes = readFileBytes(content)
-                    if (fileBytes != null) {
-                        val fileName = getFileName(content)
-                        val mimeType = getMimeType(content)
-                        val filePacket = BitchatFilePacket(
-                            fileName = fileName,
-                            fileSize = fileBytes.size.toLong(),
-                            mimeType = mimeType,
-                            content = fileBytes
-                        )
-                        mesh.sendFileBroadcast(filePacket)
-                        println("📎 ChatRepo: Audio file broadcast sent: $fileName (${fileBytes.size} bytes)")
-                    } else {
-                        println("❌ ChatRepo: Failed to read audio file: $content")
-                    }
-                }
-                else -> {
-                    // Regular text message
-                    mesh.sendMessage(content, mentions = emptyList())
-                    println("📡 ChatRepo: Message broadcast via Bluetooth mesh")
-                }
+            } catch (e: Exception) {
+                println("⚠️ ChatRepo: BLE send failed: ${e.message}")
+                // Don't fail if BLE fails - LoRa may have succeeded
             }
 
             println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -605,6 +727,79 @@ class ChatRepo(
             println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             e.printStackTrace()
             throw e // Re-throw so ViewModel can show error to user
+        }
+    }
+
+    /**
+     * Send a message via Meshtastic protocol.
+     *
+     * Creates a local echo, stores it, and sends via the LoRa transport
+     * (which is bound to MeshtasticProtocol when Meshtastic is selected).
+     */
+    private suspend fun sendMeshtasticMessage(
+        content: String,
+        nickname: String,
+        messageType: BitchatMessageType
+    ): Unit = withContext(coroutinesContextFacade.io) {
+        try {
+            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            println("📡 ChatRepo.sendMeshtasticMessage STARTED")
+            println("   Nickname: $nickname")
+            println("   Content length: ${content.length}")
+            println("   Content preview: ${content.take(50)}...")
+            println("   Message type: $messageType")
+            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+            val messageID = "meshtastic-${Clock.System.now().toEpochMilliseconds()}"
+
+            // Local echo
+            val localMessage = BitchatMessage(
+                id = messageID,
+                sender = nickname,
+                content = content,
+                type = messageType,
+                timestamp = Clock.System.now(),
+                isPrivate = false,
+                senderPeerID = lora?.deviceId ?: ""
+            )
+
+            // Store in meshChannelMessages (shared with BLE mesh for UI simplicity)
+            meshChannelMessages.add(localMessage)
+            chatEventBus.update(ChatEvent.MeshMessagesUpdated)
+            println("✅ ChatRepo: Added local echo to mesh messages, total: ${meshChannelMessages.size}")
+
+            // Send via LoRa (MeshtasticProtocol)
+            if (lora != null && lora.isReady && messageType == BitchatMessageType.Message) {
+                try {
+                    // Format: "nickname:content" - MeshtasticProtocol handles protobuf encoding
+                    val payload = "$nickname:$content".encodeToByteArray()
+                    println("📡 ChatRepo: Sending via Meshtastic: ${payload.size} bytes")
+                    val sent = lora.send(payload)
+                    if (sent) {
+                        println("📡 ChatRepo: Message sent via Meshtastic SUCCESS")
+                    } else {
+                        println("⚠️ ChatRepo: Meshtastic send returned false (not ready)")
+                    }
+                } catch (e: Exception) {
+                    println("⚠️ ChatRepo: Meshtastic send error: ${e.message}")
+                    e.printStackTrace()
+                }
+            } else if (lora == null) {
+                println("⚠️ ChatRepo: No LoRa transport available for Meshtastic")
+            } else if (!lora.isReady) {
+                println("⚠️ ChatRepo: Meshtastic not ready (config not received?)")
+            }
+
+            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            println("✅ ChatRepo.sendMeshtasticMessage COMPLETED")
+            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        } catch (e: Exception) {
+            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            println("❌ ChatRepo.sendMeshtasticMessage FAILED")
+            println("   Error: ${e.message}")
+            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            e.printStackTrace()
+            throw e
         }
     }
 
@@ -1427,6 +1622,10 @@ class ChatRepo(
                 namedChannelMessages[normalized]?.clear()
                 chatEventBus.update(ChatEvent.NamedChannelMessagesUpdated(channel.channelName))
             }
+
+            is Channel.Meshtastic -> {
+                // Meshtastic messages not yet implemented
+            }
         }
     }
 
@@ -1487,8 +1686,12 @@ class ChatRepo(
         sender: String,
         messageType: BitchatMessageType
     ) = withContext(coroutinesContextFacade.io) {
+        println("📬 ChatRepo.sendMessage: channel=$channel, sender=$sender, contentLen=${content.length}")
         when (channel) {
-            is Channel.Mesh -> sendMeshMessage(content, sender, messageType)
+            is Channel.Mesh -> {
+                println("📬 ChatRepo.sendMessage: Routing to sendMeshMessage")
+                sendMeshMessage(content, sender, messageType)
+            }
             is Channel.Location -> sendGeohashMessage(content, channel.geohash, sender, messageType)
             is Channel.NostrDM -> {
                 initializePrivateDMIfNeeded(channel.peerID)
@@ -1512,6 +1715,10 @@ class ChatRepo(
 
             is Channel.NamedChannel -> {
                 sendNamedChannelMessage(channel.channelName, content, sender, messageType)
+            }
+
+            is Channel.Meshtastic -> {
+                sendMeshtasticMessage(content, sender, messageType)
             }
         }
     }
@@ -1716,6 +1923,54 @@ class ChatRepo(
                 nostrRelay.ensureGeohashRelaysConnected(geohash, nRelays = 5, includeDefaults = true)
                 println("  ✅ Relay connections established for $geohash")
             }
+        }
+    }
+
+    /**
+     * Handle incoming LoRa packet.
+     * Format: "nickname:content" for simple text protocol.
+     */
+    private suspend fun handleLoRaPacket(packetBytes: ByteArray) = withContext(coroutinesContextFacade.io) {
+        try {
+            val packetString = packetBytes.decodeToString()
+            println("📻 ChatRepo: Received LoRa packet: $packetString")
+
+            // Parse "nickname:content" format
+            val colonIndex = packetString.indexOf(':')
+            if (colonIndex <= 0) {
+                println("⚠️ ChatRepo: Invalid LoRa packet format (no colon found)")
+                return@withContext
+            }
+
+            val nickname = packetString.substring(0, colonIndex)
+            val content = packetString.substring(colonIndex + 1)
+
+            println("📻 ChatRepo: LoRa message from '$nickname': $content")
+
+            // Create message for mesh channel
+            val messageID = "lora-${Clock.System.now().toEpochMilliseconds()}"
+            val message = BitchatMessage(
+                id = messageID,
+                sender = nickname,
+                content = content,
+                type = BitchatMessageType.Message,
+                timestamp = Clock.System.now(),
+                isPrivate = false,
+                senderPeerID = "lora-$nickname" // Prefix to identify LoRa origin
+            )
+
+            // Add to mesh channel messages (avoid duplicates)
+            if (meshChannelMessages.none { it.id == message.id }) {
+                meshChannelMessages.add(message)
+                println("📻 ChatRepo: Added LoRa message to mesh channel, total: ${meshChannelMessages.size}")
+                chatEventBus.update(ChatEvent.MeshMessagesUpdated)
+                println("📻 ChatRepo: Emitted MeshMessagesUpdated event")
+            }
+
+            chatEventBus.update(ChatEvent.MessageReceived)
+        } catch (e: Exception) {
+            println("⚠️ ChatRepo: Failed to parse LoRa packet: ${e.message}")
+            e.printStackTrace()
         }
     }
 

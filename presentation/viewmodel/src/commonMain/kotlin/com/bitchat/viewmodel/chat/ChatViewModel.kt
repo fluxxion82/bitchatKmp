@@ -108,6 +108,10 @@ class ChatViewModel(
                                 } else {
                                     _currentChannel.value = null
                                 }
+                            } else if (userState is UserState.BluetoothDisabled) {
+                                // When Bluetooth is disabled, still observe Mesh channel for LoRa messages
+                                println("📡 ChatViewModel: Bluetooth disabled, observing Mesh channel for LoRa")
+                                _currentChannel.value = Channel.Mesh
                             } else {
                                 _currentChannel.value = null
                             }
@@ -153,15 +157,35 @@ class ChatViewModel(
         val content = _state.value.messageInput.trim()
         if (content.isEmpty()) return
 
+        println("📤 ChatViewModel: sendMessage() called with content length=${content.length}")
+
         viewModelScope.launch {
             try {
-                val channel = when (val userState = getUserState()) {
+                val userState = getUserState()
+                println("📤 ChatViewModel: userState=$userState")
+
+                val channel = when (userState) {
                     is UserState.Active -> when (val active = userState.activeState) {
-                        is ActiveState.Chat -> active.channel
-                        else -> return@launch
+                        is ActiveState.Chat -> {
+                            println("📤 ChatViewModel: In Chat state, channel=${active.channel}")
+                            active.channel
+                        }
+                        else -> {
+                            println("📤 ChatViewModel: Not in Chat state, activeState=$active - BAILING OUT")
+                            return@launch
+                        }
                     }
 
-                    else -> return@launch
+                    // When Bluetooth is disabled, allow sending via LoRa on Mesh channel
+                    is UserState.BluetoothDisabled -> {
+                        println("📤 ChatViewModel: Bluetooth disabled, using Mesh channel for LoRa-only")
+                        Channel.Mesh
+                    }
+
+                    else -> {
+                        println("📤 ChatViewModel: User not active (state=$userState) - BAILING OUT")
+                        return@launch
+                    }
                 }
 
                 val nickname = _state.value.nickname
@@ -268,7 +292,7 @@ class ChatViewModel(
                     }
                 }
 
-                println("ChatViewModel: sendMessage channel=$channel contentLength=${processedContent.length}")
+                println("📤 ChatViewModel: About to call sendMessage - channel=$channel contentLength=${processedContent.length}")
                 _state.update { it.copy(isSending = true) }
 
                 sendMessage(
@@ -278,8 +302,11 @@ class ChatViewModel(
                     sender = nickname.ifEmpty { "Anonymous" }
                 ))
 
+                println("📤 ChatViewModel: sendMessage completed successfully")
                 _state.update { it.copy(isSending = false) }
             } catch (e: Exception) {
+                println("📤 ChatViewModel: sendMessage EXCEPTION: ${e.message}")
+                e.printStackTrace()
                 _state.update {
                     it.copy(
                         isSending = false,

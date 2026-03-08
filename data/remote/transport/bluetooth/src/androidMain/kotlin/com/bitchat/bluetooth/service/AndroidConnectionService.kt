@@ -31,7 +31,7 @@ class AndroidConnectionService(
     private val lastConnectionAttempt = mutableMapOf<String, Long>()
     private val connectionAttemptCount = mutableMapOf<String, Int>()
 
-    private var onPacketReceivedCallback: ((ByteArray, String) -> Unit)? = null
+    private var onPacketReceivedCallback: OnPacketReceivedCallback? = null
 
     private var connectionEstablishedCallback: ConnectionEstablishedCallback? = null
 
@@ -49,7 +49,7 @@ class AndroidConnectionService(
         gattServer.setDelegate(object : GattServerDelegate {
             override fun onDataReceived(data: ByteArray, deviceAddress: String) {
                 Log.i(TAG, "Received data from server: $deviceAddress, ${data.size} bytes")
-                onPacketReceivedCallback?.invoke(data, deviceAddress)
+                onPacketReceivedCallback?.onPacketReceived(data, deviceAddress)
             }
 
             override fun onClientConnected(deviceAddress: String) {
@@ -76,7 +76,7 @@ class AndroidConnectionService(
         gattClient.setDelegate(object : GattClientDelegate {
             override fun onCharacteristicRead(deviceAddress: String, data: ByteArray) {
                 Log.i(TAG, "Received notification from client: $deviceAddress, ${data.size} bytes")
-                onPacketReceivedCallback?.invoke(data, deviceAddress)
+                onPacketReceivedCallback?.onPacketReceived(data, deviceAddress)
             }
 
             override fun onWriteSuccess(deviceAddress: String) {
@@ -89,7 +89,7 @@ class AndroidConnectionService(
         })
     }
 
-    fun setOnPacketReceivedCallback(callback: (ByteArray, String) -> Unit) {
+    override fun setOnPacketReceivedCallback(callback: OnPacketReceivedCallback) {
         this.onPacketReceivedCallback = callback
     }
 

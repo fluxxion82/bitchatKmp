@@ -1,0 +1,13 @@
+Lora:
+  Module: RF95
+  spidev: spidev1.1
+  spiSpeed: 500000
+  gpiochip: 1
+  IRQ:
+    pin: 70
+    gpiochip: 1
+    line: 70
+  Reset:
+    pin: 71
+    gpiochip: 1
+    line: 71

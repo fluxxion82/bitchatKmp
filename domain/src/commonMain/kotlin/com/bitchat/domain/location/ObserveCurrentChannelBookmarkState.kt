@@ -47,6 +47,7 @@ class ObserveCurrentChannelBookmarkState(
             is Channel.MeshDM,
             is Channel.NostrDM,
             is Channel.NamedChannel,
+            is Channel.Meshtastic,
             null -> false
         }
     }

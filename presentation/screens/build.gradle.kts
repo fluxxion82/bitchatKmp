@@ -10,6 +10,38 @@ plugins {
 
 version = "0.0.1"
 
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+val embeddedComposeVersion = providers.gradleProperty("embedded.composeForkVersion")
+    .orElse("9999.0.0-SNAPSHOT")
+    .get()
+
+if (embeddedEnabled) {
+    configurations.matching { it.name.contains("linuxArm64", ignoreCase = true) }.configureEach {
+        resolutionStrategy.eachDependency {
+            val composeGroups = listOf(
+                "org.jetbrains.compose.ui",
+                "org.jetbrains.compose.foundation",
+                "org.jetbrains.compose.material",
+                "org.jetbrains.compose.material3",
+                "org.jetbrains.compose.animation",
+                "org.jetbrains.compose.runtime"
+            )
+            if (requested.group in composeGroups) {
+                useVersion(embeddedComposeVersion)
+                because("Using forked Compose with linuxArm64 support")
+            }
+            if (requested.group == "org.jetbrains.compose.components" &&
+                requested.name.startsWith("components-resources")) {
+                useVersion(embeddedComposeVersion)
+                because("Using forked Compose components-resources with linuxArm64 support")
+            }
+        }
+    }
+}
+
 kotlin {
     compilerOptions {
         freeCompilerArgs.add("-Xwhen-guards")
@@ -36,6 +68,11 @@ kotlin {
         }
     }
 
+    if (embeddedEnabled) {
+        // Linux ARM64 target for embedded devices
+        linuxArm64()
+    }
+
     sourceSets {
         val commonMain by getting {
             dependencies {
@@ -48,9 +85,7 @@ kotlin {
                 implementation(libs.navigation.material.compose)
 
                 implementation(libs.kotlinx.io.core)
-                implementation(libs.kotlinx.datetime)
                 implementation(libs.kotlinx.serialization)
-                implementation(libs.ktor.http)
 
                 val composeBom = project.dependencies.platform(libs.compose.bom)
                 implementation(composeBom)
@@ -58,18 +93,12 @@ kotlin {
 
                 implementation(compose.material)
                 implementation(compose.material3)
-                implementation(compose.materialIconsExtended)
                 implementation(compose.ui)
                 implementation(compose.animation)
-                implementation(compose.components.uiToolingPreview)
-                implementation(compose.components.resources)
 
                 implementation(libs.koin.core)
                 implementation(libs.koin.compose)
                 implementation(libs.koin.composeVM)
-
-                implementation(libs.coil)
-                implementation(libs.coil.compose)
             }
         }
         val commonTest by getting {
@@ -84,6 +113,7 @@ kotlin {
                 implementation(compose.preview)
                 implementation(compose.foundation)
                 implementation(compose.desktop.currentOs)
+                implementation(compose.components.resources)
             }
         }
         val androidMain by getting {
@@ -91,6 +121,20 @@ kotlin {
                 implementation(compose.preview)
                 implementation(libs.accompanist.permissions)
                 implementation(libs.androidx.activity.compose)
+                implementation(compose.components.resources)
+            }
+        }
+        val iosMain by getting {
+            dependencies {
+                implementation(compose.components.resources)
+            }
+        }
+        if (embeddedEnabled) {
+            val linuxArm64Main by getting {
+                dependencies {
+                    // Explicit linuxArm64 artifacts from forked Compose
+                    implementation("org.jetbrains.compose.components:components-resources-linuxArm64:$embeddedComposeVersion")
+                }
             }
         }
     }

@@ -10,6 +10,15 @@ import com.bitchat.domain.app.SetAppTheme
 import com.bitchat.domain.app.model.AppTheme
 import com.bitchat.domain.app.model.BackgroundMode
 import com.bitchat.domain.base.invoke
+import com.bitchat.domain.lora.GetLoRaSettings
+import com.bitchat.domain.lora.SetLoRaEnabled
+import com.bitchat.domain.lora.SetLoRaRegion
+import com.bitchat.domain.lora.SetLoRaTxPower
+import com.bitchat.domain.lora.SetShowLoRaPeers
+import com.bitchat.domain.lora.SwitchLoRaProtocol
+import com.bitchat.domain.lora.model.LoRaProtocolType
+import com.bitchat.domain.lora.model.LoRaRegion
+import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.domain.nostr.GetPowSettings
 import com.bitchat.domain.nostr.SetPowSettings
 import com.bitchat.domain.nostr.model.PowSettings
@@ -42,6 +51,12 @@ class SettingsViewModel(
     private val enableBackgroundMode: EnableBackgroundMode,
     private val disableBackgroundMode: DisableBackgroundMode,
     private val showBackgroundModeSetting: Boolean,
+    private val getLoRaSettings: GetLoRaSettings,
+    private val setLoRaEnabled: SetLoRaEnabled,
+    private val setLoRaRegion: SetLoRaRegion,
+    private val setLoRaTxPower: SetLoRaTxPower,
+    private val setShowLoRaPeers: SetShowLoRaPeers,
+    private val switchLoRaProtocol: SwitchLoRaProtocol,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsState())
     val state: StateFlow<SettingsState> = _state.asStateFlow()
@@ -64,6 +79,8 @@ class SettingsViewModel(
 
             val backgroundMode = getBackgroundMode().firstOrNull() ?: BackgroundMode.OFF
 
+            val loraSettings = getLoRaSettings?.invoke()
+
             _state.update {
                 it.copy(
                     appVersion = "1.5.1",
@@ -74,6 +91,12 @@ class SettingsViewModel(
                     backgroundModeEnabled = backgroundMode == BackgroundMode.ON,
                     torNetworkEnabled = torMode == TorMode.ON,
                     torAvailable = true,
+                    loraAvailable = getLoRaSettings != null,
+                    loraEnabled = loraSettings?.enabled ?: true,
+                    loraRegion = loraSettings?.region ?: LoRaRegion.US_915,
+                    loraTxPower = loraSettings?.txPower ?: LoRaTxPower.MEDIUM,
+                    loraShowPeers = loraSettings?.showPeers ?: true,
+                    loraProtocol = loraSettings?.protocol ?: LoRaProtocolType.BITCHAT,
                 )
             }
         }
@@ -161,6 +184,43 @@ class SettingsViewModel(
             val currentSettings = getPowSettings().firstOrNull() ?: PowSettings()
             setPowSettings(currentSettings.copy(difficulty = difficulty))
             _state.update { it.copy(powDifficulty = difficulty.coerceIn(0, 32)) }
+        }
+    }
+
+    fun onLoRaEnabledToggled(enabled: Boolean) {
+        viewModelScope.launch {
+            setLoRaEnabled.invoke(enabled)
+            _state.update { it.copy(loraEnabled = enabled) }
+        }
+    }
+
+    fun onLoRaRegionSelected(region: LoRaRegion) {
+        viewModelScope.launch {
+            val currentPower = _state.value.loraTxPower
+            setLoRaRegion.invoke(SetLoRaRegion.Params(region, currentPower))
+            _state.update { it.copy(loraRegion = region) }
+        }
+    }
+
+    fun onLoRaTxPowerSelected(power: LoRaTxPower) {
+        viewModelScope.launch {
+            val currentRegion = _state.value.loraRegion
+            setLoRaTxPower.invoke(SetLoRaTxPower.Params(power, currentRegion))
+            _state.update { it.copy(loraTxPower = power) }
+        }
+    }
+
+    fun onLoRaShowPeersToggled(show: Boolean) {
+        viewModelScope.launch {
+            setShowLoRaPeers.invoke(show)
+            _state.update { it.copy(loraShowPeers = show) }
+        }
+    }
+
+    fun onLoRaProtocolSelected(protocol: LoRaProtocolType) {
+        viewModelScope.launch {
+            switchLoRaProtocol.invoke(protocol)
+            _state.update { it.copy(loraProtocol = protocol) }
         }
     }
 }

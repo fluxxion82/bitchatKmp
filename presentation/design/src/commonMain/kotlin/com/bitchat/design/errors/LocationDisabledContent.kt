@@ -17,9 +17,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -49,6 +46,9 @@ import bitchatkmp.presentation.design.generated.resources.location_needs_for
 import bitchatkmp.presentation.design.generated.resources.location_services_required
 import bitchatkmp.presentation.design.generated.resources.open_location_settings
 import bitchatkmp.presentation.design.generated.resources.privacy_first
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Security
+import com.bitchat.design.icons.outlined.LocationOn
 import org.jetbrains.compose.resources.stringResource
 
 @Composable

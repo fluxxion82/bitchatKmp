@@ -5,16 +5,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.navigation.NavHostController
 import com.bitchat.design.settings.SettingsContent
-import com.bitchat.screens.Platform
-import com.bitchat.screens.getPlatform
 import com.bitchat.viewmodel.settings.SettingsViewModel
-import org.koin.compose.viewmodel.koinViewModel
-import org.koin.core.parameter.parametersOf
 
 @Composable
 fun SettingsScreen(
     navController: NavHostController,
-    viewModel: SettingsViewModel = koinViewModel { parametersOf(getPlatform() == Platform.ANDROID) }
+    viewModel: SettingsViewModel,
 ) {
     val state by viewModel.state.collectAsState()
     SettingsContent(
@@ -24,6 +20,11 @@ fun SettingsScreen(
         onProofOfWorkToggled = viewModel::onProofOfWorkToggled,
         onTorNetworkToggled = viewModel::onTorNetworkToggled,
         onPowDifficultyChanged = viewModel::onPowDifficultyChanged,
+        onLoRaEnabledToggled = viewModel::onLoRaEnabledToggled,
+        onLoRaRegionSelected = viewModel::onLoRaRegionSelected,
+        onLoRaTxPowerSelected = viewModel::onLoRaTxPowerSelected,
+        onLoRaShowPeersToggled = viewModel::onLoRaShowPeersToggled,
+        onLoRaProtocolSelected = viewModel::onLoRaProtocolSelected,
         onDismiss = { navController.navigateUp() },
         onShowDebug = null  // TODO: Wire when debug settings ready
     )

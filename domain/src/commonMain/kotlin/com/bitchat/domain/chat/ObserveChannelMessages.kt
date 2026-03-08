@@ -26,6 +26,11 @@ class ObserveChannelMessages(
             is Channel.MeshDM -> observePrivateDM(param.peerID)
             is Channel.NostrDM -> observePrivateDM(param.peerID)
             is Channel.NamedChannel -> observeNamedChannel(param.channelName)
+            is Channel.Meshtastic -> if (param.nodeNum != null) {
+                observePrivateDM(param.nodeNum.toString(16).padStart(8, '0'))
+            } else {
+                observeMeshChannel()
+            }
         }
     }
 

@@ -10,7 +10,7 @@ class DesktopConnectionService(
 
     private var establishedCallback: ConnectionEstablishedCallback? = null
     private var readyCallback: ConnectionReadyCallback? = null
-    private var onPacketReceived: ((ByteArray, String) -> Unit)? = null
+    private var onPacketReceived: OnPacketReceivedCallback? = null
 
     private val connected = mutableSetOf<String>()
     private val mutex = Mutex()
@@ -51,7 +51,7 @@ class DesktopConnectionService(
         readyCallback = callback
     }
 
-    fun setOnPacketReceivedCallback(callback: (ByteArray, String) -> Unit) {
+    override fun setOnPacketReceivedCallback(callback: OnPacketReceivedCallback) {
         onPacketReceived = callback
     }
 }

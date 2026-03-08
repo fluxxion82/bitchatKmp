@@ -1,0 +1,5 @@
+headers = GLES2/gl2.h
+headerFilter = GLES2/gl2.h GLES2/gl2platform.h
+package = gles2
+
+linkerOpts.linux_arm64 = -lGLESv2

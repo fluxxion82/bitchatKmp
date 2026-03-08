@@ -1,0 +1,4 @@
+package = platform.spi
+headers = linux/spi/spidev.h sys/ioctl.h fcntl.h unistd.h
+headerFilter = linux/spi/* sys/* fcntl.h unistd.h
+compilerOpts = -D_GNU_SOURCE

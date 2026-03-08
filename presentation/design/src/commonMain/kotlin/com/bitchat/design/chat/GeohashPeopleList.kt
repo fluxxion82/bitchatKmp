@@ -8,11 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.outlined.Explore
-import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +29,11 @@ import bitchatkmp.presentation.design.generated.resources.geohash_people_header
 import bitchatkmp.presentation.design.generated.resources.nobody_around
 import bitchatkmp.presentation.design.generated.resources.you_suffix
 import com.bitchat.design.BASE_FONT_SIZE
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Email
+import com.bitchat.design.icons.filled.LocationOn
+import com.bitchat.design.icons.outlined.Explore
+import com.bitchat.design.icons.outlined.LocationOn
 import com.bitchat.domain.location.model.GeoPerson
 import org.jetbrains.compose.resources.stringResource
 

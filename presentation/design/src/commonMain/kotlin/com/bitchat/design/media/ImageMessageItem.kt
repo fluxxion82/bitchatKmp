@@ -12,10 +12,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BrokenImage
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -38,8 +34,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import bitchatkmp.presentation.design.generated.resources.Res
 import bitchatkmp.presentation.design.generated.resources.cd_cancel
-import coil3.compose.AsyncImage
-import coil3.compose.AsyncImagePainter
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.BrokenImage
+import com.bitchat.design.icons.filled.Close
 import com.bitchat.design.util.formatMessageHeaderAnnotatedString
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.BitchatMessageType
@@ -106,8 +103,8 @@ fun ImageMessageItem(
         }
 
         Box {
-            var imageState by remember { mutableStateOf<AsyncImagePainter.State>(AsyncImagePainter.State.Empty) }
-            AsyncImage(
+            var imageState by remember { mutableStateOf<ImageLoadState>(ImageLoadState.Empty) }
+            PlatformAsyncImage(
                 model = path,
                 contentDescription = "Image message",
                 modifier = Modifier
@@ -123,20 +120,20 @@ fun ImageMessageItem(
                 onState = { state ->
                     val messageId = message.id
                     when (state) {
-                        is AsyncImagePainter.State.Loading -> println("ImageMessageItem: LOADING messageId=$messageId")
-                        is AsyncImagePainter.State.Success -> {
-                            val image = state.result.image
+                        is ImageLoadState.Loading -> println("ImageMessageItem: LOADING messageId=$messageId")
+                        is ImageLoadState.Success -> {
+                            val image = state.image
                             println("ImageMessageItem: SUCCESS messageId=$messageId image=$image")
                         }
-                        is AsyncImagePainter.State.Error ->
-                            println("ImageMessageItem: ERROR messageId=$messageId error=${state.result.throwable}")
-                        is AsyncImagePainter.State.Empty -> println("ImageMessageItem: EMPTY messageId=$messageId")
+                        is ImageLoadState.Error ->
+                            println("ImageMessageItem: ERROR messageId=$messageId error=${state.throwable}")
+                        is ImageLoadState.Empty -> println("ImageMessageItem: EMPTY messageId=$messageId")
                     }
                     imageState = state
                 }
             )
 
-            if (imageState is AsyncImagePainter.State.Loading) {
+            if (imageState is ImageLoadState.Loading) {
                 Box(
                     modifier = Modifier
                         .widthIn(max = 300.dp)
@@ -152,7 +149,7 @@ fun ImageMessageItem(
                 }
             }
 
-            if (imageState is AsyncImagePainter.State.Error) {
+            if (imageState is ImageLoadState.Error) {
                 Box(
                     modifier = Modifier
                         .widthIn(max = 300.dp)
@@ -178,23 +175,8 @@ fun ImageMessageItem(
                 }
             }
 
-            if (imageState is AsyncImagePainter.State.Empty) {
-                Box(
-                    modifier = Modifier
-                        .widthIn(max = 300.dp)
-                        .size(150.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Image,
-                        contentDescription = "Image",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-            }
+            // Note: ImageLoadState.Empty case is handled by PlatformAsyncImage on linuxArm64
+            // On other platforms, it's a transient state before Loading starts
 
             val showCancel = message.sender == currentUserNickname && (message.deliveryStatus is DeliveryStatus.PartiallyDelivered)
             if (showCancel) {

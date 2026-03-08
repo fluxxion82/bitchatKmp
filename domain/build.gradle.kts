@@ -4,12 +4,19 @@ plugins {
 }
 
 version = "0.0.1"
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
 
 kotlin {
     applyDefaultHierarchyTemplate()
     jvm()
     macosX64()
     macosArm64()
+    if (embeddedEnabled) {
+        linuxArm64()
+    }
     listOf(
         iosX64(),
         iosArm64(),
@@ -40,8 +47,6 @@ kotlin {
                 implementation(libs.koin.core)
                 implementation(libs.kotlinx.serialization)
                 implementation(libs.kotlinx.coroutines.core)
-
-                implementation(libs.kotlinx.datetime)
             }
         }
         val commonTest by getting

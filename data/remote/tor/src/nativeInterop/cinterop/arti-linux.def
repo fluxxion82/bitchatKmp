@@ -1,0 +1,3 @@
+headers = arti_linux.h
+staticLibraries = libarti_linux.a
+package = com.bitchat.tor.native

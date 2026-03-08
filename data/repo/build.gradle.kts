@@ -6,6 +6,11 @@ plugins {
     alias(libs.plugins.android.kotlin.multiplatform.library)
 }
 
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+
 kotlin {
     applyDefaultHierarchyTemplate()
     jvm("desktop")
@@ -26,6 +31,11 @@ kotlin {
         }
     }
 
+    if (embeddedEnabled) {
+        // Linux ARM64 target for embedded devices
+        linuxArm64()
+    }
+
     sourceSets {
         val commonMain by getting {
             dependencies {
@@ -39,12 +49,12 @@ kotlin {
                 implementation(project(":data:noise"))
                 implementation(project(":data:local:platform"))
                 implementation(project(":data:remote:transport:nostr"))
+                implementation(project(":data:remote:transport:lora"))
                 implementation(project(":data:mediautils"))
 
                 implementation(libs.koin.core)
                 implementation(libs.kotlinx.coroutines.core)
                 implementation(libs.kotlinx.serialization)
-                implementation(libs.kotlinx.datetime)
                 implementation(libs.kotlinx.atomicfu)
                 // implementation("app.softwork:kotlinx-uuid-core:0.0.21")
             }

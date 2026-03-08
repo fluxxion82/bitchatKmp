@@ -40,6 +40,7 @@ val viewModelModule = module {
             saveUserStateAction = get(),
             markPrivateChatRead = get(),
             clearAllData = get(),
+            observeLoRaPeers = get(),
         )
     }
     viewModel {
@@ -135,6 +136,12 @@ val viewModelModule = module {
             enableBackgroundMode = get(),
             disableBackgroundMode = get(),
             showBackgroundModeSetting = params[0],
+            getLoRaSettings = get(),
+            setLoRaEnabled = get(),
+            setLoRaRegion = get(),
+            setLoRaTxPower = get(),
+            setShowLoRaPeers = get(),
+            switchLoRaProtocol = get(),
         )
     }
 

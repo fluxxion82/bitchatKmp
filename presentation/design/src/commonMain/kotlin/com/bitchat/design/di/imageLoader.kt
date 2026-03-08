@@ -1,44 +1,16 @@
 package com.bitchat.design.di
 
-import coil3.ImageLoader
-import coil3.PlatformContext
-import coil3.decode.Decoder
-import coil3.disk.DiskCache
-import coil3.memory.MemoryCache
-import coil3.request.CachePolicy
-import coil3.request.crossfade
-import coil3.util.DebugLogger
-
-fun newImageLoader(
-    context: PlatformContext,
+/**
+ * Platform-specific image loader creation.
+ * On platforms with Coil support, returns a configured Coil ImageLoader.
+ * On linuxArm64, returns null as image loading is not supported.
+ */
+expect fun newImageLoader(
+    context: Any,
     debug: Boolean,
-): ImageLoader {
-    return ImageLoader.Builder(context)
-        .networkCachePolicy(CachePolicy.ENABLED)
-        .memoryCachePolicy(CachePolicy.ENABLED)
-        .diskCachePolicy(CachePolicy.ENABLED)
-        .memoryCache {
-            MemoryCache.Builder()
-                .strongReferencesEnabled(true)
-                .maxSizePercent(context, percent = 0.55)
-                .build()
-        }
-        .diskCache {
-            newDiskCache()
-        }
-        .components {
-            getPlatformComponents().forEach {
-                add(it)
-            }
-        }
-        .crossfade(true)
-        .apply {
-            if (debug) {
-                logger(DebugLogger())
-            }
-        }
-        .build()
-}
+): Any?
 
-internal expect fun newDiskCache(): DiskCache?
-expect fun getPlatformComponents(): List<Decoder.Factory>
+/**
+ * Platform-specific component factories for image decoders.
+ */
+expect fun getPlatformComponents(): List<Any>

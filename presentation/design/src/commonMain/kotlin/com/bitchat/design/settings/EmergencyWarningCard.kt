@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -22,6 +20,8 @@ import androidx.compose.ui.unit.sp
 import bitchatkmp.presentation.design.generated.resources.Res
 import bitchatkmp.presentation.design.generated.resources.about_emergency_tip
 import bitchatkmp.presentation.design.generated.resources.about_emergency_title
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Warning
 import org.jetbrains.compose.resources.stringResource
 
 @Composable

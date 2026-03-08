@@ -6,11 +6,21 @@ plugins {
 }
 
 version = "0.0.1"
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+val embeddedComposeVersion = providers.gradleProperty("embedded.composeForkVersion")
+    .orElse("9999.0.0-SNAPSHOT")
+    .get()
 
 kotlin {
     applyDefaultHierarchyTemplate()
     jvm("desktop")
     androidTarget()
+    if (embeddedEnabled) {
+        linuxArm64()
+    }
     listOf(
         iosX64(),
         iosArm64(),
@@ -29,9 +39,7 @@ kotlin {
                 api(project(":presentation:design:imagepicker"))
                 implementation(project(":presentation:viewvo"))
                 implementation(project(":data:mediautils"))
-                implementation("io.github.kevinnzou:compose-webview-multiplatform:2.0.3")
 
-                implementation(libs.kotlinx.datetime)
                 implementation(libs.kotlinx.coroutines.core)
 
                 val composeBom = project.dependencies.platform(libs.compose.bom)
@@ -42,13 +50,9 @@ kotlin {
                 implementation(compose.material3)
                 implementation(compose.ui)
                 implementation(compose.animation)
-                implementation(compose.components.uiToolingPreview)
-                implementation(compose.components.resources)
-                implementation(compose.materialIconsExtended)
-
-                implementation(libs.coil)
-                implementation(libs.coil.compose)
-                implementation(libs.coil.network)
+                // Note: compose.components.resources moved to platform source sets
+                // because linuxArm64 needs explicit artifact (multiplatform module lacks this target)
+                // Note: Coil is NOT in commonMain because linuxArm64 doesn't support it
             }
         }
         val commonTest by getting {
@@ -73,14 +77,27 @@ kotlin {
                 implementation(compose.desktop.currentOs)
                 implementation(compose.preview)
                 implementation(compose.components.uiToolingPreview)
+                implementation(compose.components.resources)
+                // Webview for desktop (map picker)
+                implementation("io.github.kevinnzou:compose-webview-multiplatform:2.0.3")
+                // Coil for desktop
+                implementation(libs.coil)
+                implementation(libs.coil.compose)
+                implementation(libs.coil.network)
             }
         }
         val androidMain by getting {
             dependencies {
                 implementation(compose.preview)
                 implementation(compose.components.uiToolingPreview)
+                implementation(compose.components.resources)
                 implementation(libs.browser)
-
+                // Webview for Android (map picker)
+                implementation("io.github.kevinnzou:compose-webview-multiplatform:2.0.3")
+                // Coil for Android
+                implementation(libs.coil)
+                implementation(libs.coil.compose)
+                implementation(libs.coil.network)
                 implementation("io.coil-kt.coil3:coil-video:3.3.0")
 
                 implementation(libs.androidx.activity.compose)
@@ -100,11 +117,26 @@ kotlin {
         }
         val iosMain by getting {
             dependencies {
-                // implementation("io.coil-kt.coil3:coil-video:3.1.0-SNAPSHOT")
-                // api(project(":presentation:design:videoplayer"))
+                implementation(compose.components.resources)
+                // Webview for iOS (map picker)
+                implementation("io.github.kevinnzou:compose-webview-multiplatform:2.0.3")
+                // Coil for iOS
+                implementation(libs.coil)
+                implementation(libs.coil.compose)
+                implementation(libs.coil.network)
             }
         }
         val nativeMain by getting
+        if (embeddedEnabled) {
+            val linuxArm64Main by getting {
+                dependencies {
+                    // Webview not supported on embedded Linux
+                    // Coil not supported on linuxArm64 - using stub implementations
+                    // Compose Resources - explicit artifact since multiplatform module lacks this target
+                    implementation("org.jetbrains.compose.components:components-resources-linuxArm64:$embeddedComposeVersion")
+                }
+            }
+        }
     }
 }
 

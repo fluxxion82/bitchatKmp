@@ -72,6 +72,14 @@ class LocalUserPreferences(
                 Channel.MeshDM(peerID = peerID, displayName = null)
             }
 
+            channelString.startsWith("meshtastic:") -> {
+                val parts = channelString.removePrefix("meshtastic:").split("|")
+                Channel.Meshtastic(
+                    nodeNum = parts.getOrNull(0)?.takeIf { it != "null" }?.toIntOrNull(),
+                    displayName = parts.getOrNull(1)?.takeIf { it != "null" }
+                )
+            }
+
             else -> {
                 Channel.Location(
                     level = GeohashChannelLevel.CITY,
@@ -89,6 +97,7 @@ class LocalUserPreferences(
             is Channel.NamedChannel -> "named:${channel.channelName}"
             is Channel.MeshDM -> "meshDM:${channel.peerID}|${channel.displayName ?: ""}"
             is Channel.NostrDM -> "nostrDM:${channel.peerID}|${channel.fullPubkey}|${channel.sourceGeohash ?: "null"}|${channel.displayName ?: "null"}"
+            is Channel.Meshtastic -> "meshtastic:${channel.nodeNum ?: "null"}|${channel.displayName ?: "null"}"
         }
     }
 

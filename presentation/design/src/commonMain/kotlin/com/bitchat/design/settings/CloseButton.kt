@@ -1,8 +1,6 @@
 package com.bitchat.design.settings
 
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -12,6 +10,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import bitchatkmp.presentation.design.generated.resources.Res
 import bitchatkmp.presentation.design.generated.resources.close_plain
+import com.bitchat.design.icons.Icons
+import com.bitchat.design.icons.filled.Close
 import org.jetbrains.compose.resources.stringResource
 
 @Composable
