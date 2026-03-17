@@ -201,3 +201,9 @@ For full setup (display, touch, CardKB, LoRa protocol stack), use the docs map b
 - `data:local:platform`: platform services (for example macOS location via `-PlocationNative=macos`).
 - `data:remote:tor`: Tor/Arti native libs copied into desktop runtime via Gradle.
 - `data:noise`, `data:crypto`: native crypto dependencies (Noise, libsodium, secp256k1).
+
+
+![Custom PCB](docs/pics/custom_pcb.jpg)                     
+![Custom PCB soldered](docs/pics/custom_pcb_soldered.jpg)                                                                                                                                                                     
+![Embedded droid chat](docs/pics/embedded_droid_chat.jpg)   
+![Embedded using PCB](docs/pics/embedded_using_pcb.jpg)    
