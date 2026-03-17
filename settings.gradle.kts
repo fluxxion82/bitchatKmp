@@ -40,12 +40,8 @@ dependencyResolutionManagement {
     @Suppress("UnstableApiUsage")
     repositories {
         if (embeddedEnabled) {
-            // mavenLocal first for forked libs (Koin, Compose with linuxArm64)
+            // mavenLocal first for forked libs (Koin, Compose, Skiko EGL with linuxArm64)
             mavenLocal()
-            // Jake Wharton's custom EGL-enabled Skiko for embedded Linux ARM64
-            maven {
-                url = uri("${rootDir.absolutePath}/apps/embedded/maven")
-            }
         }
         google()
         mavenCentral()

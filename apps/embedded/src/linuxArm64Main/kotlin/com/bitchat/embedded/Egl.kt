@@ -57,8 +57,6 @@ import kotlinx.cinterop.value
 /**
  * EGL context and surface initialization on a GBM device.
  * Sets up an OpenGL ES 2.0 rendering context for Compose/Skia.
- *
- * Follows Jake Wharton's composeui-lightswitch Egl.kt pattern.
  */
 class Egl private constructor(
     val display: EGLDisplay?,

@@ -63,7 +63,6 @@ data class AxisCalibration(
  * Processes raw input_event structs into Compose-compatible TouchEvent.
  *
  * Includes calibration to map raw ADC values to screen coordinates.
- * Following Jake Wharton's composeui-lightswitch pattern.
  */
 class TouchInput private constructor(
     val fd: Int,

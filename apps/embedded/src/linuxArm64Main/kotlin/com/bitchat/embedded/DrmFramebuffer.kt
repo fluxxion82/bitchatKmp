@@ -52,8 +52,6 @@ private fun drmFbDestroyCallback(bo: CPointer<gbm_bo>?, data: COpaquePointer?) {
  * When the GBM buffer is released, the destroy callback removes the
  * DRM framebuffer automatically.
  *
- * Following Jake Wharton's composeui-lightswitch drmFbGetFromBo pattern.
- *
  * @param drm The DRM device
  * @param bo The GBM buffer object to get/create a framebuffer for
  * @return The DRM framebuffer ID, or null on failure

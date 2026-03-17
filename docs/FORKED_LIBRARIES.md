@@ -11,7 +11,7 @@ This document is the single reference for what needs to be cloned, built, and pu
 | 1 | Compose Multiplatform | [fluxxion82/compose-multiplatform](https://github.com/fluxxion82/compose-multiplatform) | `release/1.10` | `9999.0.0-SNAPSHOT` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
 | 2 | Compose Multiplatform Core | [fluxxion82/compose-multiplatform-core](https://github.com/fluxxion82/compose-multiplatform-core) | `linux-1.10.0` | `9999.0.0-SNAPSHOT` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
 | 3 | Koin | [fluxxion82/koin](https://github.com/fluxxion82/koin) | `sa_linux` | `4.1.2` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
-| 4 | Skiko (EGL) | [JakeWharton/skiko](https://github.com/JakeWharton/skiko) | `jw-egl-0.9.37.3-port` | `0.9.37.3-SNAPSHOT` | Pre-built maven dir | `apps/embedded/maven/` |
+| 4 | Skiko (EGL) | [JakeWharton/skiko](https://github.com/JakeWharton/skiko) | `jw-egl-0.9.37.3-port` | `0.9.37.3-SNAPSHOT` | `publishLinuxArm64PublicationToMavenLocal` | `~/.m2` (mavenLocal) |
 | 5 | MeshCore | [fluxxion82/MeshCore](https://github.com/fluxxion82/MeshCore) | `orangepi-zero3-sx1276` | N/A (native binary) | Built on-device | `/usr/local/bin/meshcored` |
 | 6 | Meshtastic Firmware | [fluxxion82/firmware](https://github.com/fluxxion82/firmware) | `orangepi-rfm95w` | 2.7.x (native binary) | Built on-device | `/usr/bin/meshtasticd` |
 
@@ -23,10 +23,9 @@ bitchatKmp wires in the forked artifacts through three layers of Gradle configur
 
 ```kotlin
 mavenLocal()  // Forked libs published here first
-maven { url = uri("${rootDir.absolutePath}/apps/embedded/maven") }  // Jake's pre-built Skiko/Compose
 ```
 
-`mavenLocal()` is listed first so that forked SNAPSHOT artifacts take priority over upstream releases.
+`mavenLocal()` is listed first so that forked SNAPSHOT artifacts (including Skiko EGL) take priority over upstream releases.
 
 ### 2. Version forcing (`build.gradle.kts:14-49`)
 
@@ -53,13 +52,14 @@ The `presentation/screens/build.gradle.kts:125` also declares `components-resour
 ```
 forks/compose-multiplatform          ──┐
 forks/compose-multiplatform-core     ──┤  publishToMavenLocal
-forks/koin                           ──┘        │
+forks/koin                           ──┤        │
+forks/skiko                          ──┘        │
                                                 v
                                           ~/.m2/repository/
                                                 │
                                                 v
-Pre-built Skiko artifacts                     Gradle resolves
-  ──copy──> apps/embedded/maven/             ──> artifacts
+                                          Gradle resolves
+                                           ──> artifacts
                                                 │
                                                 v
                                     bitchatKmp embedded binary
@@ -154,9 +154,14 @@ cd forks/koin
 - Replaced GLX backend with EGL (`eglGetProcAddress`)
 - Native libraries bundled for `linuxarm64`
 
-**Setup (no build required — uses pre-built artifacts):**
+**Build & Publish:**
 
-The pre-built EGL-enabled Skiko and Compose artifacts must be placed in `apps/embedded/maven/`. This directory is gitignored and must be set up on each machine. See [embedded README Step 0](../apps/embedded/README.md) for setup details.
+```bash
+cd forks/skiko/skiko
+./gradlew publishLinuxArm64PublicationToMavenLocal
+```
+
+**Artifacts produced:** `skiko-linuxarm64:0.9.37.3-SNAPSHOT` in `~/.m2/repository/`
 
 ## 5. MeshCore
 
@@ -219,6 +224,7 @@ cd bitchat/forks
 git clone -b linux-1.10.0 https://github.com/fluxxion82/compose-multiplatform-core.git
 git clone -b release/1.10 https://github.com/fluxxion82/compose-multiplatform.git
 git clone -b sa_linux https://github.com/fluxxion82/koin.git
+git clone -b jw-egl-0.9.37.3-port https://github.com/JakeWharton/skiko.git
 ```
 
 ### 2. Build and publish compose-multiplatform-core
@@ -248,9 +254,12 @@ cd forks/koin
 ./gradlew publishToMavenLocal
 ```
 
-### 5. Copy Skiko maven artifacts
+### 5. Build and publish Skiko (EGL)
 
-Copy the pre-built EGL-enabled Skiko and Compose artifacts into `apps/embedded/maven/`. See [embedded README Step 0](../apps/embedded/README.md) for details.
+```bash
+cd forks/skiko/skiko
+./gradlew publishLinuxArm64PublicationToMavenLocal
+```
 
 ### 6. Create sysroot (see [embedded README](../apps/embedded/README.md) Step 1)
 

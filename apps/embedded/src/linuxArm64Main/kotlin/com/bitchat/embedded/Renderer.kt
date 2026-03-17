@@ -15,8 +15,6 @@ import org.jetbrains.skia.SurfaceOrigin
  *
  * Creates a Skia DirectContext on the current GL context and provides per-frame
  * rendering via BackendRenderTarget wrapping the default GL framebuffer.
- *
- * Following Jake Wharton's composeui-lightswitch rendering pattern.
  */
 class Renderer private constructor(
     private val directContext: DirectContext,

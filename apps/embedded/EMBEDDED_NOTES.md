@@ -300,7 +300,7 @@ while (true) {
 
 - **Jake Wharton's mosaic**: Terminal UI with Compose - uses `CoroutineScope` and `launch` for rendering
 - **Compose for Desktop**: `ComposeWindow` uses Swing's EDT and `revalidate()` pattern
-- **composeui-lightswitch**: Simple GPIO example, but uses similar scene setup
+- **JakeWharton/skiko** (`jw-egl-0.9.37.3-port`): EGL-enabled Skiko fork used by this project
 
 ### Why We Use Continuous Loop (For Now)
 

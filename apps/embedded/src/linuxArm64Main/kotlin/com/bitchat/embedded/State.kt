@@ -18,8 +18,6 @@ import kotlin.concurrent.AtomicInt
  * - Skia renderer
  * - Compose scene
  * - Double-buffering state (current and previous buffer objects)
- *
- * Following Jake Wharton's composeui-lightswitch State pattern.
  */
 class State(
     val drm: Drm,

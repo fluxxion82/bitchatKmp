@@ -2,7 +2,7 @@
 
 Kotlin/Native `linuxArm64` binary for running bitchat on an Orange Pi Zero 3 with an Elecrow 5" HDMI touch display (800x480) and M5Stack CardKB I2C keyboard. No JVM, no desktop environment.
 
-Follows [Jake Wharton's composeui-lightswitch](https://github.com/nickallendev/composeui-lightswitch) pattern: DRM/GBM/EGL rendering pipeline.
+Uses a DRM/GBM/EGL rendering pipeline with Jake Wharton's EGL-enabled Skiko fork.
 
 ## Prerequisites
 
@@ -11,30 +11,23 @@ Follows [Jake Wharton's composeui-lightswitch](https://github.com/nickallendev/c
 
 ## Building
 
-### 0. Set up Jake Wharton's EGL-enabled Compose/Skiko (one-time setup)
+### 0. Build Jake Wharton's EGL-enabled Skiko (one-time setup)
 
 > For the full picture of all forked libraries and first-time setup, see [FORKED_LIBRARIES.md](../../docs/FORKED_LIBRARIES.md).
 
-Standard Skiko uses GLX (X11) for OpenGL function loading, which doesn't work on headless Linux without X11. We use Jake Wharton's custom builds that use EGL instead.
+Standard Skiko uses GLX (X11) for OpenGL function loading, which doesn't work on headless Linux without X11. We use Jake Wharton's fork that uses EGL instead.
 
-Clone Jake's repositories and copy his pre-built maven artifacts:
+Clone and publish the EGL-enabled Skiko to mavenLocal:
 
 ```bash
-# Clone Jake's repos (from the bitchat root, not bitchatKmp)
-cd ..
-mkdir -p jake && cd jake
-git clone https://github.com/JakeWharton/composeui-lightswitch
-cd composeui-lightswitch
-
-# Copy the maven folder to our embedded app
-cp -r maven ../../bitchatKmp/apps/embedded/
+# From the bitchat root (not bitchatKmp)
+cd forks
+git clone -b jw-egl-0.9.37.3-port https://github.com/JakeWharton/skiko.git
+cd skiko/skiko
+./gradlew publishLinuxArm64PublicationToMavenLocal
 ```
 
-The `maven/` directory contains:
-- `org.jetbrains.skiko:skiko-linuxarm64:0.9.37.3-SNAPSHOT` — EGL-enabled Skiko (uses `eglGetProcAddress` instead of `glXGetProcAddress`)
-- `org.jetbrains.compose.*:*-linuxarm64:9999.0.0-SNAPSHOT` — Compose UI artifacts compatible with the EGL Skiko
-
-The `maven/` directory is gitignored and must be set up on each machine.
+This publishes `org.jetbrains.skiko:skiko-linuxarm64:0.9.37.3-SNAPSHOT` to `~/.m2/repository/`.
 
 ### 1. Create the sysroot (one-time setup)
 

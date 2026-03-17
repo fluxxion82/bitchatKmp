@@ -35,8 +35,6 @@ import platform.posix.open
  * DRM/KMS display management.
  * Opens a DRM device, finds the first connected connector, and selects
  * the preferred mode (targeting 800x480 for the Elecrow 5" display).
- *
- * Follows Jake Wharton's composeui-lightswitch Drm.kt pattern.
  */
 class Drm private constructor(
     val fd: Int,

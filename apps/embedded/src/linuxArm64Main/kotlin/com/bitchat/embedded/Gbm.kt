@@ -16,8 +16,6 @@ import kotlinx.cinterop.CPointer
 /**
  * GBM (Generic Buffer Management) surface for DRM rendering.
  * Creates a GBM device and surface for double-buffered page-flipping.
- *
- * Follows Jake Wharton's composeui-lightswitch Gbm.kt pattern.
  */
 class Gbm private constructor(
     val device: CPointer<gbm_device>,
