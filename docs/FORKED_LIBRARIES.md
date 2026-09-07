@@ -17,25 +17,31 @@ This document is the single reference for what needs to be cloned, built, and pu
 
 ## Build Configuration
 
+All three layers below are active only when the embedded profile is on (`embedded.enabled` defaults to `false` in `gradle.properties`; pass `-Pembedded.enabled=true` or set it in `~/.gradle/gradle.properties`). A plain build resolves Compose 1.10.0, Koin 4.1.1 and upstream Skiko from Maven Central and never touches `~/.m2`.
+
 bitchatKmp wires in the forked artifacts through three layers of Gradle configuration:
 
-### 1. Repository ordering (`settings.gradle.kts:20-25`)
+### 1. Repository ordering (`settings.gradle.kts:42-45`, plus `:20-22` in `pluginManagement`)
 
 ```kotlin
-mavenLocal()  // Forked libs published here first
+if (embeddedEnabled) {
+    mavenLocal()  // Forked libs published here first
+}
 ```
 
-`mavenLocal()` is listed first so that forked SNAPSHOT artifacts (including Skiko EGL) take priority over upstream releases.
+With the profile on, `mavenLocal()` is listed first in `dependencyResolutionManagement` (and added to `pluginManagement`) so that forked SNAPSHOT artifacts (including Skiko EGL) take priority over upstream releases. `settings.gradle.kts` also selects the Compose Gradle plugin version there: `embedded.composeForkVersion` (`9999.0.0-SNAPSHOT`) when embedded, `1.10.0` otherwise.
 
-### 2. Version forcing (`build.gradle.kts:14-49`)
+### 2. Version forcing (`build.gradle.kts:26-63`)
 
-The root `build.gradle.kts` uses `resolutionStrategy.eachDependency` to force `9999.0.0-SNAPSHOT` for:
+The root `build.gradle.kts` uses `resolutionStrategy.eachDependency` (inside `if (embeddedEnabled)`) to force `embedded.composeForkVersion` (`9999.0.0-SNAPSHOT`) for:
 - `org.jetbrains.compose.ui`, `.foundation`, `.material`, `.material3`, `.animation`, `.runtime`
 - `org.jetbrains.compose.components:components-resources*`
 - `org.jetbrains.androidx.lifecycle`
 - `org.jetbrains.androidx.savedstate`
 
-This ensures every module in the project resolves to the forked Compose, not upstream releases.
+and `embedded.koinForkVersion` (`4.1.2`) for every `io.insert-koin` artifact. The fork versions are declared in `gradle.properties` (`embedded.composeForkVersion`, `embedded.skikoForkVersion`, `embedded.koinForkVersion`).
+
+This ensures every module in the project resolves to the forked Compose and Koin, not upstream releases.
 
 ### 3. Explicit platform artifacts (`apps/embedded/build.gradle.kts`)
 
@@ -45,15 +51,15 @@ The embedded module declares explicit `-linuxarm64` artifacts because Kotlin/Nat
 - Koin: `koin-core-linuxarm64:4.1.2`, `koin-compose-linuxarm64:4.1.2`, `koin-compose-viewmodel-linuxarm64:4.1.2`
 - Lifecycle/Savedstate: `*-linuxarm64:9999.0.0-SNAPSHOT`
 
-The `presentation/screens/build.gradle.kts:125` also declares `components-resources-linuxArm64` explicitly.
+The `presentation/screens/build.gradle.kts:136` also declares `components-resources-linuxArm64` explicitly (embedded builds only).
 
 ### Dependency Flow
 
 ```
 forks/compose-multiplatform          ──┐
 forks/compose-multiplatform-core     ──┤  publishToMavenLocal
-forks/koin                           ──┤        │
-forks/skiko                          ──┘        │
+forks/koin/projects                  ──┤        │
+forks/jake/skiko                     ──┘        │
                                                 v
                                           ~/.m2/repository/
                                                 │
@@ -136,7 +142,7 @@ This publishes all Compose UI, lifecycle, and savedstate artifacts to `~/.m2/`.
 **Build & Publish:**
 
 ```bash
-cd forks/koin
+cd forks/koin/projects   # the Gradle root is projects/, not the repo root
 ./gradlew publishToMavenLocal
 ```
 
@@ -157,7 +163,7 @@ cd forks/koin
 **Build & Publish:**
 
 ```bash
-cd forks/skiko/skiko
+cd forks/jake/skiko/skiko   # the clone lives under forks/jake/; skiko/ is the included build with its own gradlew
 ./gradlew publishLinuxArm64PublicationToMavenLocal
 ```
 
@@ -224,7 +230,7 @@ cd bitchat/forks
 git clone -b linux-1.10.0 https://github.com/fluxxion82/compose-multiplatform-core.git
 git clone -b release/1.10 https://github.com/fluxxion82/compose-multiplatform.git
 git clone -b sa_linux https://github.com/fluxxion82/koin.git
-git clone -b jw-egl-0.9.37.3-port https://github.com/JakeWharton/skiko.git
+mkdir -p jake && git clone -b jw-egl-0.9.37.3-port https://github.com/JakeWharton/skiko.git jake/skiko
 ```
 
 ### 2. Build and publish compose-multiplatform-core
@@ -250,14 +256,14 @@ cd ../components
 ### 4. Build and publish Koin
 
 ```bash
-cd forks/koin
+cd forks/koin/projects   # the Gradle root is projects/, not the repo root
 ./gradlew publishToMavenLocal
 ```
 
 ### 5. Build and publish Skiko (EGL)
 
 ```bash
-cd forks/skiko/skiko
+cd forks/jake/skiko/skiko   # the clone lives under forks/jake/; skiko/ is the included build with its own gradlew
 ./gradlew publishLinuxArm64PublicationToMavenLocal
 ```
 
@@ -267,7 +273,7 @@ cd forks/skiko/skiko
 
 ```bash
 cd bitchatKmp
-./gradlew :apps:embedded:linkDebugExecutableLinuxArm64
+./gradlew -Pembedded.enabled=true :apps:embedded:linkDebugExecutableLinuxArm64
 ```
 
 If this succeeds, all forked dependencies are correctly in place.

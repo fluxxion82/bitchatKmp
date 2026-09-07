@@ -214,7 +214,7 @@ On macOS (cross-compiles to linuxArm64):
 
 ```bash
 cd bitchatKmp
-./gradlew :apps:embedded:linkReleaseExecutableLinuxArm64
+./gradlew -Pembedded.enabled=true :apps:embedded:linkReleaseExecutableLinuxArm64
 ```
 
 Output: `apps/embedded/build/bin/linuxArm64/releaseExecutable/bitchat-embedded.kexe`

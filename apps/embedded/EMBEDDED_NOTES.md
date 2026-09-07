@@ -143,7 +143,7 @@ cd ../components
 
 # Rebuild bitchatKmp with fresh dependencies
 cd /path/to/bitchatKmp
-./gradlew :apps:embedded:clean :apps:embedded:linkDebugExecutableLinuxArm64 \
+./gradlew -Pembedded.enabled=true :apps:embedded:clean :apps:embedded:linkDebugExecutableLinuxArm64 \
     --no-build-cache --refresh-dependencies
 ```
 

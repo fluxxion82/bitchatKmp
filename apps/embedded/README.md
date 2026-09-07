@@ -70,10 +70,10 @@ The `sysroot/` directory is gitignored and must be recreated on each machine.
 
 ```bash
 # Debug build
-./gradlew :apps:embedded:linkDebugExecutableLinuxArm64
+./gradlew -Pembedded.enabled=true :apps:embedded:linkDebugExecutableLinuxArm64
 
 # Release build
-./gradlew :apps:embedded:linkReleaseExecutableLinuxArm64
+./gradlew -Pembedded.enabled=true :apps:embedded:linkReleaseExecutableLinuxArm64
 ```
 
 Output:

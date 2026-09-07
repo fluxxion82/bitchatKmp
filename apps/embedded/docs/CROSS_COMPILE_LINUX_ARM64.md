@@ -29,7 +29,7 @@ This builds:
 Then build the embedded app:
 
 ```bash
-./gradlew :apps:embedded:linkDebugExecutableLinuxArm64
+./gradlew -Pembedded.enabled=true :apps:embedded:linkDebugExecutableLinuxArm64
 ```
 
 ## Docker Image Details

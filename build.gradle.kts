@@ -24,9 +24,6 @@ val embeddedKoinVersion = providers.gradleProperty("embedded.koinForkVersion")
 
 subprojects {
     configurations.all {
-        // Exclude webview - not supported on linuxArm64
-        exclude(group = "io.github.kevinnzou", module = "compose-webview-multiplatform")
-
         if (embeddedEnabled) {
             resolutionStrategy.eachDependency {
                 val composeGroups = listOf(
@@ -69,6 +66,23 @@ subprojects {
     tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask<*>>().configureEach {
         compilerOptions {
             freeCompilerArgs.add("-opt-in=kotlin.time.ExperimentalTime")
+        }
+    }
+
+    // Pin JVM/Android bytecode to Java 17 regardless of the JDK running Gradle. KMP modules with no
+    // Java sources skip the Kotlin Gradle plugin's JVM-target validation, so they silently tracked
+    // the host JDK (class-file 65 on a JDK 21 host); single-platform kotlin-android/kotlin-jvm
+    // modules always run the check. This task-level value overrides module-level compilerOptions.
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {
+        compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+    // Plain kotlin("jvm") modules (apps/desktop) do run the validation, and their Java plugin
+    // defaults compileJava to the host JDK, so pin Java to 17 there as well (AGP modules already
+    // pin it through android.compileOptions).
+    plugins.withId("org.jetbrains.kotlin.jvm") {
+        extensions.configure<JavaPluginExtension>("java") {
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
         }
     }
 }

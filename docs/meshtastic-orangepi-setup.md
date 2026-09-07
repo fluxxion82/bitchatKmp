@@ -123,7 +123,7 @@ Build from macOS host:
 ```bash
 cd bitchatKmp
 ./scripts/build-all-linux.sh
-./gradlew :apps:embedded:linkReleaseExecutableLinuxArm64
+./gradlew -Pembedded.enabled=true :apps:embedded:linkReleaseExecutableLinuxArm64
 ```
 
 Deploy and run:

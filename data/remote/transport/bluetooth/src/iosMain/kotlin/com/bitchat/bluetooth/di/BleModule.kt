@@ -13,6 +13,7 @@ import com.bitchat.bluetooth.service.IosConnectionService
 import com.bitchat.bluetooth.service.IosGattClientService
 import com.bitchat.bluetooth.service.IosGattServerService
 import com.bitchat.bluetooth.service.IosSharedCentralManager
+import com.bitchat.bluetooth.service.OnPacketReceivedCallback
 import org.koin.dsl.bind
 import org.koin.dsl.module
 
@@ -45,10 +46,12 @@ actual val platformBleModule = module {
             gattServer = get<IosGattServerService>(),
             gattClient = get<IosGattClientService>(),
         ).apply {
-            setOnPacketReceivedCallback { data, deviceAddress ->
-                val meshService: BluetoothMeshService = get()
-                meshService.onPacketReceived(data, deviceAddress)
-            }
+            setOnPacketReceivedCallback(object : OnPacketReceivedCallback {
+                override fun onPacketReceived(data: ByteArray, deviceAddress: String) {
+                    val meshService: BluetoothMeshService = get()
+                    meshService.onPacketReceived(data, deviceAddress)
+                }
+            })
         }
 
         connectionService

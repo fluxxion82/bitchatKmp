@@ -81,32 +81,44 @@ cd bitchatKmp/
 
 ### 3. Build and run
 
+Plain `./gradlew :apps:desktop:run` works without any native build (no BLE, IP-based location).
+
 ```bash
 # Android
 ./gradlew :apps:droid:installDebug
 
-# Desktop (macOS)
+# Desktop (JVM, no native prerequisites)
+./gradlew :apps:desktop:run
+
+# Desktop (macOS native BLE)
 ./gradlew :apps:desktop:clean :apps:desktop:run -PbleNative=macos --rerun-tasks
 
 # Desktop + macOS location native bindings
 ./gradlew :apps:desktop:clean :apps:desktop:run -PbleNative=macos -PlocationNative=macos --rerun-tasks
 ```
 
-For iOS, open `apps/iosApp/iosApp.xcodeproj` in Xcode. Build the shared framework first:
+For iOS, open `apps/iosApp/iosApp.xcodeproj` in Xcode. The shared framework is `BitchatApp` from `:iosdi`; Xcode's build phase runs `./gradlew :iosdi:embedAndSignAppleFrameworkForXcode` itself. To build it by hand:
 ```bash
-./gradlew :presentation:screens:iosArm64Binaries        # device
-./gradlew :presentation:screens:iosSimulatorArm64Binaries # simulator
+./gradlew :iosdi:linkDebugFrameworkIosSimulatorArm64  # simulator
+./gradlew :iosdi:linkDebugFrameworkIosArm64           # device
 ```
+
+### 4. Verify
+
+`scripts/verify.sh [quick|desktop|android|ios|embedded|full]` runs the per-platform build gates (default `quick` = `:domain:jvmTest` + desktop compile); the last recorded results live in `docs/baseline/`.
+On a Homebrew JDK, `desktop`/`full` need `GRADLE_ARGS='-Pcompose.desktop.packaging.checkJdkVendor=false'` (see the `scripts/verify.sh` header).
+
+Agent/editor notes live in the gitignored CLAUDE.md; docs/architecture-summary.md is the tracked source for the module map.
 
 ## What Each Platform Needs
 
 | Target | Submodules | Native build script | Homebrew packages | Notes |
 |--------|-----------|---------------------|-------------------|-------|
 | Android | No | No | No | Uses Maven deps (BouncyCastle). Just needs Android SDK. |
-| Desktop (JVM) | No | No | No | Uses Maven deps. Works out of the box. |
+| Desktop (JVM) | No | No | No | Compiles from Maven deps. BLE and native location are macOS-only opt-ins (`-PbleNative=macos`, `-PlocationNative=macos`); Tor needs the Arti native library from `build-all-desktop.sh`. Linux desktop is untested. |
 | Desktop (macOS native BLE/Tor) | Yes | `build-all-desktop.sh` | `libsodium secp256k1` | Needed for `-PbleNative=macos` and Arti/Tor. |
 | iOS | Yes | `build-all-ios.sh` | No | Builds libsodium, secp256k1, noise-c, Arti from source via Xcode toolchain. |
-| Linux ARM64 (embedded) | Yes | `build-all-linux.sh` | No | Cross-compiles inside Docker. Requires `embedded.enabled=true` in `gradle.properties`. |
+| Linux ARM64 (embedded) | Yes | `build-all-linux.sh` | No | Cross-compiles inside Docker. Requires `-Pembedded.enabled=true` (or `embedded.enabled=true` in `~/.gradle/gradle.properties`). |
 
 ## Native Library Builds
 
@@ -154,7 +166,7 @@ Run `./scripts/build-all-ios.sh` or `./scripts/build-all-desktop.sh`. You need R
    ```
 2. Build the embedded binary:
    ```bash
-   ./gradlew :apps:embedded:linkReleaseExecutableLinuxArm64
+   ./gradlew -Pembedded.enabled=true :apps:embedded:linkReleaseExecutableLinuxArm64
    ```
 3. Deploy to device:
    ```bash

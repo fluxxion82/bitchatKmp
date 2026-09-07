@@ -92,8 +92,6 @@ kotlin {
                 implementation(compose.components.uiToolingPreview)
                 implementation(compose.components.resources)
                 implementation(libs.browser)
-                // Webview for Android (map picker)
-                implementation("io.github.kevinnzou:compose-webview-multiplatform:2.0.3")
                 // Coil for Android
                 implementation(libs.coil)
                 implementation(libs.coil.compose)
@@ -118,8 +116,6 @@ kotlin {
         val iosMain by getting {
             dependencies {
                 implementation(compose.components.resources)
-                // Webview for iOS (map picker)
-                implementation("io.github.kevinnzou:compose-webview-multiplatform:2.0.3")
                 // Coil for iOS
                 implementation(libs.coil)
                 implementation(libs.coil.compose)

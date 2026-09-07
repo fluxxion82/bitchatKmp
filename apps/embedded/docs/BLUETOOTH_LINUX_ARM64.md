@@ -30,7 +30,7 @@ This builds:
 ### 2. Build the Embedded App
 
 ```bash
-./gradlew :apps:embedded:linkDebugExecutableLinuxArm64
+./gradlew -Pembedded.enabled=true :apps:embedded:linkDebugExecutableLinuxArm64
 ```
 
 ### 3. Deploy and Run

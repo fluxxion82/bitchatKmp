@@ -113,13 +113,13 @@ echo "  arti:       data/remote/tor/native/libs/linux-arm64/lib/libarti_linux.a"
 echo
 echo "Next steps:"
 echo "  1. Compile Kotlin modules:"
-echo "     ./gradlew :data:crypto:compileKotlinLinuxArm64"
-echo "     ./gradlew :data:noise:compileKotlinLinuxArm64"
-echo "     ./gradlew :data:remote:transport:bluetooth:compileKotlinLinuxArm64"
-echo "     ./gradlew :data:remote:tor:compileKotlinLinuxArm64"
+echo "     ./gradlew -Pembedded.enabled=true :data:crypto:compileKotlinLinuxArm64"
+echo "     ./gradlew -Pembedded.enabled=true :data:noise:compileKotlinLinuxArm64"
+echo "     ./gradlew -Pembedded.enabled=true :data:remote:transport:bluetooth:compileKotlinLinuxArm64"
+echo "     ./gradlew -Pembedded.enabled=true :data:remote:tor:compileKotlinLinuxArm64"
 echo
 echo "  2. Link embedded app:"
-echo "     ./gradlew :apps:embedded:linkDebugExecutableLinuxArm64"
+echo "     ./gradlew -Pembedded.enabled=true :apps:embedded:linkDebugExecutableLinuxArm64"
 echo
 echo "  3. Test on Raspberry Pi:"
 echo "     scp apps/embedded/build/bin/linuxArm64/debugExecutable/* pi:/tmp/"

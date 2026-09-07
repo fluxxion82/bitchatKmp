@@ -39,7 +39,7 @@ compose.desktop {
             packageVersion = "1.0.0"
 
             macOS {
-                iconFile.set(project.file("src/main/resources/icons/icon.icns"))
+                iconFile.set(project.file("src/main/resources/ic_launcher.icns"))
                 infoPlist {
                     extraKeysRawXml = """
                         <key>NSLocationWhenInUseUsageDescription</key>
@@ -50,10 +50,10 @@ compose.desktop {
                 }
             }
             windows {
-                iconFile.set(project.file("src/main/resources/icons/icon.ico"))
+                iconFile.set(project.file("src/main/resources/ic_launcher.ico"))
             }
             linux {
-                iconFile.set(project.file("src/main/resources/icons/ic_launcher.png"))
+                iconFile.set(project.file("src/main/resources/ic_launcher.png"))
             }
         }
         if (bleNativeProp != null) {
