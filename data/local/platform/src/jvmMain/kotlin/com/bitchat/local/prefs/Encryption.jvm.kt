@@ -1,5 +1,6 @@
 package com.bitchat.local.prefs
 
+import com.microsoft.credentialstorage.SecretStore
 import com.microsoft.credentialstorage.StorageProvider
 import com.microsoft.credentialstorage.model.StoredCredential
 import com.russhwolf.settings.PreferencesSettings
@@ -21,18 +22,54 @@ import kotlin.random.asKotlinRandom
 
 const val MASTER_KEY_NAME = "bitchatMasterKey"
 
-class DesktopEncryptionSettingsFactory : EncryptionSettingsFactory {
+/**
+ * Raised when the JVM desktop build cannot reach an OS-provided secure credential store.
+ *
+ * **This build** deliberately has no unencrypted fallback: the master key protects Nostr identity
+ * keys, the block list and user preferences, so degrading to plaintext silently would be worse
+ * than refusing to start. Anyone who genuinely wants unprotected storage has to say so in code,
+ * not have it happen to them.
+ *
+ * The promise is this source set's alone, not the app's: the `linuxArm64` embedded actual
+ * (`Encryption.linux.kt`) writes the very same preferences as plain-text files under
+ * `~/.bitchat/prefs`, guarded by nothing but 0700 directory permissions. Android and Apple have
+ * their own keystores. Say "the desktop build" wherever this guarantee is described.
+ */
+class SecureStorageUnavailableException(
+    message: String,
+    cause: Throwable? = null
+) : IllegalStateException(message, cause)
+
+class DesktopEncryptionSettingsFactory(
+    private val credentialStorageProvider: () -> SecretStore<StoredCredential>? = {
+        // Returns null (not an exception) when no backend qualifies. On Linux that needs
+        // libsecret AND an unlocked secret-service collection on a live session bus.
+        StorageProvider.getCredentialStorage(true, StorageProvider.SecureOption.REQUIRED)
+    }
+) : EncryptionSettingsFactory {
+
+    /**
+     * Probed once. Three preference classes ([LocalUserPreferences], [LocalSecureIdentityPreferences],
+     * [LocalBlockListPreferences]) each build their settings in a property initialiser, so without
+     * memoising this a broken host produced three identical failures nested inside three Koin
+     * instance-creation stack traces. Now the reason is printed once and the same exception is
+     * re-thrown to every caller.
+     */
+    private val credentialStorage: Result<SecretStore<StoredCredential>> by lazy {
+        resolveCredentialStorage()
+    }
+
     override fun createEncrypted(name: String): Settings {
-        val credentialStorage = StorageProvider.getCredentialStorage(true, StorageProvider.SecureOption.REQUIRED)
+        val store = credentialStorage.getOrThrow()
 
         // If master key is not found, create one
-        val storedMasterKey = credentialStorage.get(MASTER_KEY_NAME)?.password
+        val storedMasterKey = store.get(MASTER_KEY_NAME)?.password
         val masterKey = if (storedMasterKey == null) {
             val keyGenerator = KeyGenerator.getInstance("AES")
             val secretKey = keyGenerator.generateKey()
             val keyChars = Base64.encode(secretKey.encoded)
             println("Not found master key for secure storage, creating one")
-            credentialStorage.add(MASTER_KEY_NAME, StoredCredential("bitchat", keyChars.toCharArray()))
+            store.add(MASTER_KEY_NAME, StoredCredential("bitchat", keyChars.toCharArray()))
             secretKey
         } else {
             println("Found master key for secure storage")
@@ -42,6 +79,57 @@ class DesktopEncryptionSettingsFactory : EncryptionSettingsFactory {
 
         // Encrypt the preferences
         return PreferencesSettings(EncryptedPreferences(masterKey))
+    }
+
+    private fun resolveCredentialStorage(): Result<SecretStore<StoredCredential>> {
+        val failure = try {
+            val store = credentialStorageProvider()
+            if (store != null) return Result.success(store)
+            SecureStorageUnavailableException(secureStorageUnavailableMessage())
+        } catch (e: LinkageError) {
+            // The backend probes load native code through JNA, so a broken install can raise
+            // UnsatisfiedLinkError - a LinkageError, not an Exception. VirtualMachineError
+            // (OutOfMemoryError, StackOverflowError) is deliberately not caught here: reporting a
+            // dying JVM as "no keyring" would send the user chasing the wrong problem.
+            SecureStorageUnavailableException(secureStorageUnavailableMessage(e), e)
+        } catch (e: Exception) {
+            SecureStorageUnavailableException(secureStorageUnavailableMessage(e), e)
+        }
+        System.err.println(failure.message)
+        return Result.failure(failure)
+    }
+
+    internal companion object {
+        /**
+         * One self-contained, actionable sentence-per-line explanation. It has to read correctly
+         * even when Koin wraps it several layers deep in an InstanceCreationException.
+         */
+        internal fun secureStorageUnavailableMessage(
+            cause: Throwable? = null,
+            osName: String = System.getProperty("os.name") ?: "unknown OS"
+        ): String {
+            val reason = if (cause == null) {
+                "no OS credential store qualified (StorageProvider.getCredentialStorage returned null)"
+            } else {
+                "probing the OS credential store failed: ${cause::class.java.name}: ${cause.message}"
+            }
+            return buildString {
+                appendLine("bitchat secure storage unavailable on $osName: $reason.")
+                // Scoped to the desktop build on purpose: the embedded linuxArm64 build stores the
+                // same preferences as plain-text files, so an app-wide claim here would be false.
+                appendLine("The bitchat desktop app stores identity keys and preferences encrypted with a master key")
+                appendLine("held in the OS keyring, and will not fall back to unencrypted storage. To fix this on")
+                appendLine("Linux you need BOTH of:")
+                appendLine("  1. libsecret installed")
+                appendLine("     Fedora:        sudo dnf install libsecret gnome-keyring")
+                appendLine("     Debian/Ubuntu: sudo apt install libsecret-1-0 gnome-keyring")
+                appendLine("  2. a running D-Bus session whose default secret-service collection is UNLOCKED,")
+                appendLine("     i.e. a real desktop session with gnome-keyring or KWallet unlocked. Over plain")
+                appendLine("     SSH, headless or in a container there is no session bus, the default collection")
+                appendLine("     stays locked, and no backend qualifies.")
+                append("On macOS this means the login Keychain is unavailable; on Windows, Credential Manager.")
+            }
+        }
     }
 }
 

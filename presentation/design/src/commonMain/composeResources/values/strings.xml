@@ -159,6 +159,7 @@
     <string name="about_background_title">run in background</string>
     <string name="about_background_desc">keep mesh active when app is closed (foreground service)</string>
     <string name="tor_not_available_in_this_build">tor not available in this build</string>
+    <string name="tor_not_supported_on_this_platform">tor is not supported on this platform yet: the network layer here cannot route through a socks proxy, so enabling it would not protect your traffic.</string>
     <string name="close_plain">Close</string>
     <string name="cd_privacy_protected">Privacy Protected</string>
     <string name="cancel_lower">cancel</string>

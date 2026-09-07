@@ -88,6 +88,15 @@ kotlin {
 
             }
         }
+        val desktopTest by getting {
+            dependencies {
+                implementation(libs.kotlin.test.junit)
+
+                // The JVM mockk build: TorManager is a final expect/actual class, which
+                // mockk-common cannot stub.
+                implementation(libs.mockk)
+            }
+        }
         val iosMain by getting {
             dependencies {
             }

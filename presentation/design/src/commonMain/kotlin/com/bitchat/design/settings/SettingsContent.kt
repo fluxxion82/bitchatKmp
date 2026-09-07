@@ -85,9 +85,10 @@ fun SettingsContent(
                     onProofOfWorkToggled = onProofOfWorkToggled,
                     torNetworkEnabled = state.torNetworkEnabled,
                     onTorNetworkToggled = onTorNetworkToggled,
-                    torAvailable = state.torAvailable,
+                    torAvailability = state.torAvailability,
                     torRunning = state.torRunning,
-                    torBootstrapPercent = state.torBootstrapPercent
+                    torBootstrapPercent = state.torBootstrapPercent,
+                    torErrorMessage = state.torErrorMessage
                 )
             }
 
@@ -100,13 +101,18 @@ fun SettingsContent(
                 }
             }
 
-            if (state.torNetworkEnabled) {
-                println("last logline: ${state.torLastLogLine}")
+            // Also shown when the switch is off but Tor cannot work: that is exactly when the user
+            // needs to read why, and the toggle no longer stays on for a Tor that cannot run. On a
+            // host with no Arti library the switch is disabled and nothing is ever started, so the
+            // reason arrives from TorManager's initial status rather than from a start failure -
+            // see the errorMessage seeding in TorManager.jvm.kt.
+            if (state.torNetworkEnabled || state.torErrorMessage != null) {
                 item(key = "tor_status") {
                     TorStatusCard(
                         torRunning = state.torRunning,
                         torBootstrapPercent = state.torBootstrapPercent,
-                        torLastLogLine = state.torLastLogLine
+                        torLastLogLine = state.torLastLogLine,
+                        torErrorMessage = state.torErrorMessage
                     )
                 }
             }

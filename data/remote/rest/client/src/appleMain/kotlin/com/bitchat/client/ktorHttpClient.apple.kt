@@ -9,3 +9,6 @@ actual fun getEngine(isDebug: Boolean, torManager: TorManager?): HttpClientEngin
     // For now, return plain Darwin engine
     return Darwin
 }
+
+/** The Darwin engine has no SOCKS proxy support here, so nothing ever leaves via Tor. */
+actual val httpEngineSupportsTorProxy: Boolean = false

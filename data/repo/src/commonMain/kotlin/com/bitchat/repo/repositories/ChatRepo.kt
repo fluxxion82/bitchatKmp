@@ -8,6 +8,7 @@ import com.bitchat.api.dto.protocol.MessageType
 import com.bitchat.bluetooth.service.BluetoothMeshDelegate
 import com.bitchat.bluetooth.service.BluetoothMeshService
 import com.bitchat.cache.Cache
+import com.bitchat.client.httpEngineSupportsTorProxy
 import com.bitchat.crypto.Cryptography
 import com.bitchat.domain.app.model.ActiveState
 import com.bitchat.domain.app.model.UserState
@@ -62,6 +63,7 @@ import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.LoRaProtocolManager
 import com.bitchat.lora.LoRaProtocolType
 import com.bitchat.lora.radio.LoRaConfig
+import com.bitchat.repo.tor.awaitTorReady
 import com.bitchat.tor.TorManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.FlowPreview
@@ -1859,43 +1861,14 @@ class ChatRepo(
     }
 
     private suspend fun waitForTorIfEnabled() {
-        torManager?.let { manager ->
-            if (manager.isProxyReady()) {
-                println("🔒 ChatRepo: Tor is already ready")
-                return
-            }
-
-            val status = manager.statusFlow.value
-            if (status.state != com.bitchat.domain.tor.model.TorState.OFF) {
-                println("🔒 ChatRepo: Waiting for Tor to be ready...")
-                println("   Current state: ${status.state}, bootstrap: ${status.bootstrapPercent}%")
-
-                // Add 30-second timeout to prevent infinite blocking
-                withTimeoutOrNull(30.seconds) {
-                    manager.statusFlow
-                        .collect { torStatus ->
-                            if (manager.isProxyReady()) {
-                                println("✅ ChatRepo: Tor is now ready")
-                                return@collect
-                            }
-
-                            // Exit on ERROR state - don't block indefinitely
-                            if (torStatus.state == com.bitchat.domain.tor.model.TorState.ERROR) {
-                                println("❌ ChatRepo: Tor is in ERROR state, proceeding without Tor")
-                                println("   Error: ${torStatus.errorMessage}")
-                                return@collect
-                            }
-                        }
-                } ?: run {
-                    println("⏱️ ChatRepo: Tor wait timeout (30s), proceeding without Tor")
-                }
-            }
-        }
+        awaitTorReady(torManager) { println("ChatRepo: $it") }
     }
 
     @OptIn(FlowPreview::class)
     private fun observeTorReadyAndEstablishConnections() {
-        torManager?.let { manager ->
+        // On an engine that ignores the SOCKS proxy this only ever announced a protection the
+        // relays never got, so there is nothing to wait for and no reconnect to trigger.
+        torManager?.takeIf { httpEngineSupportsTorProxy }?.let { manager ->
             coroutineScopeFacade.nostrScope.launch {
                 manager.statusFlow
                     .distinctUntilChangedBy { it.running to it.bootstrapPercent to it.state }

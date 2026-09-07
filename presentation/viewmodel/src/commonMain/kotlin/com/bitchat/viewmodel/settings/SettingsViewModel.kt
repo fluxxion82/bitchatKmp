@@ -24,6 +24,7 @@ import com.bitchat.domain.nostr.SetPowSettings
 import com.bitchat.domain.nostr.model.PowSettings
 import com.bitchat.domain.tor.DisableTor
 import com.bitchat.domain.tor.EnableTor
+import com.bitchat.domain.tor.GetTorAvailability
 import com.bitchat.domain.tor.GetTorMode
 import com.bitchat.domain.tor.GetTorStatus
 import com.bitchat.domain.tor.model.TorMode
@@ -47,6 +48,7 @@ class SettingsViewModel(
     private val getTorMode: GetTorMode,
     private val enableTor: EnableTor,
     private val disableTor: DisableTor,
+    private val getTorAvailability: GetTorAvailability,
     private val getBackgroundMode: GetBackgroundMode,
     private val enableBackgroundMode: EnableBackgroundMode,
     private val disableBackgroundMode: DisableBackgroundMode,
@@ -81,6 +83,10 @@ class SettingsViewModel(
 
             val loraSettings = getLoRaSettings?.invoke()
 
+            // Static for the process: whether this build can route through Tor at all, and if
+            // not, why - a missing native library, or an HTTP engine that ignores the proxy.
+            val torAvailability = getTorAvailability()
+
             _state.update {
                 it.copy(
                     appVersion = "1.5.1",
@@ -90,7 +96,7 @@ class SettingsViewModel(
                     powDifficulty = powSettings.difficulty,
                     backgroundModeEnabled = backgroundMode == BackgroundMode.ON,
                     torNetworkEnabled = torMode == TorMode.ON,
-                    torAvailable = true,
+                    torAvailability = torAvailability,
                     loraAvailable = getLoRaSettings != null,
                     loraEnabled = loraSettings?.enabled ?: true,
                     loraRegion = loraSettings?.region ?: LoRaRegion.US_915,
@@ -109,7 +115,8 @@ class SettingsViewModel(
                     it.copy(
                         torRunning = torStatus.running,
                         torBootstrapPercent = torStatus.bootstrapPercent,
-                        torLastLogLine = torStatus.lastLogLine
+                        torLastLogLine = torStatus.lastLogLine,
+                        torErrorMessage = torStatus.errorMessage
                     )
                 }
             }

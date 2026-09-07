@@ -27,3 +27,6 @@ actual fun getEngine(isDebug: Boolean, torManager: TorManager?): HttpClientEngin
     // TODO: Add SOCKS proxy support for Tor when needed
     return LinuxCurl
 }
+
+/** [LinuxCurl] is not given a SOCKS proxy, so nothing ever leaves via Tor. */
+actual val httpEngineSupportsTorProxy: Boolean = false

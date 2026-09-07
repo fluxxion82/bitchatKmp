@@ -12,8 +12,10 @@ class TorAppInitializer(
 ) : AppInitializer {
     override suspend fun initialize() {
         println("TorAppInitializer: Checking Tor mode...")
-        val mode = torRepository.getTorMode()
-        println("TorAppInitializer: Mode is $mode")
+        // Stored intent, not the effective mode: a start that failed last run reports OFF while
+        // the user's ON is still on disk, and that ON is exactly what should be retried here.
+        val mode = torRepository.getStoredTorMode()
+        println("TorAppInitializer: Stored Tor mode is $mode")
         if (mode == TorMode.ON) {
             coroutineScopeFacade.applicationScope.launch {
                 println("TorAppInitializer: Starting Tor...")

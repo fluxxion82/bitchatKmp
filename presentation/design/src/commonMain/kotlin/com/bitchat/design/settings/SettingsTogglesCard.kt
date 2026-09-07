@@ -22,11 +22,11 @@ import bitchatkmp.presentation.design.generated.resources.about_background_title
 import bitchatkmp.presentation.design.generated.resources.about_pow
 import bitchatkmp.presentation.design.generated.resources.about_pow_tip
 import bitchatkmp.presentation.design.generated.resources.about_tor_route
-import bitchatkmp.presentation.design.generated.resources.tor_not_available_in_this_build
 import com.bitchat.design.icons.Icons
 import com.bitchat.design.icons.filled.Bluetooth
 import com.bitchat.design.icons.filled.Security
 import com.bitchat.design.icons.filled.Speed
+import com.bitchat.domain.tor.model.TorAvailability
 import org.jetbrains.compose.resources.stringResource
 
 @Composable
@@ -38,9 +38,10 @@ fun SettingsTogglesCard(
     onProofOfWorkToggled: (Boolean) -> Unit,
     torNetworkEnabled: Boolean,
     onTorNetworkToggled: (Boolean) -> Unit,
-    torAvailable: Boolean,
+    torAvailability: TorAvailability,
     torRunning: Boolean,
     torBootstrapPercent: Int,
+    torErrorMessage: String? = null,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -94,7 +95,7 @@ fun SettingsTogglesCard(
                     subtitle = stringResource(Res.string.about_tor_route),
                     checked = torNetworkEnabled,
                     onCheckedChange = onTorNetworkToggled,
-                    enabled = torAvailable,
+                    enabled = torAvailability.isAvailable,
                     statusIndicator = if (torNetworkEnabled) {
                         {
                             val statusColor = when {
@@ -113,12 +114,16 @@ fun SettingsTogglesCard(
             }
         }
 
-        if (!torAvailable) {
+        val unavailable = torUnavailableMessage(torAvailability, torErrorMessage)
+        if (unavailable != null) {
+            // Prefer the concrete reason (which library is missing, where it was looked for and how
+            // to build it) over the generic string - the generic one leaves the user with nothing
+            // to act on.
             Text(
-                text = stringResource(Res.string.tor_not_available_in_this_build),
+                text = unavailable.detail ?: stringResource(unavailable.fallback),
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
-                color = colorScheme.onBackground.copy(alpha = 0.5f),
+                color = colorScheme.onBackground.copy(alpha = 0.7f),
                 modifier = Modifier.padding(start = 16.dp, top = 8.dp)
             )
         }

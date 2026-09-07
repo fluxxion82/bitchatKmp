@@ -79,6 +79,7 @@ import com.bitchat.domain.nostr.eventbus.InMemoryNostrEventBus
 import com.bitchat.domain.nostr.eventbus.NostrEventBus
 import com.bitchat.domain.tor.DisableTor
 import com.bitchat.domain.tor.EnableTor
+import com.bitchat.domain.tor.GetTorAvailability
 import com.bitchat.domain.tor.GetTorMode
 import com.bitchat.domain.tor.GetTorStatus
 import com.bitchat.domain.tor.eventbus.InMemoryTorEventBus
@@ -226,6 +227,7 @@ val domainModule = module {
     single { GetTorMode(torRepository = get(), torEventBus = get()) }
     single { EnableTor(torRepository = get(), torEventBus = get(), coroutineScopeFacade = get()) }
     single { DisableTor(torRepository = get(), torEventBus = get()) }
+    single { GetTorAvailability(torRepository = get()) }
 
     single { GetAllFavorites(userRepository = get()) }
     single { ToggleFavorite(userRepository = get(), chatRepository = get(), userEventBus = get()) }

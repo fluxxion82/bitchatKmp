@@ -97,6 +97,11 @@ Plain `./gradlew :apps:desktop:run` works without any native build (no BLE, IP-b
 ./gradlew :apps:desktop:clean :apps:desktop:run -PbleNative=macos -PlocationNative=macos --rerun-tasks
 ```
 
+Desktop packaging (`packageDmg`/`packageDeb`/`packageRpm`/`packageMsi`) only produces host-OS formats,
+so each installer must be built on its target OS. `apps/desktop/README.md` has the Linux build and
+runtime requirements (`rpm-build`, `mesa-libGL libX11 fontconfig`, `libsecret gnome-keyring`, XWayland,
+`-Dskiko.renderApi=SOFTWARE`).
+
 For iOS, open `apps/iosApp/iosApp.xcodeproj` in Xcode. The shared framework is `BitchatApp` from `:iosdi`; Xcode's build phase runs `./gradlew :iosdi:embedAndSignAppleFrameworkForXcode` itself. To build it by hand:
 ```bash
 ./gradlew :iosdi:linkDebugFrameworkIosSimulatorArm64  # simulator

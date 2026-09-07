@@ -132,6 +132,7 @@ val viewModelModule = module {
             getTorMode = get(),
             enableTor = get(),
             disableTor = get(),
+            getTorAvailability = get(),
             getBackgroundMode = get(),
             enableBackgroundMode = get(),
             disableBackgroundMode = get(),

@@ -65,3 +65,6 @@ private class TrustAllCerts : X509TrustManager {
         }
     }
 }
+
+/** OkHttp is configured with a Tor-aware `ProxySelector` above. */
+actual val httpEngineSupportsTorProxy: Boolean = true

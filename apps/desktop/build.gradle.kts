@@ -12,14 +12,53 @@ val bleNativeProp = (findProperty("bleNative") as? String)?.lowercase()
 val locationNativeProp = (findProperty("locationNative") as? String)?.lowercase()
 val currentOs = org.gradle.internal.os.OperatingSystem.current()
 
+// Where data/remote/tor/native/build-desktop.sh drops the Arti JNI library for the build host
+// (libarti_desktop.dylib / .so / .dll). It is optional: absent it, Tor reports itself unavailable.
+val artiNativeDir = rootProject.layout.projectDirectory.dir("data/remote/tor/native/libs/desktop")
+
+// Compose app-resources layout: <root>/common is shipped on every OS, <root>/{macos,linux,windows}
+// and <root>/<os>-<arch> only on the matching host. prepareAppResources flattens common plus the
+// host's own two directories into a single staging directory, so where a library sits here decides
+// which packages it is *shipped* in, not where it is found at runtime - it lands at the top level
+// of -Dcompose.application.resources.dir either way, for `run` (a staged directory under
+// build/compose/tmp/prepareAppResources) and for an installed package ($APPDIR/resources) alike.
+// TorManager loads the Arti library from there, so nothing depends on a build-machine absolute path.
+val appResourcesRoot = layout.buildDirectory.dir("bitchatAppResources")
+
+// Split by extension rather than staging everything into common/: build-desktop.sh writes into one
+// directory, and a developer who has built for more than one host would otherwise ship their macOS
+// dylib inside the .deb and their Linux .so inside the .dmg.
+val stageAppResources = tasks.register<Sync>("stageAppResources") {
+    description = "Stages host-native libraries into the Compose app-resources layout."
+    from(artiNativeDir) {
+        include("*.dylib")
+        into("macos")
+    }
+    from(artiNativeDir) {
+        include("*.so")
+        into("linux")
+    }
+    from(artiNativeDir) {
+        include("*.dll")
+        into("windows")
+    }
+    into(appResourcesRoot)
+}
+
+// Compose's own Sync reads appResourcesRootDir; it has no way to know we generate that tree.
+// tasks.named, not tasks.matching: if Compose ever renames the task, this has to fail the build
+// loudly rather than quietly produce a package with no Arti library in it. It has to run inside
+// afterEvaluate because the Compose plugin registers prepareAppResources from its own
+// afterEvaluate hook, which is registered when the plugin is applied and so runs before this one.
+afterEvaluate {
+    tasks.named<Sync>("prepareAppResources") {
+        dependsOn(stageAppResources)
+    }
+}
+
 compose.desktop {
     application {
         mainClass = "com.bitchat.desktop.AppKt"
-
-        // Native library path for Arti (Tor)
-        jvmArgs += listOf(
-            "-Djava.library.path=${rootProject.projectDir}/data/remote/tor/native/libs/desktop"
-        )
 
         // KCEF (Chromium) required flags
         jvmArgs += listOf(
@@ -34,9 +73,12 @@ compose.desktop {
         }
 
         nativeDistributions {
-            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
+            // jpackage only emits host-OS formats, so Deb/Rpm must be built on Linux
+            // (and Rpm additionally needs the `rpm-build` package installed).
+            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
             packageName = "bitchat"
             packageVersion = "1.0.0"
+            appResourcesRootDir.set(appResourcesRoot)
 
             macOS {
                 iconFile.set(project.file("src/main/resources/ic_launcher.icns"))

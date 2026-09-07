@@ -47,7 +47,8 @@ val nostrModule = module {
             eventDeduplicator = get(),
             wsClient = get(),
             relayCache = get(named(RELAY_INFO_CACHE)),
-            relayLogSink = getOrNull()
+            relayLogSink = getOrNull(),
+            torProxyStatus = getOrNull()
         )
     }
 

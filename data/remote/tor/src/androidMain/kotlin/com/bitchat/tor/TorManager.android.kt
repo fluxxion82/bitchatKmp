@@ -77,6 +77,14 @@ actual class TorManager actual constructor(
                 status.state == TorState.RUNNING
     }
 
+    /**
+     * False when the bundled `libarti_android.so` could not be loaded, i.e. Tor can never run on
+     * this device. Callers use it to disable the Tor setting rather than offer a switch that does
+     * nothing.
+     */
+    actual val isAvailable: Boolean
+        get() = libraryLoaded
+
     actual suspend fun start() {
         if (!libraryLoaded) {
             Log.w(TAG, "Cannot start Tor - library not loaded")

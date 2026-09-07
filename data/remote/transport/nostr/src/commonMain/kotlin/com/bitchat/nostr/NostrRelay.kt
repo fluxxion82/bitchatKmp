@@ -40,6 +40,7 @@ class NostrRelay(
     private val wsClient: NostrWebSocketClient,
     private val relayCache: Cache<String, RelayInfo>,
     private val relayLogSink: RelayLogSink? = null,
+    private val torProxyStatus: TorProxyStatus? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -72,6 +73,15 @@ class NostrRelay(
 
     // Per-geohash relay selection
     private val geohashToRelays = ConcurrentMap<String, Set<String>>() // geohash -> relay URLs
+
+    /**
+     * Whether the socket for a relay URL went through the Tor SOCKS proxy. Written twice: the
+     * snapshot taken before the connect call, then narrowed to the confirmed answer when the open
+     * is reported. See [claimsTorRoute] for why one read is not enough either way.
+     */
+    private val connectedViaTor = ConcurrentMap<String, Boolean>()
+
+    private fun routingThroughTor(): Boolean = torProxyStatus?.isRoutingThroughTor() == true
 
     /**
      * Ensure default relays are connected (used for global DMs).
@@ -189,7 +199,11 @@ class NostrRelay(
         }
 
         println("NostrRelay: Connecting to $relayUrl...")
-        RelayLogFormatter.connectAttempt(relayUrl)?.let { relayLogSink?.onLogLine(it) }
+        // An attempt line, and honest as one: this is what Tor looked like when the connect was
+        // made. handleRelayOpen narrows it before anything claims the connection is established.
+        val viaTor = routingThroughTor()
+        connectedViaTor[relayUrl] = viaTor
+        RelayLogFormatter.connectAttempt(relayUrl, viaTor)?.let { relayLogSink?.onLogLine(it) }
 
         try {
             val listener = object : NostrWebSocketListener {
@@ -229,7 +243,15 @@ class NostrRelay(
 
     private fun handleRelayOpen(relayUrl: String) {
         println("NostrRelay: ✓ Connected to $relayUrl")
-        RelayLogFormatter.connected(relayUrl)?.let { relayLogSink?.onLogLine(it) }
+        // Re-checked here rather than trusting the pre-connect snapshot alone: the engine picks
+        // the proxy while this socket is opening, so Tor may have gone away since. The confirmed
+        // answer is stored back, so the eventual "connection closed" line agrees with this one.
+        val viaTor = claimsTorRoute(
+            viaTorAtConnect = connectedViaTor[relayUrl] == true,
+            routingThroughTorNow = routingThroughTor(),
+        )
+        connectedViaTor[relayUrl] = viaTor
+        RelayLogFormatter.connected(relayUrl, viaTor)?.let { relayLogSink?.onLogLine(it) }
         updateRelayStatus(relayUrl, true)
 
         // Restore all active subscriptions for this relay
@@ -519,7 +541,8 @@ class NostrRelay(
         println("NostrRelay: Error type: ${error::class.simpleName}")
         println("NostrRelay: Error message: ${error.message}")
         error.printStackTrace()
-        RelayLogFormatter.disconnected(relayUrl)?.let { relayLogSink?.onLogLine(it) }
+        RelayLogFormatter.disconnected(relayUrl, connectedViaTor.remove(relayUrl) == true)
+            ?.let { relayLogSink?.onLogLine(it) }
 
         updateRelayStatus(relayUrl, false, error)
 

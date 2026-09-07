@@ -173,6 +173,32 @@ kotlin {
     }
 }
 
+// The JVM Tor tests assert what happens when libarti_desktop is absent - the default state on
+// every Linux desktop host. Point both lookup paths (the Compose app-resources directory and
+// java.library.path) at an empty build directory so the result does not depend on whether this
+// machine happens to have built the macOS dylib.
+//
+// java.library.path is *replaced*, not appended to, and that is the point: an inherited entry -
+// a developer's DYLD/LD path, a CI image's /usr/local/lib, whatever the JVM defaults to - could
+// hold a libarti_desktop and quietly turn "the library is missing" into "the library loaded",
+// which is the one precondition these tests cannot verify any other way. TorManagerNativeMissingTest
+// asserts the precondition (TorManager.libraryLoaded == false) so a broken pin fails loudly here
+// rather than silently passing the wrong test.
+//
+// Consequence for whoever comes next: any future test in this module that needs a real native
+// library will fail with an UnsatisfiedLinkError that has nothing to do with the test, because
+// this wipes the path out from under it. Give that test its own Test task, or append to the
+// inherited System.getProperty("java.library.path") here instead of replacing it - but then keep
+// the missing-library tests on a path of their own.
+tasks.named<Test>("jvmTest") {
+    val missingLibDir = layout.buildDirectory.dir("test-no-native-libs")
+    doFirst {
+        missingLibDir.get().asFile.mkdirs()
+    }
+    systemProperty("java.library.path", missingLibDir.get().asFile.absolutePath)
+    systemProperty("compose.application.resources.dir", missingLibDir.get().asFile.absolutePath)
+}
+
 android {
     namespace = "com.bitchat.tor"
     compileSdk = libs.versions.compileSdk.get().toInt()

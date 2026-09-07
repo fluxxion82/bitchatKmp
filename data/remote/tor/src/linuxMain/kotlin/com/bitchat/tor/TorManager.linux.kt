@@ -81,6 +81,13 @@ actual class TorManager actual constructor(
                 status.state == TorState.RUNNING
     }
 
+    /**
+     * Always true: Arti is statically linked into this binary, so there is no library-missing
+     * case to report. Tor can still fail to *start*, which shows up in [statusFlow] instead.
+     */
+    actual val isAvailable: Boolean
+        get() = true
+
     actual suspend fun start() {
         if (!initialized) {
             println("$TAG: Initializing Arti...")

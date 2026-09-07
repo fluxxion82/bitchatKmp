@@ -1,19 +1,38 @@
 package com.bitchat.nostr
 
+/**
+ * Renders relay connection events for the Tor status card.
+ *
+ * Every line has to be truthful about whether the connection went through Tor: these lines end up
+ * in `TorStatus.lastLogLine`, where a "Tor connection established" for a direct socket reads as
+ * confirmation that Tor is working.
+ */
 object RelayLogFormatter {
-    fun connectAttempt(relayUrl: String): String? {
+    fun connectAttempt(relayUrl: String, viaTor: Boolean): String? {
         val endpoint = RelayEndpoint.fromUrl(relayUrl) ?: return null
-        return "SOCKS5 CONNECT to ${endpoint.host}:${endpoint.port}"
+        return if (viaTor) {
+            "SOCKS5 CONNECT to ${endpoint.host}:${endpoint.port}"
+        } else {
+            "Direct connect to ${endpoint.host}:${endpoint.port} (not via Tor)"
+        }
     }
 
-    fun connected(relayUrl: String): String? {
+    fun connected(relayUrl: String, viaTor: Boolean): String? {
         val endpoint = RelayEndpoint.fromUrl(relayUrl) ?: return null
-        return "Tor connection established to ${endpoint.host}:${endpoint.port}"
+        return if (viaTor) {
+            "Tor connection established to ${endpoint.host}:${endpoint.port}"
+        } else {
+            "Direct connection established to ${endpoint.host}:${endpoint.port} (not via Tor)"
+        }
     }
 
-    fun disconnected(relayUrl: String): String? {
+    fun disconnected(relayUrl: String, viaTor: Boolean): String? {
         val endpoint = RelayEndpoint.fromUrl(relayUrl) ?: return null
-        return "SOCKS connection closed for ${endpoint.host}:${endpoint.port}"
+        return if (viaTor) {
+            "SOCKS connection closed for ${endpoint.host}:${endpoint.port}"
+        } else {
+            "Connection closed for ${endpoint.host}:${endpoint.port}"
+        }
     }
 }
 

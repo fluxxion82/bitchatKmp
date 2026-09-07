@@ -85,6 +85,14 @@ kotlin {
                 implementation(libs.jna)
             }
         }
+        val jvmTest by getting {
+            dependencies {
+                implementation(libs.kotlin.test)
+                implementation(libs.kotlin.test.junit)
+                // The secure-storage tests stub SecretStore directly.
+                implementation(libs.credential.storage.jvm)
+            }
+        }
         val iosMain by getting {
         }
         val macosMain by getting {

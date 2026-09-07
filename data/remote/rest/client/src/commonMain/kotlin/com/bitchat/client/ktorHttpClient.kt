@@ -117,3 +117,14 @@ fun ktorHttpClient(
 }
 
 expect fun getEngine(isDebug: Boolean, torManager: TorManager? = null): HttpClientEngineFactory<*>
+
+/**
+ * True when [getEngine] actually routes traffic through the Tor SOCKS proxy once
+ * [TorManager.getSocksProxyAddress] reports one.
+ *
+ * Only the OkHttp (JVM/Android) engine installs a `ProxySelector`; the Darwin and Curl engines
+ * ignore the [TorManager] they are handed and always connect directly. Anything that tells the
+ * user their traffic is going over Tor has to consult this first, or it will be lying on Apple
+ * and Linux targets.
+ */
+expect val httpEngineSupportsTorProxy: Boolean

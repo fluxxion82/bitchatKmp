@@ -13,6 +13,7 @@ import com.bitchat.domain.tor.repository.TorRepository
 import com.bitchat.domain.user.repository.BlockListRepository
 import com.bitchat.domain.user.repository.UserRepository
 import com.bitchat.nostr.RelayLogSink
+import com.bitchat.nostr.TorProxyStatus
 import com.bitchat.repo.repositories.AppRepo
 import com.bitchat.repo.repositories.BlockListRepo
 import com.bitchat.repo.repositories.ChatRepo
@@ -23,6 +24,7 @@ import com.bitchat.repo.repositories.TorRepo
 import com.bitchat.repo.repositories.UserRepo
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.repo.tor.TorRelayLogSink
+import com.bitchat.repo.tor.TorRelayProxyStatus
 import org.koin.core.qualifier.named
 import org.koin.dsl.bind
 import org.koin.dsl.module
@@ -149,6 +151,11 @@ val commonRepoModule = module {
     }
     single<RelayLogSink> {
         TorRelayLogSink(
+            torRepo = get(),
+        )
+    }
+    single<TorProxyStatus> {
+        TorRelayProxyStatus(
             torRepo = get(),
         )
     }

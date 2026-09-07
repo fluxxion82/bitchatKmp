@@ -29,6 +29,7 @@ fun TorStatusCard(
     torRunning: Boolean,
     torBootstrapPercent: Int,
     torLastLogLine: String,
+    torErrorMessage: String? = null,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -58,7 +59,11 @@ fun TorStatusCard(
                         shape = CircleShape,
                         modifier = Modifier.size(10.dp)
                     ) {}
-                    val statusLabel = if (torRunning) "Running" else "Disconnected"
+                    val statusLabel = when {
+                        torRunning -> "Running"
+                        torErrorMessage != null -> "Unavailable"
+                        else -> "Disconnected"
+                    }
                     Text(
                         text = stringResource(
                             Res.string.about_tor_status,
@@ -68,6 +73,14 @@ fun TorStatusCard(
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = colorScheme.onSurface
+                    )
+                }
+                if (torErrorMessage != null) {
+                    Text(
+                        text = torErrorMessage,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (isDark) Color(0xFFFF6961) else Color(0xFFC1121F)
                     )
                 }
                 if (torLastLogLine.isNotEmpty()) {
