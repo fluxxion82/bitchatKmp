@@ -1,12 +1,25 @@
 # Installed by scripts/deploy-pi.sh as /etc/systemd/system/bitchat.service.
 # The binary and its compose-resources/ live in /opt/bitchat/releases/<release>/;
 # /opt/bitchat/releases/current is a symlink the deploy script swaps atomically.
-# Ordering: only after the touch and keyboard drivers. Not After=multi-user.target:
-# WantedBy=multi-user.target already orders the target after this unit, so that
-# would be an ordering cycle at boot.
+#
+# Ordering: After=multi-user.target is load-bearing, do not remove it. systemd adds an
+# implicit After= from a target to every unit that target Wants -- unless an ordering
+# dependency between the two already exists, in which case the implicit reverse edge is
+# suppressed. Measured on the device:
+#   multi-user.target After bitchat.service        -> YES, while this unit declared no
+#                                                     ordering with the target
+#   multi-user.target After cardkb.service         -> no  (cardkb.service is After=multi-user.target)
+#   multi-user.target After xpt2046-touch.service  -> no  (same)
+# So dropping multi-user.target from After= here while keeping After=cardkb.service left the
+# implicit multi-user.target -> bitchat.service edge in place and closed the cycle
+# bitchat -> cardkb -> multi-user.target -> bitchat. systemd breaks a cycle by deleting a job,
+# and at boot it deleted ours: "Found ordering cycle ... Job bitchat.service/start deleted".
+# Naming the target in After= is exactly what suppresses that implicit edge, so the original
+# three-unit ordering below is cycle-free. systemctl restart never exercises this; only a
+# reboot does (journalctl -b -g 'ordering cycle').
 [Unit]
 Description=Bitchat embedded UI (DRM/EGL, Orange Pi Zero 3)
-After=xpt2046-touch.service cardkb.service
+After=multi-user.target cardkb.service xpt2046-touch.service
 
 [Service]
 Type=simple
@@ -14,10 +27,15 @@ User=sterling
 Group=sterling
 SupplementaryGroups=video render input
 WorkingDirectory=/opt/bitchat/releases/current
+# The app scans for its input devices once at startup, so wait for them first. The script
+# gives up after 20 s and always exits 0; TimeoutStartSec below is generous enough that the
+# wait plus DRM/EGL/Skia startup can never trip the default 90 s start timeout.
+ExecStartPre=/opt/bitchat/releases/current/wait-for-input-devices.sh
 ExecStart=/opt/bitchat/releases/current/bitchat-embedded.kexe
 Environment=LANG=en_US.UTF-8
 Restart=on-failure
 RestartSec=5
+TimeoutStartSec=120
 TimeoutStopSec=10
 StandardOutput=journal
 StandardError=journal

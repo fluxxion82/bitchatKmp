@@ -280,6 +280,8 @@ StandardError=journal
 WantedBy=multi-user.target
 ```
 
+[Annotation, added after the fact: the `After=` line in the snippet above is correct and cycle-free — keep all three names. systemd adds an implicit `After=` from a target to every unit it `Wants`, *unless* an ordering dependency between the target and that unit already exists; naming `multi-user.target` in `After=` is exactly what suppresses the implicit `multi-user.target` -> `bitchat.service` edge. A later change dropped `multi-user.target` from `After=` while keeping `cardkb.service` and `xpt2046-touch.service`, which left the implicit edge in place and closed the cycle bitchat -> cardkb -> multi-user.target -> bitchat; at the next boot systemd printed `Found ordering cycle ... Job bitchat.service/start deleted` and the app did not come up. Restoring the target in `After=` is the fix. The unit later also gained `ExecStartPre=/opt/bitchat/releases/current/wait-for-input-devices.sh` and `TimeoutStartSec=120`.]
+
 Why no hardening directives: the app writes `~/.bitchat/`, opens `/dev/dri/card0`, `/dev/input/event*` and I2C/SPI devices; `ProtectHome`/`ProtectSystem=strict` would break it. Add hardening later once the device list is known.
 
 **Step 2: The deploy script**

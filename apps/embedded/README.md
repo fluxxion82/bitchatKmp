@@ -118,7 +118,7 @@ scripts/deploy-pi.sh --dry-run          # build and stage locally, print BUILD_I
 scripts/deploy-pi.sh --host user@host   # or export PI_HOST=user@host
 ```
 
-In order: runs `./gradlew -Pembedded.enabled=true :apps:embedded:link{Debug,Release}ExecutableLinuxArm64`; reads the `bitchat-embedded.build-info` sidecar the link task writes next to the kexe and checks the executable's SHA-256 against it; stages the kexe, `compose-resources/`, `systemd/bitchat.service`, `BUILD_INFO` and a `SHA256SUMS` manifest; rsyncs them to `/opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/`; runs `sha256sum -c` and `bitchat-embedded.kexe --version` on the device and requires the output to equal the sidecar's `identity=` line; swaps the `/opt/bitchat/releases/current` symlink atomically; installs the unit through the sudoers rule, enables and restarts it; then polls the new invocation's journal until it logs that same identity line, and keeps polling for about four more seconds (two 2 s polls) to confirm the unit is still `active` under the same invocation before declaring success. On a clean tree a second run is UP-TO-DATE in Gradle, reuses the same release directory and rewrites only `BUILD_INFO` and `SHA256SUMS`.
+In order: runs `./gradlew -Pembedded.enabled=true :apps:embedded:link{Debug,Release}ExecutableLinuxArm64`; reads the `bitchat-embedded.build-info` sidecar the link task writes next to the kexe and checks the executable's SHA-256 against it; stages the kexe, `compose-resources/`, `systemd/bitchat.service`, `systemd/wait-for-input-devices.sh`, `BUILD_INFO` and a `SHA256SUMS` manifest; rsyncs them to `/opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/`; runs `sha256sum -c` and `bitchat-embedded.kexe --version` on the device and requires the output to equal the sidecar's `identity=` line; swaps the `/opt/bitchat/releases/current` symlink atomically; installs the unit through the sudoers rule and reloads systemd; re-reads `After=` of both `bitchat.service` and `multi-user.target` and warns loudly (never fatally) if the boot ordering cycle is back (see "Boot ordering" below); enables and restarts it; then polls the new invocation's journal until it logs that same identity line, and keeps polling for about four more seconds (two 2 s polls) to confirm the unit is still `active` under the same invocation before declaring success. On a clean tree a second run is UP-TO-DATE in Gradle, reuses the same release directory and rewrites only `BUILD_INFO` and `SHA256SUMS`.
 
 Release layout on the device:
 
@@ -128,6 +128,7 @@ Release layout on the device:
 │   ├── bitchat-embedded.kexe
 │   ├── compose-resources/            # must sit beside the binary (resolved via /proc/self/exe)
 │   ├── bitchat.service
+│   ├── wait-for-input-devices.sh     # ExecStartPre=; waits for CardKB and touch, always exits 0
 │   ├── BUILD_INFO                    # sidecar fields + release, deployed_from, deployed_at
 │   └── SHA256SUMS
 └── current -> /opt/bitchat/releases/73fdbbf4f5ce-debug-5222940b
@@ -136,6 +137,21 @@ Release layout on the device:
 `bitchat-embedded.kexe --version` prints the identity line and exits without opening DRM, e.g.
 `bitchat-embedded 1.0.0 (73fdbbf4f5ce, reentry/session-2, clean, debug, built 2026-09-06T21:16:43-07:00)`.
 The service logs the same line as its second journal line at startup.
+
+Every deploy also (re)points `~/bitchat-embedded.kexe` at
+`/opt/bitchat/releases/current/bitchat-embedded.kexe`, so the binary in the home directory is always the current
+release. It is a symlink, never a copy: `/proc/self/exe` resolves symlinks fully, so the app still finds the release
+directory's `compose-resources/` beside its real path. If a regular file is already sitting there (a hand-copied binary
+from before build identity, with no `compose-resources/` next to it, which fails at startup with
+`MissingResourceException`), the deploy renames it once to `~/bitchat-embedded.kexe.stale-<date>` and says so; delete it
+by hand whenever you like. On the device:
+
+```bash
+~/bitchat-embedded.kexe --version          # safe any time: --version exits before touching DRM
+sudo systemctl stop bitchat.service        # the service holds DRM master; stop it before running the app by hand
+~/bitchat-embedded.kexe
+sudo systemctl start bitchat.service       # hand it back afterwards
+```
 
 One-time device preparation (needs the password once):
 
@@ -152,6 +168,47 @@ Key-based ssh must work (`-o BatchMode=yes`) and the user must be in the `video`
 The post-restart check runs `journalctl` and `systemctl is-active`/`show` without sudo, so the ssh user also needs
 journal read access (the `systemd-journal` group above, or an equivalent); reconnect after `usermod` so the new group applies.
 
+Boot ordering: `bitchat.service` is `After=multi-user.target cardkb.service xpt2046-touch.service`, and naming the
+target there is load-bearing. `cardkb.service` is the CardKB I2C-to-uinput daemon and is tracked in this repo at
+`scripts/cardkb/cardkb.service` (installed by `scripts/cardkb/install-cardkb.sh`); `xpt2046-touch.service` is the touch
+daemon and exists only on the device, not in this repo. Both are `After=multi-user.target` and `WantedBy=multi-user.target`.
+
+The measured rule: systemd adds an implicit `After=` from a target to every unit that target `Wants` — *unless* an
+ordering dependency between the target and the unit already exists, which suppresses the implicit edge. On the device:
+
+```
+multi-user.target After bitchat.service        -> YES   (while bitchat.service declared no ordering with the target)
+multi-user.target After cardkb.service         -> no    (suppressed: cardkb.service is After=multi-user.target)
+multi-user.target After xpt2046-touch.service  -> no    (suppressed the same way)
+```
+
+So dropping `multi-user.target` from `After=` while keeping `After=cardkb.service` left the implicit
+multi-user.target -> bitchat.service edge in place and closed the cycle bitchat -> cardkb -> multi-user.target ->
+bitchat. systemd breaks a cycle by deleting a job, and at the next boot it deleted `bitchat.service/start`
+(`multi-user.target: Found ordering cycle ... Job bitchat.service/start deleted`), so the app never came up.
+`systemctl restart` does not exercise this, which is why the deploy's post-restart check passed. Keeping the target in
+`After=` is the fix; `deploy-pi.sh` re-runs the same two `systemctl show -p After` queries after installing the unit and
+prints a loud ERROR banner if the cycle is back.
+
+The app also scans for its input devices only once at startup (`KeyboardInput.findKeyboardDevice`,
+`TouchInput.findTouchDevice`), so `ExecStartPre` runs `wait-for-input-devices.sh` (shipped in the release directory,
+`TimeoutStartSec=120` covers it). It waits up to 20 s for both `CardKb-I2C` and `XPT2046 Touchscreen` to appear in
+`/sys/class/input/event*/device/name` (the name is on the parent input device, not the event device) *and* for their `/dev/input/event*` node to be readable — udev applies permissions
+asynchronously, so a sysfs name alone does not mean the app can open it — then always exits 0, logging what was missing
+if it gave up. Run it by hand with an optional timeout:
+
+```bash
+/opt/bitchat/releases/current/wait-for-input-devices.sh 5
+```
+
+Autostart is only proven by a reboot; after one, check on the device:
+
+```bash
+journalctl -b -g 'ordering cycle'      # must print nothing
+systemctl is-active bitchat.service    # active
+journalctl -b -u bitchat.service       # ExecStartPre notice (if any), identity line, [Main] Entering event-driven loop
+```
+
 Logs, state and rollback (on the device):
 
 ```bash
@@ -166,6 +223,16 @@ ln -sfn /opt/bitchat/releases/<old> /opt/bitchat/releases/current.tmp \
 A successful deploy prints the rollback command only when it replaced a different previous release; the first deploy and a same-release redeploy have nothing to roll back to. Old release directories are never deleted; remove them by hand.
 
 At startup the binary prints its identity, opens `/dev/dri/card0`, picks the connected display mode, brings up GBM/EGL and Skia, opens the touch and CardKB evdev devices and enters the Compose render loop; `[Main] Entering event-driven loop` in the journal means it got that far.
+
+Keyboard logging: `BITCHAT_INPUT_DEBUG` is read once at startup and only after `BuildIdentity.isDebug`, so release builds log no keyboard events at all whatever it is set to. Debug builds (what `deploy-pi.sh` ships by default) have three states:
+
+| `BITCHAT_INPUT_DEBUG` | per key-down | |
+|---|---|---|
+| unset (default) or any other value | nothing after the first key | one `[Keyboard] first key event received (class=..., consumed=...); per-key logging off` line on the very first key-down, then silence |
+| `classes` | `[Keyboard] class=<modifier\|control\|printable> consumed=<true\|false>` | which kind of key, never which key |
+| `keys` | `[Keyboard] evdev=... key=... codePoint=... mods=... consumed=...` | the typed text itself |
+
+The journal is persistent, so per-key logging is opt-in: even the class-only trace leaks message and password length, the capitalisation pattern and inter-keystroke timing, and `=keys` keylogs everything typed. Never set either while typing messages, passwords or other secrets, and unset it afterwards. The startup banner names the active mode. `KeyboardEventData.toString()` is redacted (no key code, no code point) so a stray `println("$event")` cannot quietly reintroduce a keylogger.
 
 ## Architecture
 

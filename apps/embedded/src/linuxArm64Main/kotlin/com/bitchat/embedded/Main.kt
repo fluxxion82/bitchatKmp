@@ -63,6 +63,7 @@ import org.koin.core.context.startKoin
 import platform.posix.EINTR
 import platform.posix.errno
 import platform.posix.fd_set
+import platform.posix.getenv
 import platform.posix.read
 import platform.posix.select
 import platform.posix.strerror
@@ -159,10 +160,38 @@ private fun runApp() = memScoped {
         println("[Main] No touch device found (touch disabled)")
     }
 
+    // Read once at startup, and only for a debug binary: BuildIdentity.isDebug is checked first
+    // so no value of BITCHAT_INPUT_DEBUG can make a release binary log key events at all.
+    val keyLogger = KeyLogger(
+        if (BuildIdentity.isDebug) {
+            when (getenv("BITCHAT_INPUT_DEBUG")?.toKString()) {
+                "keys" -> KeyLogMode.KEYS
+                "classes" -> KeyLogMode.CLASSES
+                else -> KeyLogMode.FIRST_ONLY
+            }
+        } else {
+            KeyLogMode.OFF
+        },
+    )
     val keyboardDevicePath = KeyboardInput.findKeyboardDevice()
     val keyboardInput = keyboardDevicePath?.let { KeyboardInput.open(it) }
     if (keyboardInput != null) {
         println("[Main] Keyboard input ready (fd=${keyboardInput.fd})")
+        when (keyLogger.mode) {
+            KeyLogMode.OFF -> Unit
+            KeyLogMode.FIRST_ONLY -> println(
+                "[Keyboard] key event logging: first key only (debug binary; " +
+                    "set BITCHAT_INPUT_DEBUG=classes or =keys for per-key logging)",
+            )
+            KeyLogMode.CLASSES -> println(
+                "[Keyboard] key event logging: classes (debug binary; BITCHAT_INPUT_DEBUG=classes, " +
+                    "key classes only, never which key)",
+            )
+            KeyLogMode.KEYS -> println(
+                "[Keyboard] key event logging: keys (debug binary; BITCHAT_INPUT_DEBUG=keys: " +
+                    "logging key identities, do not type secrets)",
+            )
+        }
     } else {
         println("[Main] No keyboard device found (keyboard disabled)")
     }
@@ -242,7 +271,7 @@ private fun runApp() = memScoped {
         }
 
         if (keyboardInput != null && select_fd_isset(keyboardInput.fd, fds.ptr) != 0) {
-            processKeyboardEvents(keyboardInput, scene, event, eventSize)
+            processKeyboardEvents(keyboardInput, scene, event, eventSize, keyLogger)
         }
 
         // Flush pending Compose tasks before checking render needs
@@ -292,6 +321,7 @@ private fun processKeyboardEvents(
     scene: ComposeScene,
     event: input_event,
     eventSize: ULong,
+    keyLogger: KeyLogger,
 ) {
     while (true) {
         val bytesRead = read(keyboardInput.fd, event.ptr, eventSize)
@@ -313,7 +343,76 @@ private fun processKeyboardEvents(
             isMetaPressed = (keyEvent.modifiers and KeyboardEventData.MOD_META) != 0,
         )
 
-        scene.sendKeyEvent(composeKeyEvent)
+        val consumed = scene.sendKeyEvent(composeKeyEvent)
+        // Key-down only (repeat counts as down); the logger itself decides how much to say.
+        if (keyEvent.isPressed) {
+            keyLogger.onKeyDown(keyEvent, consumed)
+        }
     }
 }
 
+/**
+ * How much a debug binary writes to the journal for each key-down, chosen once at startup from
+ * `BITCHAT_INPUT_DEBUG`. A release binary is always [OFF].
+ */
+private enum class KeyLogMode {
+    /** Release binaries: nothing at all. */
+    OFF,
+
+    /** Default: a single line on the very first key-down, then silence. */
+    FIRST_ONLY,
+
+    /** `BITCHAT_INPUT_DEBUG=classes`: one key-class line per key-down. */
+    CLASSES,
+
+    /** `BITCHAT_INPUT_DEBUG=keys`: full key identities. Keylogs everything typed. */
+    KEYS,
+}
+
+/**
+ * Keyboard journal logging.
+ *
+ * The journal is persistent, so per-key logging is opt-in and never the shipped default: even a
+ * class-only trace leaks message and password length, the capitalisation pattern and the
+ * inter-keystroke timing, and [KeyLogMode.KEYS] leaks the typed text itself. The default only
+ * confirms once that key events are arriving at all, which is what the diagnostics needed.
+ */
+private class KeyLogger(val mode: KeyLogMode) {
+    private var firstLogged = false
+
+    fun onKeyDown(keyEvent: KeyboardEventData, consumed: Boolean) {
+        when (mode) {
+            KeyLogMode.OFF -> Unit
+            KeyLogMode.FIRST_ONLY -> {
+                if (firstLogged) return
+                firstLogged = true
+                println(
+                    "[Keyboard] first key event received (class=${keyClassOf(keyEvent)}, " +
+                        "consumed=$consumed); per-key logging off " +
+                        "(set BITCHAT_INPUT_DEBUG=classes or =keys)",
+                )
+            }
+            KeyLogMode.CLASSES -> println("[Keyboard] class=${keyClassOf(keyEvent)} consumed=$consumed")
+            KeyLogMode.KEYS -> println(
+                "[Keyboard] evdev=${keyEvent.keyCode} key=${keyEvent.key} " +
+                    "codePoint=${keyEvent.codePoint} mods=${keyEvent.modifiers} consumed=$consumed",
+            )
+        }
+    }
+}
+
+/**
+ * Coarse key class for the class-level debug log: "modifier" for Shift/Ctrl/Alt/Meta keys,
+ * "control" for keys without a code point or with an ISO control code point
+ * (Enter, Backspace, Tab, arrows, ...), "printable" for everything else.
+ */
+private fun keyClassOf(keyEvent: KeyboardEventData): String = when {
+    keyEvent.key == Key.ShiftLeft || keyEvent.key == Key.ShiftRight ||
+        keyEvent.key == Key.CtrlLeft || keyEvent.key == Key.CtrlRight ||
+        keyEvent.key == Key.AltLeft || keyEvent.key == Key.AltRight ||
+        keyEvent.key == Key.MetaLeft || keyEvent.key == Key.MetaRight -> "modifier"
+    keyEvent.codePoint == 0 ||
+        keyEvent.codePoint in 0x00..0x1F ||
+        keyEvent.codePoint in 0x7F..0x9F -> "control"
+    else -> "printable"
+}

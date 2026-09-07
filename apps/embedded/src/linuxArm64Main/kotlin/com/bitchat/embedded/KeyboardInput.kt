@@ -28,12 +28,19 @@ import platform.posix.strerror
  * Keyboard event data for Compose scene.
  */
 data class KeyboardEventData(
+    val keyCode: Int,    // Raw Linux evdev key code (for diagnostics)
     val key: Key,
     val isPressed: Boolean,
     val timeMillis: Long,
     val codePoint: Int,  // UTF-16 code point for printable chars, 0 otherwise
     val modifiers: Int,  // Bitmask of active modifiers
 ) {
+    // Redacted on purpose: keyCode, key and codePoint identify the key that was pressed, so an
+    // interpolated event ("$event") anywhere in the render loop would turn the persistent journal
+    // into a keylog. Opt into key identities explicitly (BITCHAT_INPUT_DEBUG=keys) instead.
+    override fun toString(): String =
+        "KeyboardEventData(isPressed=$isPressed, modifiers=$modifiers, redacted)"
+
     companion object {
         const val MOD_SHIFT = 1
         const val MOD_CTRL = 2
@@ -76,6 +83,7 @@ class KeyboardInput private constructor(
             KEY_LEFTSHIFT, KEY_RIGHTSHIFT -> {
                 shiftPressed = value != 0
                 return KeyboardEventData(
+                    keyCode = keyCode,
                     key = if (keyCode == KEY_LEFTSHIFT) Key.ShiftLeft else Key.ShiftRight,
                     isPressed = value != 0,
                     timeMillis = timeMillis,
@@ -86,6 +94,7 @@ class KeyboardInput private constructor(
             KEY_LEFTCTRL, KEY_RIGHTCTRL -> {
                 ctrlPressed = value != 0
                 return KeyboardEventData(
+                    keyCode = keyCode,
                     key = if (keyCode == KEY_LEFTCTRL) Key.CtrlLeft else Key.CtrlRight,
                     isPressed = value != 0,
                     timeMillis = timeMillis,
@@ -96,6 +105,7 @@ class KeyboardInput private constructor(
             KEY_LEFTALT, KEY_RIGHTALT -> {
                 altPressed = value != 0
                 return KeyboardEventData(
+                    keyCode = keyCode,
                     key = if (keyCode == KEY_LEFTALT) Key.AltLeft else Key.AltRight,
                     isPressed = value != 0,
                     timeMillis = timeMillis,
@@ -106,6 +116,7 @@ class KeyboardInput private constructor(
             KEY_LEFTMETA, KEY_RIGHTMETA -> {
                 metaPressed = value != 0
                 return KeyboardEventData(
+                    keyCode = keyCode,
                     key = if (keyCode == KEY_LEFTMETA) Key.MetaLeft else Key.MetaRight,
                     isPressed = value != 0,
                     timeMillis = timeMillis,
@@ -122,6 +133,7 @@ class KeyboardInput private constructor(
         val codePoint = if (value != 0) getCodePoint(keyCode, shiftPressed) else 0
 
         return KeyboardEventData(
+            keyCode = keyCode,
             key = composeKey,
             isPressed = value != 0,  // treat repeat (2) same as press
             timeMillis = timeMillis,

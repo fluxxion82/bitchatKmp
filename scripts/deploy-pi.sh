@@ -3,14 +3,17 @@
 #
 # Release layout on the device:
 #   /opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/   binary, compose-resources/,
-#                                                              SHA256SUMS, BUILD_INFO, bitchat.service
+#                                                              SHA256SUMS, BUILD_INFO, bitchat.service,
+#                                                              wait-for-input-devices.sh
 #   /opt/bitchat/releases/current -> <release dir>             swapped atomically (ln + mv -T)
 #   /opt/bitchat/bitchat.service                               sterling-owned copy that the
 #                                                              sudoers rule lets us install
+#   ~/bitchat-embedded.kexe -> .../current/bitchat-embedded.kexe   convenience symlink, kept
+#                                                              current by every deploy
 #
 # <digest8> is the first 8 hex chars of sha256 over the SHA256SUMS lines minus the
 # ./BUILD_INFO line, so a release name is a pure function of the shipped payload
-# (executable, compose-resources/, unit) and an existing release directory is never
+# (executable, compose-resources/, unit, ExecStartPre script) and an existing release directory is never
 # rewritten with a different payload.
 #
 # Identity comes from the bitchat-embedded.build-info sidecar that every link task writes
@@ -35,7 +38,8 @@ usage() {
 Usage: scripts/deploy-pi.sh [options]
 
 Builds the linuxArm64 embedded binary, stages it with compose-resources/,
-a SHA256SUMS manifest, BUILD_INFO and bitchat.service, uploads it to
+a SHA256SUMS manifest, BUILD_INFO, bitchat.service and
+wait-for-input-devices.sh, uploads it to
 \$PI_HOST:$RELEASES/<sha12>[-dirty]-<build>-<digest8>/,
 verifies it on the device, swaps $RELEASES/current and
 restarts bitchat.service.
@@ -77,6 +81,9 @@ OUT_DIR="$REPO/apps/embedded/build/bin/linuxArm64/${BUILD}Executable"
 BINARY="$OUT_DIR/bitchat-embedded.kexe"
 SIDECAR="$OUT_DIR/bitchat-embedded.build-info"
 UNIT_FILE="$REPO/apps/embedded/systemd/bitchat.service"
+# The unit's ExecStartPre= references this through /opt/bitchat/releases/current/, so it ships
+# inside the release directory (and therefore counts towards the payload digest).
+WAIT_SCRIPT="$REPO/apps/embedded/systemd/wait-for-input-devices.sh"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=60)
 # -n: ssh must never read this script's stdin. Only here, never in the rsync -e string.
 remote() { ssh -n "${SSH_OPTS[@]}" "$HOST" "$@"; }
@@ -95,6 +102,7 @@ fi
 [[ -f "$SIDECAR" ]] || die "no build-info sidecar next to the binary; run without --no-build"
 [[ -d "$OUT_DIR/compose-resources" ]] || die "missing $OUT_DIR/compose-resources; the app resolves it beside the executable, relink with :apps:embedded:$TASK"
 [[ -f "$UNIT_FILE" ]] || die "missing $UNIT_FILE"
+[[ -f "$WAIT_SCRIPT" ]] || die "missing $WAIT_SCRIPT (bitchat.service runs it as ExecStartPre)"
 field() { sed -n "s/^$1=//p" "$SIDECAR"; }
 VERSION="$(field version)"; GIT_SHA="$(field git_sha)"; GIT_BRANCH="$(field git_branch)"
 GIT_DIRTY="$(field git_dirty)"; BUILT_AT="$(field built_at)"; SIDECAR_BUILD="$(field build)"
@@ -118,6 +126,8 @@ cp -p "$BINARY" "$STAGE/bitchat-embedded.kexe"
 chmod 755 "$STAGE/bitchat-embedded.kexe"
 cp -Rp "$OUT_DIR/compose-resources" "$STAGE/compose-resources"
 cp -p "$UNIT_FILE" "$STAGE/bitchat.service"
+cp -p "$WAIT_SCRIPT" "$STAGE/wait-for-input-devices.sh"
+chmod 755 "$STAGE/wait-for-input-devices.sh"
 manifest() { ( cd "$STAGE" && find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 > SHA256SUMS ); }
 
 # --- 5. release name: <sha12>[-dirty]-<build>-<digest8 of the payload> ------
@@ -186,22 +196,109 @@ CURRENT="$(printf '%s\n' "$SWITCH_OUT" | sed -n '2p')"
 # From here on every failure must say so: the device already runs from the new release dir.
 SWAPPED="current already points at $REMOTE_DIR (previous: $PREVIOUS)"
 
-# --- 11. install unit, restart, check this invocation's journal -------------
+# --- 10b. keep ~/bitchat-embedded.kexe pointing at the current release ------
+# A symlink can never go stale, and /proc/self/exe resolves symlinks fully, so the Compose
+# resource reader still finds compose-resources/ in the release directory it points into.
+# Any pre-existing regular file there (a hand-copied binary from before build identity) is
+# renamed once with a .stale-<date> suffix. This step never fails the deploy: a home
+# directory we cannot write to is a warning, not a broken release.
+HOME_LINK_TARGET="$RELEASES/current/bitchat-embedded.kexe"
+HOME_LINK_OK=0
+HOME_CMD='f="$HOME/bitchat-embedded.kexe"
+  if [ ! -w "$HOME" ]; then echo "__unwritable"; exit 0; fi
+  if [ ! -L "$f" ] && [ -f "$f" ]; then
+    d=$(date -r "$f" +%Y-%m-%d 2>/dev/null) || d=""
+    [ -n "$d" ] || d=unknown
+    mv -- "$f" "$f.stale-$d" || exit 44
+    echo "__moved=$f.stale-$d"
+  fi
+  ln -sfn '"'$HOME_LINK_TARGET'"' "$f.tmp" && mv -T "$f.tmp" "$f" || exit 45
+  echo "__link=$(readlink "$f")"'
+rc=0; HOME_OUT="$(remote "$HOME_CMD")" || rc=$?
+transport_check "$rc" "home symlink" "$SWAPPED"
+if [[ "$rc" != 0 ]]; then
+  echo "WARNING: could not point ~/bitchat-embedded.kexe at $HOME_LINK_TARGET on $HOST (exit $rc): ${HOME_OUT:-no output}" >&2
+else
+  MOVED="$(printf '%s\n' "$HOME_OUT" | sed -n 's/^__moved=//p')"
+  HOME_LINK="$(printf '%s\n' "$HOME_OUT" | sed -n 's/^__link=//p')"
+  [[ -z "$MOVED" ]] || log "moved the old regular file aside: $MOVED (delete it by hand when you no longer want it)"
+  case "$HOME_OUT" in
+    *__unwritable*) echo "WARNING: the home directory on $HOST is not writable; ~/bitchat-embedded.kexe not updated" >&2 ;;
+    *) if [[ "$HOME_LINK" == "$HOME_LINK_TARGET" ]]; then
+         HOME_LINK_OK=1
+         log "home symlink: ~/bitchat-embedded.kexe -> $HOME_LINK_TARGET"
+       else
+         echo "WARNING: ~/bitchat-embedded.kexe points at '${HOME_LINK:-?}' on $HOST, expected $HOME_LINK_TARGET" >&2
+       fi ;;
+  esac
+fi
+
+# --- 11. install unit, check boot ordering, restart, check the journal -------
 STATE="not restarted (--no-restart)"
+# Every ordering warning is appended, never overwritten, so the summary reports all of them.
+ORDER_WARN=""
+add_order_warn() { if [[ -z "$ORDER_WARN" ]]; then ORDER_WARN="$1"; else ORDER_WARN="$ORDER_WARN; $1"; fi; }
 if [[ "$DO_RESTART" == 1 ]]; then
-  log "installing bitchat.service and restarting"
+  log "installing bitchat.service"
   rc=0
   remote "cat '$REMOTE_DIR/bitchat.service' > /opt/bitchat/bitchat.service || exit 42
     sudo -n install -m 644 -o root -g root /opt/bitchat/bitchat.service /etc/systemd/system/bitchat.service \
-      && sudo -n systemctl daemon-reload \
-      && sudo -n systemctl enable bitchat.service \
-      && sudo -n systemctl restart bitchat.service" || rc=$?
-  transport_check "$rc" "install/restart" "$SWAPPED"
+      && sudo -n systemctl daemon-reload" || rc=$?
+  transport_check "$rc" "install" "$SWAPPED"
   if [[ "$rc" == 42 ]]; then
     die "/opt/bitchat/bitchat.service is missing or not writable by sterling; create it once with: sudo install -o sterling -g sterling -m 644 /dev/null /opt/bitchat/bitchat.service; $SWAPPED"
   elif [[ "$rc" != 0 ]]; then
-    die "installing or restarting bitchat.service failed (exit $rc); $SWAPPED"
+    die "installing bitchat.service failed (exit $rc); $SWAPPED"
   fi
+
+  # Boot-ordering check: the actual cycle test, run against the unit systemd has just loaded.
+  # systemd adds an implicit After= from a target to every unit that target Wants, unless an
+  # ordering dependency between the two already exists. cardkb.service and xpt2046-touch.service
+  # both declare After=multi-user.target, which suppresses that implicit edge for them;
+  # bitchat.service must do the same. Without it, multi-user.target ends up ordered after
+  # bitchat.service and an After=cardkb.service here closes the cycle
+  # bitchat -> cardkb -> multi-user.target -> bitchat. systemd breaks a cycle by deleting a job,
+  # and at boot it deleted bitchat.service/start. A restart never exercises this, so the
+  # post-restart check below cannot catch it: warn loudly, do not fail.
+  rc=0
+  ORDER_OUT="$(remote "systemctl show -p After --value bitchat.service; echo __after_sep__
+    systemctl show -p After --value multi-user.target")" || rc=$?
+  transport_check "$rc" "reading After=" "$SWAPPED"
+  AFTER_UNIT="$(printf '%s\n' "$ORDER_OUT" | sed -n '1p')"
+  ORDER_SEP="$(printf '%s\n' "$ORDER_OUT" | sed -n '2p')"
+  AFTER_TARGET="$(printf '%s\n' "$ORDER_OUT" | sed -n '3p')"
+  if [[ "$rc" != 0 || "$ORDER_SEP" != "__after_sep__" ]]; then
+    echo "WARNING: could not read After= of bitchat.service / multi-user.target on $HOST (exit $rc, output '$ORDER_OUT'); boot-ordering check skipped" >&2
+    add_order_warn "boot-ordering check skipped (could not read After= on $HOST)"
+  else
+    # The implicit reverse edge is present exactly when multi-user.target is ordered after us.
+    IMPLICIT_EDGE=0
+    case " $AFTER_TARGET " in *" bitchat.service "*) IMPLICIT_EDGE=1 ;; esac
+    OFFENDERS=""
+    if [[ "$IMPLICIT_EDGE" == 1 ]]; then
+      log "note: multi-user.target is ordered after bitchat.service (implicit edge; the unit does not declare After=multi-user.target)"
+      for unit in cardkb.service xpt2046-touch.service; do
+        case " $AFTER_UNIT " in
+          *" $unit "*) OFFENDERS="${OFFENDERS:+$OFFENDERS, }$unit" ;;
+        esac
+      done
+    fi
+    if [[ -n "$OFFENDERS" ]]; then
+      ORDER_MSG="ordering cycle at boot: multi-user.target is ordered after bitchat.service (implicit edge) and bitchat.service is ordered after $OFFENDERS, which is itself After=multi-user.target; systemd will delete the bitchat.service/start job. Remedy: add multi-user.target to After= in bitchat.service, which suppresses the implicit multi-user.target->bitchat.service edge; verify after a reboot with journalctl -b -g 'ordering cycle'"
+      echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+      echo "!!! ERROR: $ORDER_MSG" >&2
+      echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+      add_order_warn "$ORDER_MSG"
+    else
+      log "boot ordering: no known bad After= edges (only a reboot proves autostart); After=$AFTER_UNIT"
+    fi
+  fi
+
+  log "enabling and restarting bitchat.service"
+  rc=0
+  remote "sudo -n systemctl enable bitchat.service && sudo -n systemctl restart bitchat.service" || rc=$?
+  transport_check "$rc" "enable/restart" "$SWAPPED"
+  [[ "$rc" == 0 ]] || die "enabling or restarting bitchat.service failed (exit $rc); $SWAPPED"
 
   # The InvocationID identifies exactly the process systemd just started, so the journal
   # check cannot match an older run of the same SHA.
@@ -297,3 +394,10 @@ else
 fi
 echo "identity: $IDENTITY"
 echo "service:  $STATE"
+if [[ "$HOME_LINK_OK" == 1 ]]; then
+  echo "home:     ~/bitchat-embedded.kexe -> current (run with the service stopped: sudo systemctl stop bitchat.service)"
+else
+  echo "home:     ~/bitchat-embedded.kexe not updated (see the warning above)"
+fi
+[[ -z "$ORDER_WARN" ]] || echo "WARNING:  $ORDER_WARN"
+echo "autostart is only proven by a reboot: journalctl -b -u bitchat.service; journalctl -b -g 'ordering cycle'"
