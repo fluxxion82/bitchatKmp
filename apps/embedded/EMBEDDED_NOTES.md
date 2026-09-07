@@ -108,24 +108,9 @@ configureSyncLinuxComposeResources(kotlinExtension)  // Added
 
 ### Deployment
 
-Resources are NOT embedded in the executable (unlike Android APK or iOS bundle). You must deploy both:
+Resources are NOT embedded in the executable (unlike an Android APK or iOS bundle), so the binary and `compose-resources/` travel together. `scripts/deploy-pi.sh` ships each build as `/opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/` containing `bitchat-embedded.kexe`, `compose-resources/` beside it (the reader above finds it through `/proc/self/exe`), `bitchat.service`, `BUILD_INFO` and `SHA256SUMS`. `/opt/bitchat/releases/current` is a symlink the script swaps atomically (`ln -sfn` to `current.tmp`, then `mv -T`), and `bitchat.service` runs `/opt/bitchat/releases/current/bitchat-embedded.kexe` with that directory as `WorkingDirectory`, so rolling back is re-pointing the symlink and restarting the unit. `COMPOSE_RESOURCES_PATH` remains an override for running a copy from somewhere else.
 
-```bash
-scp -r apps/embedded/build/bin/linuxArm64/debugExecutable/* pi:/tmp/
-```
-
-This creates:
-```
-/tmp/
-├── bitchat-embedded.kexe
-└── compose-resources/
-    └── composeResources/
-        └── bitchatkmp.presentation.design.generated.resources/
-            └── values/
-                └── strings.commonMain.cvr
-```
-
-**Alternative**: Set `COMPOSE_RESOURCES_PATH` environment variable to point to resources location.
+`bitchat-embedded.kexe --version` prints the build identity (`bitchat-embedded <version> (<sha12>, <branch>, clean|dirty, debug|release, built <time>)`) and exits before touching DRM, EGL or evdev, so it is safe to run on the device while the service holds the display. The same line is the second thing the service logs at startup. The deploy script takes the expected line from the `bitchat-embedded.build-info` sidecar that `:apps:embedded:link*ExecutableLinuxArm64` writes next to the kexe (which also carries the executable's SHA-256) and requires both the on-device `--version` output and the new invocation's journal to match it exactly. A tree counts as dirty when any file under the roots that feed the binary is modified or untracked (see the comment in `apps/embedded/build.gradle.kts`); dirty builds are stamped with the wall clock and get a `-dirty` release name.
 
 ### Rebuilding the Fork
 

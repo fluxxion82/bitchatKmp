@@ -107,12 +107,65 @@ ls /dev/dri/card*
 
 ### Deploy and run
 
+`scripts/deploy-pi.sh` links the binary, ships it to the Pi as a versioned release, verifies it there and (re)starts it as `bitchat.service`:
+
 ```bash
-scp apps/embedded/build/bin/linuxArm64/debugExecutable/bitchat-embedded.kexe user@orangepi:/tmp/
-ssh user@orangepi '/tmp/bitchat-embedded.kexe'
+scripts/deploy-pi.sh                    # debug build to $PI_HOST (default sterling@192.168.4.58)
+scripts/deploy-pi.sh --release          # release build
+scripts/deploy-pi.sh --no-build         # reuse the existing link output (sidecar must match the kexe)
+scripts/deploy-pi.sh --no-restart       # upload, verify and switch current; do not install/restart the unit
+scripts/deploy-pi.sh --dry-run          # build and stage locally, print BUILD_INFO and SHA256SUMS, no ssh
+scripts/deploy-pi.sh --host user@host   # or export PI_HOST=user@host
 ```
 
-The binary opens `/dev/dri/card0`, finds the display mode (targeting 800x480), initializes EGL with OpenGL ES 2.0, and renders a solid teal frame to verify the pipeline works.
+In order: runs `./gradlew -Pembedded.enabled=true :apps:embedded:link{Debug,Release}ExecutableLinuxArm64`; reads the `bitchat-embedded.build-info` sidecar the link task writes next to the kexe and checks the executable's SHA-256 against it; stages the kexe, `compose-resources/`, `systemd/bitchat.service`, `BUILD_INFO` and a `SHA256SUMS` manifest; rsyncs them to `/opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/`; runs `sha256sum -c` and `bitchat-embedded.kexe --version` on the device and requires the output to equal the sidecar's `identity=` line; swaps the `/opt/bitchat/releases/current` symlink atomically; installs the unit through the sudoers rule, enables and restarts it; then polls the new invocation's journal until it logs that same identity line, and keeps polling for about four more seconds (two 2 s polls) to confirm the unit is still `active` under the same invocation before declaring success. On a clean tree a second run is UP-TO-DATE in Gradle, reuses the same release directory and rewrites only `BUILD_INFO` and `SHA256SUMS`.
+
+Release layout on the device:
+
+```
+/opt/bitchat/releases/
+├── 73fdbbf4f5ce-debug-5222940b/      # <sha12>[-dirty]-<debug|release>-<digest8 of the payload>
+│   ├── bitchat-embedded.kexe
+│   ├── compose-resources/            # must sit beside the binary (resolved via /proc/self/exe)
+│   ├── bitchat.service
+│   ├── BUILD_INFO                    # sidecar fields + release, deployed_from, deployed_at
+│   └── SHA256SUMS
+└── current -> /opt/bitchat/releases/73fdbbf4f5ce-debug-5222940b
+```
+
+`bitchat-embedded.kexe --version` prints the identity line and exits without opening DRM, e.g.
+`bitchat-embedded 1.0.0 (73fdbbf4f5ce, reentry/session-2, clean, debug, built 2026-09-06T21:16:43-07:00)`.
+The service logs the same line as its second journal line at startup.
+
+One-time device preparation (needs the password once):
+
+```bash
+sudo mkdir -p /opt/bitchat/releases && sudo chown sterling:sterling /opt/bitchat/releases
+sudo install -o sterling -g sterling -m 644 /dev/null /opt/bitchat/bitchat.service   # placeholder; the script overwrites it in place
+sudo usermod -aG systemd-journal sterling                                             # journal read access for the post-restart check
+```
+
+plus a sudoers entry that lets the ssh user run, without a password, `systemctl daemon-reload`,
+`systemctl {start,stop,restart,status,enable,disable,is-active} bitchat.service` and
+`install -m 644 -o root -g root /opt/bitchat/bitchat.service /etc/systemd/system/bitchat.service`.
+Key-based ssh must work (`-o BatchMode=yes`) and the user must be in the `video`, `render` and `input` groups.
+The post-restart check runs `journalctl` and `systemctl is-active`/`show` without sudo, so the ssh user also needs
+journal read access (the `systemd-journal` group above, or an equivalent); reconnect after `usermod` so the new group applies.
+
+Logs, state and rollback (on the device):
+
+```bash
+journalctl -u bitchat.service -f                                   # follow the app log
+systemctl is-enabled bitchat.service; systemctl is-active bitchat.service   # no sudo needed
+ls /opt/bitchat/releases                                           # pick an older release, then:
+ln -sfn /opt/bitchat/releases/<old> /opt/bitchat/releases/current.tmp \
+  && mv -T /opt/bitchat/releases/current.tmp /opt/bitchat/releases/current \
+  && sudo systemctl restart bitchat.service
+```
+
+A successful deploy prints the rollback command only when it replaced a different previous release; the first deploy and a same-release redeploy have nothing to roll back to. Old release directories are never deleted; remove them by hand.
+
+At startup the binary prints its identity, opens `/dev/dri/card0`, picks the connected display mode, brings up GBM/EGL and Skia, opens the touch and CardKB evdev devices and enters the Compose render loop; `[Main] Entering event-driven loop` in the journal means it got that far.
 
 ## Architecture
 
@@ -180,5 +233,6 @@ The `--allow-shlib-undefined` linker flag is missing. This is already set in `bu
 **Blank screen on device**
 - Verify DRM device exists: `ls /dev/dri/card*`
 - Check if another process holds the display: `sudo fuser /dev/dri/card0`
-- Try running as root: `sudo /tmp/bitchat-embedded.kexe`
+- Read the service log: `journalctl -u bitchat.service -n 50`; look for `[DRM]`, `[EGL]`, `[Touch]`, `[Keyboard]` lines before `[Main] Entering event-driven loop`
+- Run it by hand while the service is stopped: `sudo systemctl stop bitchat.service && /opt/bitchat/releases/current/bitchat-embedded.kexe`
 - Verify GPU libraries: `apt install mesa-utils && eglinfo`

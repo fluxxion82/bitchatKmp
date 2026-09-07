@@ -168,13 +168,14 @@ Run `./scripts/build-all-ios.sh` or `./scripts/build-all-desktop.sh`. You need R
    ```bash
    ./gradlew -Pembedded.enabled=true :apps:embedded:linkReleaseExecutableLinuxArm64
    ```
-3. Deploy to device:
+3. Deploy to the device and (re)start `bitchat.service` (`PI_HOST=user@host` or `--host` overrides the default `sterling@192.168.4.58`; this step also does the link from step 2):
    ```bash
-   scp apps/embedded/build/bin/linuxArm64/releaseExecutable/bitchat-embedded.kexe user@<orangepi-ip>:/tmp/
+   scripts/deploy-pi.sh --release
    ```
-4. Run on device:
+   The script uploads to `/opt/bitchat/releases/<sha12>[-dirty]-release-<digest8>/`, verifies `SHA256SUMS` and `bitchat-embedded.kexe --version` on the device, swaps the `current` symlink and restarts the unit. One-time device prep (sterling-owned `/opt/bitchat/releases`, the placeholder `/opt/bitchat/bitchat.service`, the sudoers rule) and rollback are in [`apps/embedded/README.md`](apps/embedded/README.md#deploy-and-run).
+4. Watch it run:
    ```bash
-   ssh user@<orangepi-ip> '/tmp/bitchat-embedded.kexe'
+   ssh user@<orangepi-ip> journalctl -u bitchat.service -f
    ```
 
 For full setup (display, touch, CardKB, LoRa protocol stack), use the docs map below.

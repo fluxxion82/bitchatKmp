@@ -1,0 +1,26 @@
+# Installed by scripts/deploy-pi.sh as /etc/systemd/system/bitchat.service.
+# The binary and its compose-resources/ live in /opt/bitchat/releases/<release>/;
+# /opt/bitchat/releases/current is a symlink the deploy script swaps atomically.
+# Ordering: only after the touch and keyboard drivers. Not After=multi-user.target:
+# WantedBy=multi-user.target already orders the target after this unit, so that
+# would be an ordering cycle at boot.
+[Unit]
+Description=Bitchat embedded UI (DRM/EGL, Orange Pi Zero 3)
+After=xpt2046-touch.service cardkb.service
+
+[Service]
+Type=simple
+User=sterling
+Group=sterling
+SupplementaryGroups=video render input
+WorkingDirectory=/opt/bitchat/releases/current
+ExecStart=/opt/bitchat/releases/current/bitchat-embedded.kexe
+Environment=LANG=en_US.UTF-8
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

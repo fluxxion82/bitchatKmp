@@ -1,3 +1,6 @@
+import java.security.MessageDigest
+import java.time.Instant
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.compose.compiler)
@@ -167,5 +170,183 @@ kotlin {
                 implementation(project(":data:remote:tor"))
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Build identity. A Gradle task writes EmbeddedBuildInfo.kt so the binary can
+// report the commit it was built from (printed at startup and by --version),
+// plus a raw build-info.properties for tooling. Uses providers.exec so it stays
+// configuration-cache safe. On a clean tree the generated files are a pure
+// function of (version, sha, branch) and the commit time, so the task, compile
+// and link stay UP-TO-DATE. On a dirty tree the build time is the wall clock
+// and the task reruns every build on purpose.
+//
+// "Dirty" means any modified, staged, deleted or untracked file under the roots
+// that feed the binary (apps, data, domain, presentation, iosdi and the root
+// Gradle files). Untracked files count because an un-added source file is
+// compiled into the binary just like a committed one. Gitignored paths (build/,
+// sysroot/, native outputs) never show up in --porcelain, and submodule
+// worktree changes are ignored (--ignore-submodules=dirty), so a clean tree is
+// reported as clean.
+// ---------------------------------------------------------------------------
+version = providers.gradleProperty("embedded.version").orElse("1.0.0").get()
+
+fun git(vararg args: String): Provider<String> = providers.exec {
+    workingDir(rootProject.projectDir)
+    commandLine("git", *args)
+    isIgnoreExitValue = true
+}.standardOutput.asText.map { it.trim() }
+
+val gitSha = git("rev-parse", "--verify", "HEAD").map { it.ifEmpty { "unknown" } }
+val gitBranch = git("rev-parse", "--abbrev-ref", "HEAD").map { it.ifEmpty { "unknown" } }
+val gitCommitTime = git("show", "-s", "--format=%cI", "HEAD").map { it.ifEmpty { "unknown" } }
+val gitDirty = git(
+    "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=dirty", "--",
+    "apps", "data", "domain", "presentation", "iosdi",
+    "build.gradle.kts", "settings.gradle.kts", "gradle.properties", "gradle",
+).map { it.isNotEmpty() }
+
+val embeddedBuildInfoDir = layout.buildDirectory.dir("generated/embeddedBuildInfo")
+
+val generateEmbeddedBuildInfo = tasks.register("generateEmbeddedBuildInfo") {
+    group = "build"
+    description = "Writes EmbeddedBuildInfo.kt and build-info.properties (git SHA, branch, dirty flag, build time, version)."
+    val kotlinOutputDir = embeddedBuildInfoDir.map { it.dir("kotlin") }
+    val propsFile = embeddedBuildInfoDir.map { it.file("build-info.properties") }
+    inputs.property("version", version.toString())
+    inputs.property("gitSha", gitSha)
+    inputs.property("gitBranch", gitBranch)
+    inputs.property("gitCommitTime", gitCommitTime)
+    inputs.property("gitDirty", gitDirty)
+    outputs.dir(kotlinOutputDir)
+    outputs.file(propsFile)
+    // Bind to a local so the serialized lambdas below capture the provider, not the script object
+    // (the configuration cache cannot serialize Gradle script object references).
+    val dirtyProvider = gitDirty
+    outputs.upToDateWhen { !dirtyProvider.get() }
+    outputs.cacheIf { !dirtyProvider.get() }
+    doLast {
+        // Defined here, not at script level: a script-level function would drag the script
+        // object into this lambda and break the configuration cache.
+        fun String.kotlinLiteral(): String = buildString {
+            for (c in this@kotlinLiteral) when (c) {
+                '\\' -> append("\\\\"); '"' -> append("\\\""); '$' -> append("\\$")
+                '\n' -> append("\\n"); '\r' -> append("\\r"); '\t' -> append("\\t")
+                else -> if (c < ' ') append("\\u%04x".format(c.code)) else append(c)
+            }
+        }
+        val props = inputs.properties
+        val versionValue = props.getValue("version").toString()
+        val sha = props.getValue("gitSha").toString()
+        val branch = props.getValue("gitBranch").toString()
+        // A newline in either value would split the identity line and leave an unparsable
+        // build-info.properties line; refuse it rather than write a sidecar the deploy misreads.
+        for ((key, value) in listOf("embedded.version" to versionValue, "git branch" to branch)) {
+            if ('\n' in value || '\r' in value) {
+                throw GradleException(
+                    "embedded build info: $key must not contain a newline, got \"${value.kotlinLiteral()}\""
+                )
+            }
+        }
+        val dirty = props.getValue("gitDirty") as Boolean
+        val builtAt = if (dirty) Instant.now().toString() else props.getValue("gitCommitTime").toString()
+        val dir = kotlinOutputDir.get().asFile.resolve("com/bitchat/embedded")
+        dir.mkdirs()
+        dir.resolve("EmbeddedBuildInfo.kt").writeText(
+            """
+            |// Generated by :apps:embedded:generateEmbeddedBuildInfo. Do not edit.
+            |package com.bitchat.embedded
+            |
+            |internal object EmbeddedBuildInfo {
+            |    const val VERSION = "${versionValue.kotlinLiteral()}"
+            |    const val GIT_SHA = "${sha.kotlinLiteral()}"
+            |    const val GIT_BRANCH = "${branch.kotlinLiteral()}"
+            |    const val GIT_DIRTY = $dirty
+            |    const val BUILT_AT = "${builtAt.kotlinLiteral()}"
+            |}
+            |""".trimMargin()
+        )
+        // Raw (unescaped) metadata for tooling; the link tasks below copy it into the sidecar.
+        propsFile.get().asFile.writeText(
+            """
+            |name=bitchat-embedded
+            |version=$versionValue
+            |git_sha=$sha
+            |git_branch=$branch
+            |git_dirty=$dirty
+            |built_at=$builtAt
+            |""".trimMargin()
+        )
+    }
+}
+
+kotlin.sourceSets.named("linuxArm64Main") {
+    // Only kotlin/ is a source root (the task also writes build-info.properties);
+    // mapping the task provider keeps the compile -> generate task dependency.
+    val generatedKotlin = embeddedBuildInfoDir.map { it.dir("kotlin") }
+    kotlin.srcDir(generateEmbeddedBuildInfo.map { generatedKotlin.get() })
+}
+
+// ---------------------------------------------------------------------------
+// Sidecar. Every link of the bitchat-embedded executable writes
+// bitchat-embedded.build-info next to the binary: the raw metadata above plus
+// build=<debug|release> (from the binary's debuggable flag, see below),
+// kexe_sha256=<sha256 of the executable> and identity=<line>. The identity line
+// must be byte-for-byte what BuildIdentity.kt prints (`bitchat-embedded <version>
+// (<sha12>, <branch>, clean|dirty, <build>, built <built_at>)`):
+// scripts/deploy-pi.sh reads the sidecar, checks the executable's SHA-256 against
+// it, and requires `--version` on the device to print exactly that line. Keep the
+// two formats in sync.
+// ---------------------------------------------------------------------------
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinNativeLink>().configureEach {
+    // `binary` is @Transient (configuration phase only); KGP also registers a test
+    // binary (TestExecutable, baseName "test"), which must not get a sidecar.
+    val nativeBinary = binary
+    if (nativeBinary !is org.jetbrains.kotlin.gradle.plugin.mpp.Executable || nativeBinary.baseName != "bitchat-embedded") {
+        return@configureEach
+    }
+    // build= follows the linker's -g flag (NativeBinary.debuggable), which is exactly what
+    // Platform.isDebugBinary reports at runtime in BuildIdentity.kt. It defaults from the
+    // build type but can be overridden in the DSL, so buildType.name could disagree with
+    // the binary. Read at configuration time into a String (CC safe).
+    val buildType = if (nativeBinary.debuggable) "debug" else "release"
+    val props = layout.buildDirectory.file("generated/embeddedBuildInfo/build-info.properties")
+    val kexe = destinationDirectory.file("bitchat-embedded.kexe")
+    val sidecar = destinationDirectory.file("bitchat-embedded.build-info")
+    inputs.file(props).withPropertyName("embeddedBuildInfo").withPathSensitivity(PathSensitivity.NONE)
+    outputs.file(sidecar).withPropertyName("embeddedBuildInfoSidecar")
+    doLast {
+        val lines = props.get().asFile.readLines().filter { it.isNotBlank() }
+        val values = lines.associate { line ->
+            val eq = line.indexOf('=')
+            require(eq > 0) { "malformed build-info.properties line: $line" }
+            line.substring(0, eq) to line.substring(eq + 1)
+        }
+        val kexeFile = kexe.get().asFile
+        require(kexeFile.isFile) { "expected linked executable at $kexeFile" }
+        val digest = MessageDigest.getInstance("SHA-256")
+        kexeFile.inputStream().use { input ->
+            val buffer = ByteArray(1 shl 16)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                digest.update(buffer, 0, n)
+            }
+        }
+        val kexeSha256 = digest.digest().joinToString("") { "%02x".format(it) }
+        val identity = buildString {
+            append(values.getValue("name")).append(' ').append(values.getValue("version"))
+            append(" (").append(values.getValue("git_sha").take(12))
+            append(", ").append(values.getValue("git_branch"))
+            append(", ").append(if (values.getValue("git_dirty").toBoolean()) "dirty" else "clean")
+            append(", ").append(buildType)
+            append(", built ").append(values.getValue("built_at"))
+            append(')')
+        }
+        sidecar.get().asFile.writeText(
+            (lines + listOf("build=$buildType", "kexe_sha256=$kexeSha256", "identity=$identity"))
+                .joinToString("\n", postfix = "\n")
+        )
     }
 }

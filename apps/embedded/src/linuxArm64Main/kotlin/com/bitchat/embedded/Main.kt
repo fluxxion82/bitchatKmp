@@ -109,17 +109,32 @@ class App : KoinComponent {
 /**
  * Entry point for the embedded bitchat application.
  *
+ * `--version` (or `-v`) prints the build identity and exits without touching DRM,
+ * so a deploy script can verify a binary on the device. Everything else runs the app.
+ */
+fun main(args: Array<String>) {
+    if (args.any { it == "--version" || it == "-v" }) {
+        println(BuildIdentity.line)
+        return
+    }
+    runApp()
+}
+
+/**
+ * Runs the embedded bitchat application.
+ *
  * Phase 3: Event-driven rendering via DRM page flips.
  * Uses select() to block until events arrive (touch input or page flip completion),
  * significantly reducing power consumption when UI is idle.
  *
  */
 @OptIn(ExperimentalFoundationApi::class, InternalCoroutinesApi::class)
-fun main() = memScoped {
+private fun runApp() = memScoped {
     val mainDispatcher = FlushCoroutineDispatcher()
     ComposeUiMainDispatcher = mainDispatcher
 
     println("=== Bitchat Embedded ===")
+    println(BuildIdentity.line)
     println("Initializing application...")
 
     // Initialize Koin and app
