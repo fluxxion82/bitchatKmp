@@ -1,6 +1,8 @@
 # Forked Libraries
 
-bitchatKmp targets `linuxArm64` (Orange Pi Zero 3) which is not an upstream-supported Kotlin/Native target for Compose Multiplatform, Koin, or Skiko. Several libraries had to be forked and patched to produce `-linuxarm64` artifacts. These forks live in the `forks/` directory at the repo root (`bitchat/forks/`).
+bitchatKmp targets `linuxArm64` (Orange Pi Zero 3), which is not an upstream-supported Kotlin/Native target for Compose Multiplatform or Koin. Those libraries had to be forked and patched to produce `-linuxarm64` artifacts. The forks live in the `forks/` directory at the repo root (`bitchat/forks/`).
+
+**Skiko is no longer forked.** See [Skiko: no longer forked](#skiko-no-longer-forked) below.
 
 This document is the single reference for what needs to be cloned, built, and published before bitchatKmp will compile for the embedded target.
 
@@ -11,13 +13,12 @@ This document is the single reference for what needs to be cloned, built, and pu
 | 1 | Compose Multiplatform | [fluxxion82/compose-multiplatform](https://github.com/fluxxion82/compose-multiplatform) | `release/1.10` | `9999.0.0-SNAPSHOT` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
 | 2 | Compose Multiplatform Core | [fluxxion82/compose-multiplatform-core](https://github.com/fluxxion82/compose-multiplatform-core) | `linux-1.10.0` | `9999.0.0-SNAPSHOT` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
 | 3 | Koin | [fluxxion82/koin](https://github.com/fluxxion82/koin) | `sa_linux` | `4.1.2` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
-| 4 | Skiko (EGL) | [JakeWharton/skiko](https://github.com/JakeWharton/skiko) | `jw-egl-0.9.37.3-port` | `0.9.37.3-SNAPSHOT` | `publishLinuxArm64PublicationToMavenLocal` | `~/.m2` (mavenLocal) |
-| 5 | MeshCore | [fluxxion82/MeshCore](https://github.com/fluxxion82/MeshCore) | `orangepi-zero3-sx1276` | N/A (native binary) | Built on-device | `/usr/local/bin/meshcored` |
-| 6 | Meshtastic Firmware | [fluxxion82/firmware](https://github.com/fluxxion82/firmware) | `orangepi-rfm95w` | 2.7.x (native binary) | Built on-device | `/usr/bin/meshtasticd` |
+| 4 | MeshCore | [fluxxion82/MeshCore](https://github.com/fluxxion82/MeshCore) | `orangepi-zero3-sx1276` | N/A (native binary) | Built on-device | `/usr/local/bin/meshcored` |
+| 5 | Meshtastic Firmware | [fluxxion82/firmware](https://github.com/fluxxion82/firmware) | `orangepi-rfm95w` | 2.7.x (native binary) | Built on-device | `/usr/bin/meshtasticd` |
 
 ## Build Configuration
 
-All three layers below are active only when the embedded profile is on (`embedded.enabled` defaults to `false` in `gradle.properties`; pass `-Pembedded.enabled=true` or set it in `~/.gradle/gradle.properties`). A plain build resolves Compose 1.10.0, Koin 4.1.1 and upstream Skiko from Maven Central and never touches `~/.m2`.
+All three layers below are active only when the embedded profile is on (`embedded.enabled` defaults to `false` in `gradle.properties`; pass `-Pembedded.enabled=true` or set it in `~/.gradle/gradle.properties`). A plain build resolves Compose 1.10.0 and Koin 4.1.1 from Maven Central and never touches `~/.m2`. Skiko comes from Maven Central either way.
 
 bitchatKmp wires in the forked artifacts through three layers of Gradle configuration:
 
@@ -29,7 +30,7 @@ if (embeddedEnabled) {
 }
 ```
 
-With the profile on, `mavenLocal()` is listed first in `dependencyResolutionManagement` (and added to `pluginManagement`) so that forked SNAPSHOT artifacts (including Skiko EGL) take priority over upstream releases. `settings.gradle.kts` also selects the Compose Gradle plugin version there: `embedded.composeForkVersion` (`9999.0.0-SNAPSHOT`) when embedded, `1.10.0` otherwise.
+With the profile on, `mavenLocal()` is listed first in `dependencyResolutionManagement` (and added to `pluginManagement`) so that forked SNAPSHOT artifacts take priority over upstream releases. Skiko no longer matches anything in `~/.m2` and falls through to `mavenCentral()`. `settings.gradle.kts` also selects the Compose Gradle plugin version there: `embedded.composeForkVersion` (`9999.0.0-SNAPSHOT`) when embedded, `1.10.0` otherwise.
 
 ### 2. Version forcing (`build.gradle.kts:26-63`)
 
@@ -39,14 +40,14 @@ The root `build.gradle.kts` uses `resolutionStrategy.eachDependency` (inside `if
 - `org.jetbrains.androidx.lifecycle`
 - `org.jetbrains.androidx.savedstate`
 
-and `embedded.koinForkVersion` (`4.1.2`) for every `io.insert-koin` artifact. The fork versions are declared in `gradle.properties` (`embedded.composeForkVersion`, `embedded.skikoForkVersion`, `embedded.koinForkVersion`).
+and `embedded.koinForkVersion` (`4.1.2`) for every `io.insert-koin` artifact. The fork versions are declared in `gradle.properties` (`embedded.composeForkVersion`, `embedded.koinForkVersion`), alongside the non-fork `embedded.skikoVersion`.
 
 This ensures every module in the project resolves to the forked Compose and Koin, not upstream releases.
 
 ### 3. Explicit platform artifacts (`apps/embedded/build.gradle.kts`)
 
 The embedded module declares explicit `-linuxarm64` artifacts because Kotlin/Native can't resolve multiplatform metadata modules for unsupported targets:
-- Skiko: `org.jetbrains.skiko:skiko-linuxarm64:0.9.37.3-SNAPSHOT`
+- Skiko: `org.jetbrains.skiko:skiko-linuxarm64:0.9.47` (upstream, Maven Central; `embedded.skikoVersion`)
 - Compose UI/Foundation/Material3: `*-linuxarm64:9999.0.0-SNAPSHOT`
 - Koin: `koin-core-linuxarm64:4.1.2`, `koin-compose-linuxarm64:4.1.2`, `koin-compose-viewmodel-linuxarm64:4.1.2`
 - Lifecycle/Savedstate: `*-linuxarm64:9999.0.0-SNAPSHOT`
@@ -58,8 +59,8 @@ The `presentation/screens/build.gradle.kts:136` also declares `components-resour
 ```
 forks/compose-multiplatform          ──┐
 forks/compose-multiplatform-core     ──┤  publishToMavenLocal
-forks/koin/projects                  ──┤        │
-forks/jake/skiko                     ──┘        │
+forks/koin/projects                  ──┘        │
+                                                │
                                                 v
                                           ~/.m2/repository/
                                                 │
@@ -148,28 +149,61 @@ cd forks/koin/projects   # the Gradle root is projects/, not the repo root
 
 **Artifacts produced:** `koin-core-linuxarm64:4.1.2`, `koin-compose-linuxarm64:4.1.2`, `koin-compose-viewmodel-linuxarm64:4.1.2`
 
-## 4. Skiko (EGL)
+## Skiko: no longer forked
 
 **What:** Skia bindings for Kotlin — the 2D rendering engine used by Compose.
 
-**Why:** Standard Skiko uses GLX (X11) for OpenGL function loading via `glXGetProcAddress`. Headless Linux without X11 needs EGL instead. Jake Wharton's fork uses `DirectContext.makeEGL()` with `GrGLMakeEGLInterface`.
+**Why it used to be forked:** Skiko was GLX-only on `linuxArm64`, loading GL functions through
+`glXGetProcAddress`, which does not work on a headless Pi with no X11. A local fork of
+[JakeWharton/skiko](https://github.com/JakeWharton/skiko) (`jw-egl-0.9.37.3-port`, published as
+`skiko-linuxarm64:0.9.37.3-SNAPSHOT`) added a `DirectContext.makeEGL()` API and swapped in a newer
+Skia prebuilt that had EGL compiled in.
 
-**Repo & Branch:** [JakeWharton/skiko](https://github.com/JakeWharton/skiko) `jw-egl-0.9.37.3-port`
+**Why it no longer is:** upstream fixed the underlying problem. From `skiko-linuxarm64` **0.9.47**
+onward (JetBrains/skiko [#1052](https://github.com/JetBrains/skiko/pull/1052), merged 2026-01-29,
+which bumped Skiko's Skia pin to a `skia_use_egl=true` build) the only `GrGLMakeNativeInterface_*`
+object in the published klib is the EGL one and there is no GLX object at all — so
+`DirectContext.makeGL()`, which resolves through `GrGLMakeNativeInterface()`, **is** the EGL path.
+Upstream is also cleaner than the fork: the fork's klib left `XOpenDisplay`/`glXSwapBuffers` and
+friends undefined (they only linked because of `--allow-shlib-undefined`), while the upstream klib
+needs nothing beyond `eglGetProcAddress`, the GLES2 entry points and fontconfig, all of which the
+embedded `linkerOpts` already supply.
 
-**Changes:**
-- Replaced GLX backend with EGL (`eglGetProcAddress`)
-- Native libraries bundled for `linuxarm64`
+`makeEGL()` itself was never upstreamed and does not exist at any upstream version, so the one call
+site (`apps/embedded/.../Renderer.kt`) now calls `makeGL()`.
 
-**Build & Publish:**
+**Consumed as:** `org.jetbrains.skiko:skiko-linuxarm64:0.9.47` from **Maven Central**, pinned by
+`embedded.skikoVersion` in `gradle.properties`. Nothing needs to be cloned, built or published.
 
-```bash
-cd forks/jake/skiko/skiko   # the clone lives under forks/jake/; skiko/ is the included build with its own gradlew
-./gradlew publishLinuxArm64PublicationToMavenLocal
-```
+**Why 0.9.47 and not something newer.** 0.9.47 is the first EGL release, and its klib metadata is
+identical to the fork's (`abi_version=1.8.0`, `compiler_version=2.0.10`, same `unique_name`), so
+swapping it in changes exactly one variable. More importantly it is the last version that still
+publishes `org.jetbrains.skiko.ClipboardManager` and `org.jetbrains.skiko.URIManager`: the Compose
+Multiplatform Core fork's `PlatformClipboardManager.skiko.kt` and `PlatformUriHandler.skiko.kt` call
+both, and they are **gone by 0.144.6**. Linking against 0.144.6 succeeds (Kotlin/Native partial
+linkage downgrades the misses to `i:` messages) but leaves clipboard and `LocalUriHandler` as
+runtime `IrLinkageError`s — an unacceptable trade for a chat app with a text field. Verified by
+grepping `default/linkdata/` of the published klibs:
 
-**Artifacts produced:** `skiko-linuxarm64:0.9.37.3-SNAPSHOT` in `~/.m2/repository/`
+| `skiko-linuxarm64` | klib abi / compiler | `ClipboardManager` | `URIManager` |
+|---|---|---|---|
+| fork `0.9.37.3-SNAPSHOT` | 1.8.0 / 2.0.10 | present | present |
+| **0.9.47** | **1.8.0 / 2.0.10** | **present** | **present** |
+| 0.144.6 | 2.2.0 / 2.2.20 | removed | removed |
 
-## 5. MeshCore
+**The one unavoidable partial-linkage message.** `org.jetbrains.skia.ColorMatrix` became a
+`value class` at 0.9.47, dropping the `vararg` constructor that the Compose core fork's
+`SkiaColorFilter.skiko.kt:48` calls. Every EGL-capable Skiko has this change, so no version choice
+avoids it. It is harmless here: the only reachable caller is `ColorFilter.colorMatrix`, which
+nothing in this repo uses (the `ColorMatrix` hits under `data/mediautils` are `android.graphics`).
+Upstream fixed it in Compose Multiplatform Core v1.11.0 by dropping the spread operator; if
+`ColorFilter.colorMatrix` is ever needed on the embedded target, that one-liner has to be applied to
+`forks/compose-multiplatform-core` and the forks republished.
+
+Full evidence (per-version `llvm-nm` over the published klibs) is in
+[`docs/reviews/2026-09-07-fork-drop-analysis.md`](reviews/2026-09-07-fork-drop-analysis.md) §Q1.
+
+## 4. MeshCore
 
 **What:** MeshCore companion firmware for LoRa mesh networking.
 
@@ -192,7 +226,7 @@ FIRMWARE_VERSION=dev ./build.sh build-firmware linux_companion_sx1276
 sudo cp out/meshcored /usr/local/bin/meshcored
 ```
 
-## 6. Meshtastic Firmware
+## 5. Meshtastic Firmware
 
 **What:** meshtasticd native firmware for Linux LoRa devices.
 
@@ -230,8 +264,10 @@ cd bitchat/forks
 git clone -b linux-1.10.0 https://github.com/fluxxion82/compose-multiplatform-core.git
 git clone -b release/1.10 https://github.com/fluxxion82/compose-multiplatform.git
 git clone -b sa_linux https://github.com/fluxxion82/koin.git
-mkdir -p jake && git clone -b jw-egl-0.9.37.3-port https://github.com/JakeWharton/skiko.git jake/skiko
 ```
+
+Skiko is not on this list any more — it comes from Maven Central (see
+[Skiko: no longer forked](#skiko-no-longer-forked)).
 
 ### 2. Build and publish compose-multiplatform-core
 
@@ -260,16 +296,9 @@ cd forks/koin/projects   # the Gradle root is projects/, not the repo root
 ./gradlew publishToMavenLocal
 ```
 
-### 5. Build and publish Skiko (EGL)
+### 5. Create sysroot (see [embedded README](../apps/embedded/README.md) Step 1)
 
-```bash
-cd forks/jake/skiko/skiko   # the clone lives under forks/jake/; skiko/ is the included build with its own gradlew
-./gradlew publishLinuxArm64PublicationToMavenLocal
-```
-
-### 6. Create sysroot (see [embedded README](../apps/embedded/README.md) Step 1)
-
-### 7. Verify build
+### 6. Verify build
 
 ```bash
 cd bitchatKmp

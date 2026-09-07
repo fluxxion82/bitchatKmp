@@ -68,12 +68,18 @@ class Renderer private constructor(
         private const val GL_RGBA8 = 0x8058
 
         /**
-         * Initialize the Skia renderer. Must be called after EGL context is made current.
-         * Uses EGL-enabled Skiko (Jake Wharton's fork) which loads GL functions via
-         * eglGetProcAddress instead of glXGetProcAddress (X11).
+         * Initialize the Skia renderer. Must be called after the EGL context is made current.
+         *
+         * `makeGL()` is the EGL path on this target. It calls Skia's
+         * `GrDirectContexts::MakeGL()`, which resolves through `GrGLMakeNativeInterface()`,
+         * and the Skia bundled in `skiko-linuxarm64` >= 0.9.47 is built with `skia_use_egl=true`:
+         * the only `GrGLMakeNativeInterface_*` object in the artifact is the EGL one, so GL
+         * functions are loaded via `eglGetProcAddress`, never `glXGetProcAddress` (X11).
+         * Earlier Skiko releases were GLX-only, which is why this used to call the
+         * `makeEGL()` added by a local fork; see docs/FORKED_LIBRARIES.md.
          */
         fun initialize(width: Int, height: Int): Renderer {
-            val context = DirectContext.makeEGL()
+            val context = DirectContext.makeGL()
             println("[Renderer] Skia DirectContext created (EGL backend)")
             return Renderer(context, width, height)
         }

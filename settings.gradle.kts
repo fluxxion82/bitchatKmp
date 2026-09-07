@@ -40,7 +40,8 @@ dependencyResolutionManagement {
     @Suppress("UnstableApiUsage")
     repositories {
         if (embeddedEnabled) {
-            // mavenLocal first for forked libs (Koin, Compose, Skiko EGL with linuxArm64)
+            // mavenLocal first for forked libs (Koin, Compose with linuxArm64).
+            // Skiko is NOT here: it resolves from mavenCentral (see docs/FORKED_LIBRARIES.md).
             mavenLocal()
         }
         google()

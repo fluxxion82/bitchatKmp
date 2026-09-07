@@ -10,21 +10,22 @@ plugins {
 val composeVersion = providers.gradleProperty("embedded.composeForkVersion")
     .orElse("9999.0.0-SNAPSHOT")
     .get()
-val skikoVersion = providers.gradleProperty("embedded.skikoForkVersion")
-    .orElse("0.9.37.3-SNAPSHOT")
+val skikoVersion = providers.gradleProperty("embedded.skikoVersion")
+    .orElse("0.9.47")
     .get()
 val koinVersion = providers.gradleProperty("embedded.koinForkVersion")
     .orElse("4.1.2")
     .get()
 
-// Force EGL-enabled Skiko and forked Compose for linuxArm64
-// This handles transitive dependencies from presentation modules
+// Pin the linuxArm64 Skiko artifact and the forked Compose for linuxArm64.
+// This handles transitive dependencies from presentation modules.
 configurations.all {
     resolutionStrategy.eachDependency {
         if (requested.group == "org.jetbrains.skiko" && requested.name == "skiko") {
-            // Replace multiplatform skiko with platform-specific EGL-enabled version
+            // Kotlin/Native cannot resolve the multiplatform metadata module for this target,
+            // so redirect to the published platform artifact.
             useTarget("org.jetbrains.skiko:skiko-linuxarm64:$skikoVersion")
-            because("Using Jake Wharton's Skiko with native libraries for linuxArm64")
+            because("Kotlin/Native needs the explicit linuxarm64 Skiko artifact")
         }
         // Force forked Compose artifacts for linuxArm64 support
         // Exclude components group - it's published per-platform, not as multiplatform module
@@ -69,7 +70,7 @@ kotlin {
                     // Skia/Skiko font dependencies
                     "-lfontconfig", "-lfreetype",
                     "-lpng16", "-lz", "-lexpat", "-lbz2",
-                    // Note: GLX/X11 dependencies removed - using EGL-enabled Skiko instead
+                    // No GLX/X11: upstream skiko-linuxarm64 >= 0.9.47 bundles an EGL-only Skia
                     "--allow-shlib-undefined",
                 )
             }
@@ -116,7 +117,9 @@ kotlin {
             dependencies {
                 implementation(libs.kotlinx.coroutines.core)
 
-                // Jake Wharton's Skiko with native libraries for linuxArm64
+                // Upstream Skiko from Maven Central. Since 0.9.47 the linuxarm64 artifact
+                // bundles an EGL-only Skia (no GLX object at all), which is why the local
+                // EGL fork was dropped -- see docs/FORKED_LIBRARIES.md.
                 implementation("org.jetbrains.skiko:skiko-linuxarm64:$skikoVersion")
 
                 implementation("org.jetbrains.compose.runtime:runtime:$composeVersion")

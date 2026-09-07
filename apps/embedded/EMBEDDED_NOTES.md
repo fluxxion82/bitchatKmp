@@ -2,7 +2,7 @@
 
 This document covers the setup required to run Compose Multiplatform on embedded Linux ARM64 (Raspberry Pi), including resource loading, rendering architecture, and known issues.
 
-> For a consolidated guide to all forked libraries (Compose, Koin, Skiko, etc.), see [FORKED_LIBRARIES.md](../../docs/FORKED_LIBRARIES.md).
+> For a consolidated guide to all forked libraries (Compose, Koin, etc.), see [FORKED_LIBRARIES.md](../../docs/FORKED_LIBRARIES.md). Skiko is no longer forked — upstream `skiko-linuxarm64` has bundled an EGL-only Skia since 0.9.47, so `DirectContext.makeGL()` is the EGL path.
 
 ## Overview
 
@@ -285,7 +285,7 @@ while (true) {
 
 - **Jake Wharton's mosaic**: Terminal UI with Compose - uses `CoroutineScope` and `launch` for rendering
 - **Compose for Desktop**: `ComposeWindow` uses Swing's EDT and `revalidate()` pattern
-- **JakeWharton/skiko** (`jw-egl-0.9.37.3-port`): EGL-enabled Skiko fork used by this project
+- **JakeWharton/skiko** (`jw-egl-0.9.37.3-port`): the EGL Skiko fork this project used before upstream `skiko-linuxarm64` 0.9.47 shipped an EGL-only Skia (kept here for history only)
 
 ### Why We Use Continuous Loop (For Now)
 

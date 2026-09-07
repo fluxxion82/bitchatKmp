@@ -2,7 +2,7 @@
 
 Kotlin/Native `linuxArm64` binary for running bitchat on an Orange Pi Zero 3 with an Elecrow 5" HDMI touch display (800x480) and M5Stack CardKB I2C keyboard. No JVM, no desktop environment.
 
-Uses a DRM/GBM/EGL rendering pipeline with Jake Wharton's EGL-enabled Skiko fork.
+Uses a DRM/GBM/EGL rendering pipeline with upstream Skiko (`skiko-linuxarm64`, whose bundled Skia is EGL-only since 0.9.47).
 
 ## Prerequisites
 
@@ -11,23 +11,15 @@ Uses a DRM/GBM/EGL rendering pipeline with Jake Wharton's EGL-enabled Skiko fork
 
 ## Building
 
-### 0. Build Jake Wharton's EGL-enabled Skiko (one-time setup)
+### 0. Publish the forked Compose and Koin artifacts (one-time setup)
 
 > For the full picture of all forked libraries and first-time setup, see [FORKED_LIBRARIES.md](../../docs/FORKED_LIBRARIES.md).
 
-Standard Skiko uses GLX (X11) for OpenGL function loading, which doesn't work on headless Linux without X11. We use Jake Wharton's fork that uses EGL instead.
-
-Clone and publish the EGL-enabled Skiko to mavenLocal:
-
-```bash
-# From the bitchat root (not bitchatKmp)
-cd forks
-git clone -b jw-egl-0.9.37.3-port https://github.com/JakeWharton/skiko.git
-cd skiko/skiko
-./gradlew publishLinuxArm64PublicationToMavenLocal
-```
-
-This publishes `org.jetbrains.skiko:skiko-linuxarm64:0.9.37.3-SNAPSHOT` to `~/.m2/repository/`.
+Compose Multiplatform and Koin have no upstream `linuxArm64` artifacts, so local forks must be built
+and published to `~/.m2` before this module will resolve. Skiko needs nothing: it is resolved from
+Maven Central as `org.jetbrains.skiko:skiko-linuxarm64` (pinned by `embedded.skikoVersion` in
+`gradle.properties`), and since 0.9.47 its bundled Skia is built with `skia_use_egl=true`, so
+`DirectContext.makeGL()` loads GL through `eglGetProcAddress` — no X11/GLX, and no Skiko fork.
 
 ### 1. Create the sysroot (one-time setup)
 

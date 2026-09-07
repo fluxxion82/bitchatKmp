@@ -331,7 +331,10 @@ ssh pi@raspberrypi 'chmod +x /tmp/bitchat-embedded.kexe && /tmp/bitchat-embedded
 
 ## References
 
-- Docker pattern based on: `forks/jake/skiko/skiko/docker/linux-amd64/Dockerfile`
+- Docker pattern based on: `skiko/docker/linux-amd64/Dockerfile` in
+  [JetBrains/skiko](https://github.com/JetBrains/skiko) (originally read from the local
+  `forks/jake/skiko` clone, which this project no longer maintains -- see
+  [FORKED_LIBRARIES.md](../../../docs/FORKED_LIBRARIES.md))
 - Ubuntu Multiarch: https://wiki.ubuntu.com/MultiarchSpec
 - libsodium: https://github.com/jedisct1/libsodium
 - secp256k1: https://github.com/bitcoin-core/secp256k1
