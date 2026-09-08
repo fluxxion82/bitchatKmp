@@ -316,6 +316,20 @@ class BlueZConnectionService(
             }
         })
 
+        // Client connect/disconnect. gattlib only reports a peer going away through the
+        // per-connection disconnect handler BlueZGattClientService registers, so this is the single
+        // place the mesh learns that a client link came up or went down.
+        gattClient.onConnectionReady = { address ->
+            coroutineScopeFacade.applicationScope.launch {
+                onClientConnected(address)
+            }
+        }
+        gattClient.onConnectionLost = { address ->
+            coroutineScopeFacade.applicationScope.launch {
+                onClientDisconnected(address)
+            }
+        }
+
         // Setup GATT client delegate
         gattClient.setDelegate(object : GattClientDelegate {
             override fun onCharacteristicRead(deviceAddress: String, data: ByteArray) {

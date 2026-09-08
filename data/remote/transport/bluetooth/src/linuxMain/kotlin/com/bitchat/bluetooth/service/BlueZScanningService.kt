@@ -197,21 +197,14 @@ private fun scanCallback(
     name: CPointer<ByteVar>?,
     userData: COpaquePointer?
 ) {
-    println("[SCAN_CB] Callback invoked! addr=${addr != null}, name=${name != null}, userData=${userData != null}")
-    platform.posix.fflush(platform.posix.stdout)
-
-    if (userData == null || addr == null) {
-        println("[SCAN_CB] Skipping - null data")
-        platform.posix.fflush(platform.posix.stdout)
-        return
-    }
+    // Fires for every advertisement of every nearby device; onDeviceDiscovered below already logs
+    // new devices once and rediscoveries at most every REDISCOVERY_LOG_INTERVAL_MS, so nothing is
+    // logged here. The device journal is size-capped.
+    if (userData == null || addr == null) return
 
     val service = userData.asStableRef<BlueZScanningService>().get()
     val address = addr.toKString()
     val deviceName = name?.toKString()
-
-    println("[SCAN_CB] Device: $address, name: $deviceName")
-    platform.posix.fflush(platform.posix.stdout)
 
     // Notify through the manager (which will call back to this service's delegate method)
     service.onDeviceDiscovered(address, deviceName)

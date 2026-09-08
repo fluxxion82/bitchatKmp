@@ -6,6 +6,8 @@ import com.bitchat.bluetooth.protocol.logInfo
 import gattlib.*
 import kotlinx.cinterop.*
 import kotlinx.coroutines.delay
+import kotlin.concurrent.AtomicInt
+import kotlin.concurrent.AtomicReference
 import platform.posix.size_t
 
 /**
@@ -16,6 +18,12 @@ import platform.posix.size_t
  * - Service/characteristic discovery
  * - Writing characteristics (with chunking for large payloads)
  * - Receiving notifications
+ *
+ * Threading: gattlib runs the connect callback on a thread it spawns per connection
+ * (`_gattlib_connected_device_thread`) and the disconnect callback synchronously on the GLib
+ * main-loop thread, while application code calls in from coroutine threads. Everything shared
+ * between them is therefore atomic, and every gattlib call on a connection is gated on that
+ * connection still being alive - see [DeviceConnection].
  */
 @OptIn(ExperimentalForeignApi::class)
 class BlueZGattClientService(
@@ -33,15 +41,62 @@ class BlueZGattClientService(
         private const val CHUNK_DELAY_MS = 25L       // Delay between chunks
     }
 
-    // Active connections by device address
-    private data class DeviceConnection(
+    /**
+     * A live gattlib connection.
+     *
+     * [isAlive] is cleared the instant BlueZ reports the peer gone, from gattlib's disconnect
+     * handler, which runs *before* `gattlib_connection_free()` frees the connection's D-Bus object
+     * list. gattlib leaves the freed list pointer in place and its own `gattlib_connection_is_valid()`
+     * only checks adapter-list membership, so any gattlib call made after that point walks freed
+     * memory. This flag is the guard that keeps us out.
+     */
+    private class DeviceConnection(
         val address: String,
-        val connection: CPointer<gattlib_connection_t>,
-        var isReady: Boolean = false
-    )
+        val connection: CPointer<gattlib_connection_t>
+    ) {
+        private val aliveFlag = AtomicInt(1)
+        private val readyFlag = AtomicInt(0)
 
-    private val connections = mutableMapOf<String, DeviceConnection>()
+        val isAlive: Boolean get() = aliveFlag.value == 1
+        val isReady: Boolean get() = readyFlag.value == 1
+
+        /** Returns true for the caller that transitioned the connection from alive to dead. */
+        fun markDead(): Boolean = aliveFlag.compareAndSet(1, 0)
+
+        fun markReady() {
+            readyFlag.value = 1
+        }
+    }
+
+    // Active connections by device address. Copy-on-write: mutated from gattlib's threads and read
+    // from the application's coroutine threads.
+    private val connections = AtomicReference<Map<String, DeviceConnection>>(emptyMap())
+
+    // Bumped every time any peer's link goes away.
+    //
+    // gattlib snapshots the WHOLE BlueZ object tree per connection
+    // (`connection->backend.dbus_objects = g_dbus_object_manager_get_objects(...)`, gattlib.c:47)
+    // and every discovery, write and notification walks that snapshot. So a peer we are not talking
+    // to disappearing is just as dangerous as our own: BlueZ removes its GATT objects, gattlib
+    // creates proxies for them anyway and reads properties that are no longer cached, and it does
+    // not NULL-check what comes back. Any discovery that straddles such a teardown is abandoned.
+    private val topologyEpoch = AtomicInt(0)
+
+    // gattlib keeps the connect/disconnect user_data pointer for the lifetime of the connection and
+    // never hands it back, so a single service-lifetime ref is used instead of one per connect.
+    private val selfRef = StableRef.create(this)
+
+    // Notification contexts are likewise retained by gattlib for the lifetime of a connection, so
+    // they are created once per peer address and reused across reconnects.
+    private val notificationContexts = AtomicReference<Map<String, COpaquePointer>>(emptyMap())
+
     private var delegate: GattClientDelegate? = null
+
+    /** Invoked from a gattlib thread when a peer becomes usable for mesh traffic. */
+    var onConnectionReady: ((String) -> Unit)? = null
+
+    /** Invoked from a gattlib thread when a peer is dropped, for any reason. */
+    var onConnectionLost: ((String) -> Unit)? = null
 
     // Reassembly buffers for incoming chunked data
     private data class ReassemblyBuffer(
@@ -65,7 +120,7 @@ class BlueZGattClientService(
      * @return true if connection initiated successfully
      */
     suspend fun connect(deviceAddress: String): Boolean {
-        if (connections.containsKey(deviceAddress)) {
+        if (connections.value.containsKey(deviceAddress)) {
             logDebug(TAG, "Already connected to $deviceAddress")
             return true
         }
@@ -85,39 +140,33 @@ class BlueZGattClientService(
             return false
         }
 
-        // Store reference for callback
-        val stableRef = StableRef.create(this)
-
         // Try connecting with random address support (Android devices use random BLE addresses)
         // GATTLIB_CONNECTION_OPTIONS_LEGACY_BDADDR_LE_RANDOM = (1 << 1) = 2
         val connectionOptions = (GATTLIB_CONNECTION_OPTIONS_LEGACY_BDADDR_LE_PUBLIC or
                 GATTLIB_CONNECTION_OPTIONS_LEGACY_BDADDR_LE_RANDOM).toULong()
-
-        logDebug(TAG, "Initiating connection with options: $connectionOptions")
 
         val result = gattlib_connect(
             adapter,
             deviceAddress,
             connectionOptions,
             staticCFunction(::connectionCallback),
-            stableRef.asCPointer()
+            selfRef.asCPointer()
         )
 
         if (result != GATTLIB_SUCCESS) {
             val errorHex = result.toUInt().toString(16)
-            logError(TAG, "Failed to initiate connection to $deviceAddress, error: $result (0x$errorHex)")
-
-            // Decode GattLib error
             val errorModule = (result.toUInt() and 0xF0000000u).toInt()
             val errorCode = (result.toUInt() and 0x0FFFFFFFu).toInt()
-            when (errorModule) {
-                0x10000000 -> logError(TAG, "  D-Bus error code: $errorCode")
-                0x20000000 -> logError(TAG, "  BlueZ error code: $errorCode")
-                0x30000000 -> logError(TAG, "  Unix error code: $errorCode")
-                else -> logError(TAG, "  Error module: ${errorModule.toUInt().toString(16)}, code: $errorCode")
+            val module = when (errorModule) {
+                0x10000000 -> "D-Bus"
+                0x20000000 -> "BlueZ"
+                0x30000000 -> "Unix"
+                else -> "module ${errorModule.toUInt().toString(16)}"
             }
-
-            stableRef.dispose()
+            logError(
+                TAG,
+                "Failed to initiate connection to $deviceAddress: $result (0x$errorHex, $module code $errorCode)"
+            )
             return false
         }
 
@@ -126,11 +175,9 @@ class BlueZGattClientService(
     }
 
     override suspend fun writeCharacteristic(deviceAddress: String, data: ByteArray): Boolean {
-        logDebug(TAG, "Write ${data.size}B to ${deviceAddress.take(8)}")
-
-        val connection = connections[deviceAddress]
-        if (connection == null || !connection.isReady) {
-            logError(TAG, "No ready connection for $deviceAddress")
+        val connection = connections.value[deviceAddress]
+        if (connection == null || !connection.isReady || !connection.isAlive) {
+            logDebug(TAG, "No ready connection for ${deviceAddress.take(8)}")
             return false
         }
 
@@ -143,6 +190,13 @@ class BlueZGattClientService(
     }
 
     private fun writeSingle(connection: DeviceConnection, data: ByteArray): Boolean = memScoped {
+        if (!connection.isAlive) {
+            // The peer went away between the registry lookup and here; the gattlib connection is
+            // already torn down, so writing to it would walk freed memory.
+            delegate?.onWriteFailure(connection.address, "Peer disconnected")
+            return@memScoped false
+        }
+
         val uuid = alloc<uuid_t>()
         gattlib_string_to_uuid(
             BlueZManager.CHARACTERISTIC_UUID,
@@ -162,7 +216,7 @@ class BlueZGattClientService(
             delegate?.onWriteSuccess(connection.address)
             true
         } else {
-            logError(TAG, "Write failed: $result")
+            logDebug(TAG, "Write to ${connection.address.take(8)} failed: $result")
             delegate?.onWriteFailure(connection.address, "Write error: $result")
             false
         }
@@ -178,7 +232,7 @@ class BlueZGattClientService(
         var chunkNumber = 0
         val totalChunks = (totalSize + MAX_CHUNK_SIZE - 1) / MAX_CHUNK_SIZE
 
-        logInfo(TAG, "Chunking $totalSize bytes into $totalChunks chunks for ${deviceAddress.take(8)}")
+        logDebug(TAG, "Chunking $totalSize bytes into $totalChunks chunks for ${deviceAddress.take(8)}")
 
         while (offset < totalSize) {
             val remaining = totalSize - offset
@@ -213,12 +267,11 @@ class BlueZGattClientService(
 
             // Write chunk
             if (!writeSingle(connection, chunk)) {
-                logError(TAG, "Failed to write chunk ${chunkNumber + 1}/$totalChunks")
+                logError(TAG, "Failed to write chunk ${chunkNumber + 1}/$totalChunks to ${deviceAddress.take(8)}")
                 return false
             }
 
             chunkNumber++
-            logDebug(TAG, "Wrote chunk $chunkNumber/$totalChunks (${chunk.size} bytes)")
 
             offset += payloadSize
 
@@ -228,105 +281,185 @@ class BlueZGattClientService(
             }
         }
 
-        logInfo(TAG, "Successfully wrote all $totalChunks chunks ($totalSize bytes) to ${deviceAddress.take(8)}")
+        logInfo(TAG, "Wrote $totalChunks chunks ($totalSize bytes) to ${deviceAddress.take(8)}")
         delegate?.onWriteSuccess(deviceAddress)
         return true
     }
 
     override suspend fun disconnect(deviceAddress: String) {
-        connections[deviceAddress]?.let { connection ->
-            logInfo(TAG, "Disconnecting from $deviceAddress")
-            gattlib_disconnect(connection.connection, true)
-            connections.remove(deviceAddress)
-            reassemblyBuffers.remove(deviceAddress)
+        val entry = removeConnection(deviceAddress) ?: return
+        logInfo(TAG, "Disconnecting from $deviceAddress")
+        reassemblyBuffers.remove(deviceAddress)
+        if (entry.markDead()) {
+            gattlib_disconnect(entry.connection, true)
         }
     }
 
     override suspend fun disconnectAll() {
-        logInfo(TAG, "Disconnecting all (${connections.size} connections)")
-        connections.values.forEach { connection ->
-            gattlib_disconnect(connection.connection, false)
+        val entries = takeAllConnections()
+        if (entries.isEmpty()) return
+
+        logInfo(TAG, "Disconnecting all (${entries.size} connections)")
+        entries.forEach { entry ->
+            if (entry.markDead()) {
+                gattlib_disconnect(entry.connection, false)
+            }
         }
-        connections.clear()
         reassemblyBuffers.clear()
     }
 
     /**
      * Get list of connected device addresses that are ready for communication.
      */
-    fun getReadyDeviceAddresses(): List<String> {
-        return connections.filterValues { it.isReady }.keys.toList()
-    }
+    fun getReadyDeviceAddresses(): List<String> =
+        connections.value.values.filter { it.isReady && it.isAlive }.map { it.address }
 
     // BlueZManager.GattDelegate implementation
 
     override fun onConnected(address: String, connection: CPointer<gattlib_connection_t>) {
         logInfo(TAG, "Connected to $address")
 
-        // Store connection
-        connections[address] = DeviceConnection(address, connection, isReady = false)
+        val entry = DeviceConnection(address, connection)
+        putConnection(entry)?.markDead()
 
-        // Discover services and characteristics
-        discoverServices(address, connection)
+        // Register the disconnect handler BEFORE discovery. gattlib offers no other way to learn
+        // that a peer went away, and without it nothing ever leaves `connections`: the entry stays
+        // ready forever and every later broadcast calls
+        // gattlib_write_without_response_char_by_uuid() -> get_characteristic_from_uuid()
+        // (gattlib_char.c:139), which walks connection->backend.dbus_objects - a GList that
+        // gattlib_connection_free() (gattlib.c:338) freed without clearing the pointer.
+        val registered = gattlib_register_on_disconnect(
+            connection,
+            staticCFunction(::disconnectionCallback),
+            selfRef.asCPointer()
+        )
+        if (registered != GATTLIB_SUCCESS) {
+            abandon(entry, "cannot watch for disconnect (error $registered)")
+            return
+        }
+
+        discoverServices(entry)
     }
 
     override fun onDisconnected(address: String, error: String?) {
-        logInfo(TAG, "Disconnected from $address${error?.let { ": $it" } ?: ""}")
-        connections.remove(address)
+        // Bumped first: a discovery on another thread should see the topology change as early as
+        // possible. Only real link losses bump it - abandon() does not, so one peer being dropped
+        // never cascades into dropping the peers that are still fine.
+        topologyEpoch.incrementAndGet()
+        val entry = removeConnection(address)
+        entry?.markDead()
         reassemblyBuffers.remove(address)
+        logInfo(TAG, "Disconnected from $address${error?.let { ": $it" } ?: ""}")
+        onConnectionLost?.invoke(address)
     }
 
     override fun onNotification(address: String, uuid: CValue<uuid_t>, data: ByteArray) {
         handleIncomingData(address, data)
     }
 
-    private fun discoverServices(address: String, connection: CPointer<gattlib_connection_t>) {
-        logDebug(TAG, "Discovering services for $address")
+    /**
+     * gattlib's disconnect handler. Called synchronously on the GLib main-loop thread while
+     * gattlib holds its global recursive mutex and immediately before it frees the connection's
+     * D-Bus objects, so it must stay short and must not call back into gattlib.
+     */
+    internal fun onGattlibDisconnected(connection: CPointer<gattlib_connection_t>?) {
+        val raw = connection?.rawValue ?: return
+        val entry = connections.value.values.firstOrNull { it.connection.rawValue == raw } ?: return
+        onDisconnected(entry.address, null)
+    }
+
+    /**
+     * Drop a peer we cannot use. Takes it out of the registry so no further gattlib call is made on
+     * its connection, releases the BLE link if it is still up, and leaves the mesh service running.
+     * The scanner will offer the peer again under BlueZConnectionService's existing backoff, so
+     * this never turns into a retry storm.
+     */
+    private fun abandon(entry: DeviceConnection, reason: String) {
+        removeConnection(entry.address)
+        reassemblyBuffers.remove(entry.address)
+        val wasAlive = entry.markDead()
+        logInfo(TAG, "Abandoning ${entry.address}: $reason")
+        if (wasAlive) {
+            gattlib_disconnect(entry.connection, false)
+        }
+        onConnectionLost?.invoke(entry.address)
+    }
+
+    private fun discoverServices(entry: DeviceConnection) {
+        if (!entry.isAlive) {
+            abandon(entry, "peer gone before service discovery")
+            return
+        }
+        val epoch = topologyEpoch.value
 
         memScoped {
             val servicesPtr = alloc<CPointerVar<gattlib_primary_service_t>>()
             val servicesCount = alloc<IntVar>()
+            // memScoped allocations are malloc'd, not zeroed: make the out-params well defined even
+            // if gattlib returns without writing them.
+            servicesPtr.value = null
+            servicesCount.value = 0
 
-            val result = gattlib_discover_primary(connection, servicesPtr.ptr, servicesCount.ptr)
+            val result = gattlib_discover_primary(entry.connection, servicesPtr.ptr, servicesCount.ptr)
 
             if (result != GATTLIB_SUCCESS) {
-                logError(TAG, "Service discovery failed for $address: $result")
+                abandon(entry, "service discovery failed ($result)")
                 return
             }
 
-            val count = servicesCount.value
-            logDebug(TAG, "Found $count services")
-
-            // Look for our service
             val services = servicesPtr.value
-            if (services != null) {
-                for (i in 0 until count) {
-                    val service = services[i]
-                    val uuidString = manager.uuidToString(service.uuid)
-                    logDebug(TAG, "Service: $uuidString")
+            val count = servicesCount.value
+            if (services == null || count <= 0) {
+                abandon(entry, "no GATT services reported")
+                return
+            }
 
-                    if (uuidString.equals(BlueZManager.SERVICE_UUID, ignoreCase = true)) {
-                        discoverCharacteristics(address, connection, service)
-                        break
-                    }
+            var bitchatService: gattlib_primary_service_t? = null
+            for (i in 0 until count) {
+                val service = services[i]
+                if (manager.uuidToString(service.uuid).equals(BlueZManager.SERVICE_UUID, ignoreCase = true)) {
+                    bitchatService = service
+                    break
                 }
             }
+
+            if (bitchatService == null) {
+                abandon(entry, "no bitchat service among $count services")
+                return
+            }
+
+            // gattlib_discover_primary() is a long run of synchronous D-Bus round trips. If the peer
+            // vanished during it, its D-Bus object list has already been freed, so re-entering
+            // gattlib would walk freed memory.
+            if (!entry.isAlive) {
+                abandon(entry, "peer disconnected during service discovery")
+                return
+            }
+            if (topologyEpoch.value != epoch) {
+                abandon(entry, "BLE topology changed during service discovery")
+                return
+            }
+
+            discoverCharacteristics(entry, bitchatService, count, epoch)
         }
     }
 
     private fun discoverCharacteristics(
-        address: String,
-        connection: CPointer<gattlib_connection_t>,
-        service: gattlib_primary_service_t
+        entry: DeviceConnection,
+        service: gattlib_primary_service_t,
+        serviceCount: Int,
+        epoch: Int
     ) {
-        logDebug(TAG, "Discovering characteristics for service")
+        val address = entry.address
 
         memScoped {
             val charsPtr = alloc<CPointerVar<gattlib_characteristic_t>>()
             val charsCount = alloc<IntVar>()
+            charsPtr.value = null
+            charsCount.value = 0
 
             val result = gattlib_discover_char_range(
-                connection,
+                entry.connection,
                 service.attr_handle_start,
                 service.attr_handle_end,
                 charsPtr.ptr,
@@ -334,59 +467,69 @@ class BlueZGattClientService(
             )
 
             if (result != GATTLIB_SUCCESS) {
-                logError(TAG, "Characteristic discovery failed: $result")
+                abandon(entry, "characteristic discovery failed ($result)")
                 return
             }
 
-            val count = charsCount.value
-            logDebug(TAG, "Found $count characteristics")
+            if (!entry.isAlive) {
+                abandon(entry, "peer disconnected during characteristic discovery")
+                return
+            }
+            if (topologyEpoch.value != epoch) {
+                abandon(entry, "BLE topology changed during characteristic discovery")
+                return
+            }
 
             val chars = charsPtr.value
+            val count = charsCount.value
+
+            var bitchatCharacteristic: uuid_t? = null
             if (chars != null) {
                 for (i in 0 until count) {
-                    val char = chars[i]
-                    val uuidString = manager.uuidToString(char.uuid)
-                    logDebug(TAG, "Characteristic: $uuidString")
-
-                    if (uuidString.equals(BlueZManager.CHARACTERISTIC_UUID, ignoreCase = true)) {
-                        // Enable notifications
-                        enableNotifications(address, connection, char.uuid)
-
-                        // Mark connection as ready
-                        connections[address]?.isReady = true
-                        logInfo(TAG, "Connection ready for $address")
+                    val characteristic = chars[i]
+                    if (manager.uuidToString(characteristic.uuid)
+                            .equals(BlueZManager.CHARACTERISTIC_UUID, ignoreCase = true)
+                    ) {
+                        bitchatCharacteristic = characteristic.uuid
                         break
                     }
                 }
             }
+
+            if (bitchatCharacteristic == null) {
+                abandon(entry, "bitchat characteristic missing from $count characteristics")
+                return
+            }
+
+            if (!enableNotifications(entry, bitchatCharacteristic)) {
+                abandon(entry, "could not subscribe to notifications")
+                return
+            }
+
+            if (!entry.isAlive) {
+                abandon(entry, "peer disconnected during subscription")
+                return
+            }
+
+            entry.markReady()
+            logInfo(TAG, "Discovery complete for $address: $serviceCount services, $count characteristics, ready")
+            onConnectionReady?.invoke(address)
         }
     }
 
-    private fun enableNotifications(
-        address: String,
-        connection: CPointer<gattlib_connection_t>,
-        uuid: uuid_t
-    ) {
-        logDebug(TAG, "Enabling notifications for $address")
+    private fun enableNotifications(entry: DeviceConnection, uuid: uuid_t): Boolean {
+        gattlib_register_notification(
+            entry.connection,
+            staticCFunction(::notificationCallback),
+            notificationContextFor(entry.address)
+        )
 
-        memScoped {
-            // Register notification handler
-            val stableRef = StableRef.create(NotificationContext(this@BlueZGattClientService, address))
-
-            gattlib_register_notification(
-                connection,
-                staticCFunction(::notificationCallback),
-                stableRef.asCPointer()
-            )
-
-            // Start notifications
-            val result = gattlib_notification_start(connection, uuid.ptr)
-            if (result != GATTLIB_SUCCESS) {
-                logError(TAG, "Failed to start notifications: $result")
-            } else {
-                logDebug(TAG, "Notifications enabled")
-            }
+        val result = gattlib_notification_start(entry.connection, uuid.ptr)
+        if (result != GATTLIB_SUCCESS) {
+            logError(TAG, "Failed to start notifications for ${entry.address}: $result")
+            return false
         }
+        return true
     }
 
     private fun handleIncomingData(deviceAddress: String, value: ByteArray) {
@@ -407,7 +550,7 @@ class BlueZGattClientService(
                     expectedSize = expected,
                     data = payload.toMutableList()
                 )
-                logInfo(TAG, "Started receiving chunked data from ${deviceAddress.take(8)}, expecting $expected bytes")
+                logDebug(TAG, "Started receiving chunked data from ${deviceAddress.take(8)}, expecting $expected bytes")
             }
 
             CHUNK_CONTINUE, CHUNK_END -> {
@@ -434,6 +577,51 @@ class BlueZGattClientService(
             else -> delegate?.onCharacteristicRead(deviceAddress, value)
         }
     }
+
+    // Copy-on-write registry helpers
+
+    private fun putConnection(entry: DeviceConnection): DeviceConnection? {
+        while (true) {
+            val current = connections.value
+            val previous = current[entry.address]
+            if (connections.compareAndSet(current, current + (entry.address to entry))) {
+                return previous
+            }
+        }
+    }
+
+    private fun removeConnection(address: String): DeviceConnection? {
+        while (true) {
+            val current = connections.value
+            val previous = current[address] ?: return null
+            if (connections.compareAndSet(current, current - address)) {
+                return previous
+            }
+        }
+    }
+
+    private fun takeAllConnections(): Collection<DeviceConnection> {
+        while (true) {
+            val current = connections.value
+            if (current.isEmpty()) return emptyList()
+            if (connections.compareAndSet(current, emptyMap())) return current.values
+        }
+    }
+
+    private fun notificationContextFor(address: String): COpaquePointer {
+        while (true) {
+            val current = notificationContexts.value
+            current[address]?.let { return it }
+
+            val created = StableRef.create(NotificationContext(this, address))
+            val pointer = created.asCPointer()
+            if (notificationContexts.compareAndSet(current, current + (address to pointer))) {
+                return pointer
+            }
+            // Lost the race, and gattlib never saw this pointer: safe to release.
+            created.dispose()
+        }
+    }
 }
 
 /**
@@ -446,6 +634,7 @@ private data class NotificationContext(
 
 /**
  * Static callback for GattLib connection events.
+ * Runs on the per-connection thread gattlib spawns, not on any application thread.
  */
 @OptIn(ExperimentalForeignApi::class)
 private fun connectionCallback(
@@ -465,6 +654,20 @@ private fun connectionCallback(
     } else {
         service.onConnected(address, connection)
     }
+}
+
+/**
+ * Static callback for GattLib disconnection events.
+ * Runs on the GLib main-loop thread while gattlib holds its global mutex, immediately before it
+ * frees the connection's D-Bus objects.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun disconnectionCallback(
+    connection: CPointer<gattlib_connection_t>?,
+    userData: COpaquePointer?
+) {
+    if (userData == null) return
+    userData.asStableRef<BlueZGattClientService>().get().onGattlibDisconnected(connection)
 }
 
 /**
