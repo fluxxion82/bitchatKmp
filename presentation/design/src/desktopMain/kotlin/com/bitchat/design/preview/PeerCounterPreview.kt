@@ -8,10 +8,9 @@ import org.jetbrains.compose.ui.tooling.preview.Preview
 @Preview
 fun PeerCounterPreview() {
     PeerCounter(
-        connectedPeers = listOf(),
+        connectedPeers = listOf("269e37bb6be7caf9", "9343bbdb113d0118"),
         joinedChannels = setOf("#Bitcoin", "#USA"),
         hasUnreadChannels = mapOf(),
-        isConnected = true,
         selectedLocationChannel = null,
         geohashPeople = listOf(),
         onClick = {},

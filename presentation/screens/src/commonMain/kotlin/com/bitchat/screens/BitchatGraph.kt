@@ -202,7 +202,6 @@ fun BitchatGraph(mainViewModel: MainViewModel) {
                                         joinedChannels = headerState.joinedChannels,
                                         hasUnreadChannels = headerState.unreadChannelMessages,
                                         hasUnreadPrivateMessages = dmState.unreadPeers.isNotEmpty(),
-                                        isConnected = headerState.isConnected,
                                         hasNotes = headerState.hasNotes,
                                         isCurrentChannelBookmarked = headerState.isCurrentChannelBookmarked,
                                         onToggleBookmark = mainViewModel::toggleBookmark,

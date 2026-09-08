@@ -250,58 +250,112 @@ fun NicknameEditor(
     }
 }
 
+/**
+ * Which transport the header's peer count is speaking for.
+ *
+ * Connectivity is expressed here, in the tint, and never in the number: a count of 0 drawn next to a
+ * sidebar that lists two people is a lie the user has no way to debug.
+ */
+internal enum class PeerCountTone {
+    /** Geohash channel participants, seen over Nostr. */
+    GEOHASH,
+
+    /** At least one peer over the BLE mesh (possibly alongside LoRa). */
+    MESH,
+
+    /** Peers reachable only over the LoRa radio. */
+    LORA,
+
+    /** Nobody known on this channel. */
+    NONE,
+}
+
+/** The number the header shows and the tone it is drawn in. */
+internal data class PeerCount(
+    val count: Int,
+    val tone: PeerCountTone,
+)
+
+/**
+ * LoRa peers reach the UI namespaced as `lora-<deviceId>` (`ChatRepo.observeLoRaPeers`), while BLE
+ * peers keep their bare id. A bitchat LoRa heartbeat carries the same 16-hex bitchat id the BLE
+ * announce does, so the namespace has to come off before the two lists are merged.
+ */
+private const val LORA_PEER_ID_PREFIX = "lora-"
+
+/**
+ * The peers the app actually knows about on [selectedLocationChannel], and how to tint them.
+ *
+ * The mesh count is the union of BLE and LoRa rather than their sum, so a neighbour heard over both
+ * radios counts once. Nothing gates the number itself; only the tone reacts to which transport the
+ * peers came in on.
+ */
+internal fun peerCountFor(
+    selectedLocationChannel: Channel?,
+    connectedPeers: List<String>,
+    geohashPeople: List<GeoPerson>,
+    loraPeers: List<GeoPerson>,
+): PeerCount = when (selectedLocationChannel) {
+    is Channel.Location -> {
+        val count = normalizedPeerIds(geohashPeople.map { it.id }).size
+        PeerCount(count, if (count > 0) PeerCountTone.GEOHASH else PeerCountTone.NONE)
+    }
+
+    is Channel.Mesh,
+    is Channel.Meshtastic,
+    null -> {
+        val bleIds = normalizedPeerIds(connectedPeers)
+        val loraIds = normalizedPeerIds(loraPeers.map { it.id })
+        PeerCount(
+            count = (bleIds + loraIds).size,
+            tone = when {
+                bleIds.isNotEmpty() -> PeerCountTone.MESH
+                loraIds.isNotEmpty() -> PeerCountTone.LORA
+                else -> PeerCountTone.NONE
+            },
+        )
+    }
+
+    // Private chats and named channels render their own headers, which carry no counter.
+    is Channel.NostrDM,
+    is Channel.MeshDM,
+    is Channel.NamedChannel -> PeerCount(0, PeerCountTone.NONE)
+}
+
+/** Peer ids reduced to one comparable form, dropping blanks and the LoRa namespace. */
+private fun normalizedPeerIds(ids: List<String>): Set<String> =
+    ids.mapNotNullTo(LinkedHashSet()) { id ->
+        id.trim().lowercase().removePrefix(LORA_PEER_ID_PREFIX).ifEmpty { null }
+    }
+
 @Composable
 fun PeerCounter(
     connectedPeers: List<String>,
     joinedChannels: Set<String>,
     hasUnreadChannels: Map<String, Int>,
-    isConnected: Boolean,
     selectedLocationChannel: Channel?,
     geohashPeople: List<GeoPerson>,
     loraPeers: List<GeoPerson> = emptyList(),
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val colorScheme = MaterialTheme.colorScheme
-
     // Color constants
     val meshBlue = Color(0xFF007AFF)
     val green = Color(0xFF00C851)
     val loraOrange = Color(0xFFFF9500)
 
-    val (peopleCount, countColor) = when (selectedLocationChannel) {
-        is Channel.Location -> {
-            val count = geohashPeople.size
-            Pair(count, if (count > 0) green else Color.Gray)
-        }
+    val (peopleCount, tone) = peerCountFor(
+        selectedLocationChannel = selectedLocationChannel,
+        connectedPeers = connectedPeers,
+        geohashPeople = geohashPeople,
+        loraPeers = loraPeers,
+    )
 
-        is Channel.Mesh,
-        is Channel.Meshtastic,
-        null -> {
-            val bleCount = connectedPeers.size
-            val loraCount = loraPeers.size
-
-            when {
-                // BLE connected with peers - show BLE count in blue
-                isConnected && bleCount > 0 -> {
-                    Pair(bleCount + loraCount, meshBlue)
-                }
-                // BLE not connected/no peers, but LoRa has peers - show LoRa count in orange
-                loraCount > 0 -> {
-                    Pair(loraCount, loraOrange)
-                }
-                // No peers at all
-                else -> {
-                    Pair(0, Color.Gray)
-                }
-            }
-        }
-
-        is Channel.NostrDM,
-        is Channel.MeshDM,
-        is Channel.NamedChannel -> {
-            Pair(0, Color.Gray)
-        }
+    val countColor = when (tone) {
+        PeerCountTone.GEOHASH -> green
+        PeerCountTone.MESH -> meshBlue
+        PeerCountTone.LORA -> loraOrange
+        PeerCountTone.NONE -> Color.Gray
     }
 
     Row(
@@ -329,11 +383,10 @@ fun PeerCounter(
 
         if (joinedChannels.isNotEmpty()) {
             val joinedText = stringResource(Res.string.channel_count_prefix) + "${joinedChannels.size}"
-            println(joinedText)
             Text(
                 text = joinedText,
                 style = MaterialTheme.typography.bodyMedium,
-                color = if (isConnected) Color(0xFF00C851) else Color.Red,
+                color = green,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Medium,
             )
@@ -379,7 +432,6 @@ fun ChatHeaderContent(
     joinedChannels: Set<String> = emptySet(),
     hasUnreadChannels: Map<String, Int> = emptyMap(),
     hasUnreadPrivateMessages: Boolean = false,
-    isConnected: Boolean = false,
     isCurrentChannelBookmarked: Boolean = false,
     onToggleBookmark: (String) -> Unit = {},
     loraPeers: List<GeoPerson> = emptyList(),
@@ -451,7 +503,6 @@ fun ChatHeaderContent(
                 joinedChannels = joinedChannels,
                 hasUnreadChannels = hasUnreadChannels,
                 hasUnreadPrivateMessages = hasUnreadPrivateMessages,
-                isConnected = isConnected,
                 geohashPeople = geohashPeople,
                 loraPeers = loraPeers,
                 isCurrentChannelBookmarked = isCurrentChannelBookmarked,
@@ -651,7 +702,6 @@ private fun MainHeader(
     joinedChannels: Set<String> = emptySet(),
     hasUnreadChannels: Map<String, Int> = emptyMap(),
     hasUnreadPrivateMessages: Boolean = false,
-    isConnected: Boolean = false,
     geohashPeople: List<GeoPerson> = emptyList(),
     loraPeers: List<GeoPerson> = emptyList(),
     isCurrentChannelBookmarked: Boolean = false,
@@ -770,7 +820,6 @@ private fun MainHeader(
                 connectedPeers = connectedPeers, // TODO: Filter out own peer ID when available
                 joinedChannels = joinedChannels,
                 hasUnreadChannels = hasUnreadChannels,
-                isConnected = isConnected,
                 selectedLocationChannel = selectedLocationChannel,
                 geohashPeople = geohashPeople,
                 loraPeers = loraPeers,

@@ -8,10 +8,9 @@ import com.bitchat.design.chat.PeerCounter
 @Composable
 fun Preview_WelcomeContent() {
     PeerCounter(
-        connectedPeers = listOf(),
+        connectedPeers = listOf("269e37bb6be7caf9", "9343bbdb113d0118"),
         joinedChannels = setOf("#Bitcoin", "#USA"),
         hasUnreadChannels = mapOf(),
-        isConnected = true,
         selectedLocationChannel = null,
         geohashPeople = listOf(),
         onClick = {},

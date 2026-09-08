@@ -41,6 +41,5 @@ data class HeaderState(
     val torRunning: Boolean = false,
     val torBootstrapPercent: Int = 0,
 
-    val isConnected: Boolean = false,
     val showSidebar: Boolean = false
 )
