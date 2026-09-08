@@ -31,6 +31,11 @@ class BlueZScanningService(
 
     private var isScanning = false
 
+    // gattlib keeps the scan's user_data pointer for as long as the scan is enabled and never hands
+    // it back, so this is created once for the service's lifetime rather than per call to
+    // [startScan].
+    private val selfRef = StableRef.create(this)
+
     init {
         manager.registerScanDelegate(this)
     }
@@ -43,8 +48,15 @@ class BlueZScanningService(
     }
 
     override suspend fun startScan(lowLatency: Boolean) {
+        if (isScanning) {
+            logDebug(TAG, "Scan already running")
+            return
+        }
         logInfo(TAG, "Starting BLE scan...")
+        enableScan()
+    }
 
+    private fun enableScan() {
         val adapter = manager.getAdapter()
         if (adapter == null) {
             // Try to open adapter if not already open
@@ -67,8 +79,7 @@ class BlueZScanningService(
 
         // Scan for devices with UUID filter for bitchat service
         memScoped {
-            // Store reference to this service for callback
-            val userData = StableRef.create(this@BlueZScanningService).asCPointer()
+            val userData = selfRef.asCPointer()
 
             // Create UUID filter for bitchat service
             // UUID list must be NULL-terminated array of pointers

@@ -21,7 +21,7 @@ class NoiseHandshakeRecoveryTest {
     private fun key(): ByteArray = ByteArray(32).also { random.nextBytes(it) }
 
     private class Party(val peerID: String) {
-        val facade = NoiseEncryptionFacade()
+        val facade = NoiseEncryptionFacade(peerID)
         val privateKey: ByteArray = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val publicKey: ByteArray = ByteArray(32).also { SecureRandom().nextBytes(it) }
     }
@@ -29,7 +29,7 @@ class NoiseHandshakeRecoveryTest {
     @Test
     fun aHandshakeWithNoResponseIsAbandonedAfterTheDeadlineAndCanBeReInitiated() {
         val supervisor = HandshakeSupervisor()
-        val facade = NoiseEncryptionFacade()
+        val facade = NoiseEncryptionFacade("fefe735fc063ff08")
         val peerID = "269e37bb6be7caf9"
         val privateKey = key()
         val publicKey = key()
@@ -98,7 +98,7 @@ class NoiseHandshakeRecoveryTest {
     @Test
     fun aHandshakeThatIsStillInsideTheDeadlineIsNotAbandoned() {
         val supervisor = HandshakeSupervisor()
-        val facade = NoiseEncryptionFacade()
+        val facade = NoiseEncryptionFacade("fefe735fc063ff08")
         val peerID = "9343bbdb113d0118"
 
         facade.initiateHandshake(peerID, key(), key())
@@ -114,7 +114,7 @@ class NoiseHandshakeRecoveryTest {
 
     @Test
     fun aFailedHandshakeLeavesNoSessionBehindAndNeverThrows() {
-        val facade = NoiseEncryptionFacade()
+        val facade = NoiseEncryptionFacade("fefe735fc063ff08")
         val peerID = "deadbeefdeadbeef"
 
         // All-zero static keys fail validation, so the session can never handshake. The facade must

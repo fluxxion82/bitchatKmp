@@ -1,8 +1,12 @@
 package com.bitchat.bluetooth.service
 
+import com.bitchat.bluetooth.manager.CentralLinkPolicy
 import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logInfo
 import com.bitchat.domain.base.CoroutineScopeFacade
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -12,6 +16,20 @@ import kotlinx.coroutines.sync.withLock
  *
  * Combines Central role (scanning + GATT client) and Peripheral role
  * (advertising + GATT server) to enable full mesh communication.
+ *
+ * The central role is deliberately unhurried. A BLE controller has one initiator, so two
+ * overlapping connection attempts cannot both proceed: the host cancels one and BlueZ reports
+ * `org.bluez.Error.Failed: le-connection-abort-by-local`. This service therefore takes
+ * [CentralLinkPolicy]'s permission before every outbound connection and abandons an attempt gattlib
+ * has stopped reporting on. See [onDeviceDiscovered] and [reapExpiredAttempts].
+ *
+ * The scan deliberately keeps running across a connection attempt. Stopping it for the attempt's
+ * duration looks right on paper -- the radio would have the attempt to itself -- and it was tried
+ * on the device: across twenty-five minutes and a dozen attempts not one link came up, every
+ * attempt ending either in `le-connection-abort-by-local` after three seconds or in the full
+ * twenty-five second D-Bus timeout, where the same build with the scan left running had been
+ * connecting in 1.5 to 3.2 seconds. BlueZ appears to need its discovery session to keep a
+ * scan-discovered device connectable, so the scan stays up.
  */
 class BlueZConnectionService(
     private val coroutineScopeFacade: CoroutineScopeFacade,
@@ -26,28 +44,35 @@ class BlueZConnectionService(
         private const val TAG = "BLUEZ_CONN"
     }
 
-    enum class ConnectionState {
-        DISCONNECTED,
-        CONNECTING,
-        CONNECTED,
-        DISCONNECTING
-    }
-
-    // Client connections (we connected to them)
-    private val clientConnections = mutableSetOf<String>()
     // Server connections (they connected to us)
     private val serverConnections = mutableSetOf<String>()
     private val connectionMutex = Mutex()
-    private val connectionStates = mutableMapOf<String, ConnectionState>()
-    private val lastConnectionAttempt = mutableMapOf<String, Long>()
-    private val connectionAttemptCount = mutableMapOf<String, Int>()
+
+    // Permission to open an outbound link, and the deadline gattlib does not enforce on one.
+    private val linkPolicy = CentralLinkPolicy()
+
+    // Addresses of peers this node is already talking to, keyed by peer ID rather than by MAC.
+    // Android rotates its advertising address, so the same phone is offered by the scanner under a
+    // new MAC every minute or so; the mesh service publishes the mapping here as it learns it.
+    private var peerAddressLookup: (String) -> Set<String> = { emptySet() }
 
     private var onPacketReceivedCallback: OnPacketReceivedCallback? = null
     private var connectionEstablishedCallback: ConnectionEstablishedCallback? = null
     private var connectionReadyCallback: ConnectionReadyCallback? = null
 
+    private var reaperJob: Job? = null
+
     init {
         setupDelegates()
+        // Started here rather than in [start], which nothing calls: the mesh service drives
+        // scanning, advertising and the GATT server itself and never touches this class's own
+        // lifecycle. Without the reaper a connection attempt gattlib goes quiet about would sit
+        // pending for ever, and with it the paused scan.
+        startAttemptReaper()
+    }
+
+    override fun setPeerAddressLookup(lookup: (String) -> Set<String>) {
+        peerAddressLookup = lookup
     }
 
     override suspend fun connectToDevice(deviceAddress: String) {
@@ -60,17 +85,16 @@ class BlueZConnectionService(
     }
 
     override suspend fun isDeviceConnecting(deviceAddress: String): Boolean {
-        return connectionMutex.withLock {
-            connectionStates[deviceAddress] == ConnectionState.CONNECTING
-        }
+        return connectionMutex.withLock { linkPolicy.isPending(deviceAddress) }
     }
 
     override suspend fun disconnectDeviceByAddress(deviceAddress: String) {
         logInfo(TAG, "Disconnect request: $deviceAddress")
         gattClient.disconnect(deviceAddress)
+        gattServer.onClientDisconnected(deviceAddress)
         connectionMutex.withLock {
-            clientConnections.remove(deviceAddress)
-            connectionStates.remove(deviceAddress)
+            linkPolicy.onReleased(deviceAddress, currentTimeMillis())
+            serverConnections.remove(deviceAddress)
         }
     }
 
@@ -78,25 +102,32 @@ class BlueZConnectionService(
         logInfo(TAG, "Clearing all connections")
         gattClient.disconnectAll()
         connectionMutex.withLock {
-            clientConnections.clear()
+            linkPolicy.clear()
             serverConnections.clear()
-            connectionStates.clear()
         }
     }
 
-    override suspend fun broadcastPacket(packetData: ByteArray) {
+    override suspend fun broadcastPacket(packetData: ByteArray): Boolean {
         val readyClients = gattClient.getReadyDeviceAddresses()
-        val (clients, servers) = connectionMutex.withLock {
-            Pair(clientConnections.toList(), serverConnections.toList())
-        }
+        val servers = connectionMutex.withLock { serverConnections.toList() }
 
-        val totalDevices = readyClients.size + servers.size
+        // The GATT server's own registry is the authority on which server entries are live, so an
+        // entry it no longer holds is dropped here rather than counted as a delivery.
+        val targets = gattServer.partitionBroadcastTargets(servers)
+
+        val totalDevices = readyClients.size + targets.live.size
         logInfo(TAG, "Broadcasting ${packetData.size}B to $totalDevices devices " +
-                "(clients:${readyClients.size}, servers:${servers.size})")
+                "(clients:${readyClients.size}, servers:${targets.live.size})")
+
+        if (targets.stale.isNotEmpty()) {
+            logInfo(TAG, "Dropping ${targets.stale.size} server entry/entries with no live " +
+                    "link: ${targets.stale.joinToString { it.take(8) }}")
+            targets.stale.forEach { onServerClientDisconnected(it) }
+        }
 
         if (totalDevices == 0) {
             logDebug(TAG, "No devices to broadcast to")
-            return
+            return false
         }
 
         // Write to client connections (we are Central)
@@ -112,25 +143,16 @@ class BlueZConnectionService(
         // Notify server connections (we are Peripheral). The GATT server's notification is a
         // PropertiesChanged signal on the characteristic's object path, which names no device, so
         // one emission reaches every subscribed central: emitting per entry sent N copies to
-        // everyone. The server's own registry is the authority on which entries are live, and any
-        // entry it no longer holds is dropped here too rather than being counted as a delivery.
-        if (servers.isNotEmpty()) {
+        // everyone.
+        if (targets.live.isNotEmpty()) {
             coroutineScopeFacade.applicationScope.launch {
-                val targets = gattServer.partitionBroadcastTargets(servers)
-                if (targets.stale.isNotEmpty()) {
-                    logInfo(TAG, "Dropping ${targets.stale.size} server entry/entries with no live " +
-                            "link: ${targets.stale.joinToString { it.take(8) }}")
-                    targets.stale.forEach { onServerClientDisconnected(it) }
-                }
-
-                if (!targets.deliverable) {
-                    logInfo(TAG, "Server notify failed: none of the ${servers.size} server " +
-                            "entry/entries holds a live link")
-                } else if (!gattServer.notifySubscribers(packetData)) {
+                if (!gattServer.notifySubscribers(packetData)) {
                     logInfo(TAG, "Server notify failed for ${targets.live.size} client(s)")
                 }
             }
         }
+
+        return true
     }
 
     override fun hasRequiredPermissions(): Boolean {
@@ -178,6 +200,8 @@ class BlueZConnectionService(
         // Start scanning for other devices (Central role)
         scanningService.startScan(lowLatency = true)
 
+        startAttemptReaper()
+
         logInfo(TAG, "BLE mesh service started")
     }
 
@@ -186,6 +210,9 @@ class BlueZConnectionService(
      */
     suspend fun stop() {
         logInfo(TAG, "Stopping BLE mesh service...")
+
+        reaperJob?.cancel()
+        reaperJob = null
 
         scanningService.stopScan()
         gattServer.stopAdvertising()
@@ -199,52 +226,48 @@ class BlueZConnectionService(
 
     /**
      * Called when scanning discovers a device.
+     *
+     * Connecting is not the default answer. The scanner offers every bitchat advertiser it sees,
+     * several times a minute, and because Android rotates its resolvable private address most of
+     * those offers are the same phone under a new MAC. Answering all of them is what produced the
+     * churn: overlapping attempts cancelling each other, and links that lasted seconds.
      */
     suspend fun onDeviceDiscovered(deviceAddress: String, deviceName: String?) {
-        connectionMutex.withLock {
-            // Skip if already connected as a client
-            val state = connectionStates[deviceAddress] ?: ConnectionState.DISCONNECTED
-            if (state == ConnectionState.CONNECTING || state == ConnectionState.CONNECTED) {
-                return
-            }
-
-            // Skip if device is already connected to us as a GATT server client
-            // (BLE typically only supports one connection between two devices)
-            if (serverConnections.contains(deviceAddress)) {
-                logDebug(TAG, "Skipping client connect to ${deviceAddress.take(8)} - already connected as server client")
-                return
-            }
-
-            // Exponential backoff for connection attempts
-            val now = currentTimeMillis()
-            val lastAttempt = lastConnectionAttempt[deviceAddress] ?: 0L
-            val attemptCount = connectionAttemptCount[deviceAddress] ?: 0
-            val backoffMs = minOf(5000L * (1 shl attemptCount), 60000L)
-
-            if (now - lastAttempt < backoffMs) {
-                return // Too soon for retry
-            }
-
-            clientConnections.add(deviceAddress)
-            connectionStates[deviceAddress] = ConnectionState.CONNECTING
-            lastConnectionAttempt[deviceAddress] = now
-            connectionAttemptCount[deviceAddress] = attemptCount + 1
-
-            logInfo(TAG, "Connecting to discovered device: ${deviceAddress.take(8)} " +
-                    "(attempt ${attemptCount + 1}, total: ${clientConnections.size})")
+        val decision = connectionMutex.withLock {
+            linkPolicy.onDiscovered(
+                address = deviceAddress,
+                now = currentTimeMillis(),
+                inboundAddresses = serverConnections.toSet(),
+                peerAddresses = peerAddressLookup(deviceAddress)
+            )
         }
 
-        connectToDevice(deviceAddress)
+        when (decision) {
+            is CentralLinkPolicy.Decision.Skip -> {
+                logDebug(TAG, "Not connecting to ${deviceAddress.take(8)}: ${decision.reason}")
+                return
+            }
+
+            CentralLinkPolicy.Decision.Connect -> Unit
+        }
+
+        logInfo(TAG, "Connecting to discovered device: ${deviceAddress.take(8)} " +
+                "(links: ${connectionMutex.withLock { linkPolicy.establishedCount() }})")
+
+        logInfo(TAG, "Connect request: $deviceAddress")
+        if (!gattClient.connect(deviceAddress)) {
+            // gattlib refused outright, so no callback is coming for this one either. Releasing it
+            // now rather than at the deadline frees the initiator in milliseconds instead of
+            // holding it for the full timeout.
+            onClientConnectionFailed(deviceAddress, "gattlib refused the connection")
+        }
     }
 
     /**
      * Called when client connection is established.
      */
     internal suspend fun onClientConnected(deviceAddress: String) {
-        connectionMutex.withLock {
-            connectionStates[deviceAddress] = ConnectionState.CONNECTED
-            connectionAttemptCount[deviceAddress] = 0
-        }
+        connectionMutex.withLock { linkPolicy.onConnected(deviceAddress) }
 
         logInfo(TAG, "Client connected: ${deviceAddress.take(8)}")
         connectionEstablishedCallback?.onDeviceConnected(deviceAddress)
@@ -255,9 +278,7 @@ class BlueZConnectionService(
      * Called when client connection fails.
      */
     internal suspend fun onClientConnectionFailed(deviceAddress: String, reason: String) {
-        connectionMutex.withLock {
-            connectionStates[deviceAddress] = ConnectionState.DISCONNECTED
-        }
+        connectionMutex.withLock { linkPolicy.onReleased(deviceAddress, currentTimeMillis()) }
         logDebug(TAG, "Client connection failed: ${deviceAddress.take(8)}: $reason")
     }
 
@@ -265,10 +286,7 @@ class BlueZConnectionService(
      * Called when client disconnects.
      */
     internal suspend fun onClientDisconnected(deviceAddress: String) {
-        connectionMutex.withLock {
-            clientConnections.remove(deviceAddress)
-            connectionStates.remove(deviceAddress)
-        }
+        connectionMutex.withLock { linkPolicy.onReleased(deviceAddress, currentTimeMillis()) }
         logInfo(TAG, "Client disconnected: ${deviceAddress.take(8)}")
     }
 
@@ -281,6 +299,7 @@ class BlueZConnectionService(
         }
         logInfo(TAG, "Server client connected: ${deviceAddress.take(8)}")
         connectionEstablishedCallback?.onDeviceConnected(deviceAddress)
+        connectionReadyCallback?.onConnectionReady(deviceAddress)
     }
 
     /**
@@ -299,6 +318,42 @@ class BlueZConnectionService(
     suspend fun getConnectedDeviceCount(): Int {
         return connectionMutex.withLock {
             gattClient.getReadyDeviceAddresses().size + serverConnections.size
+        }
+    }
+
+    /**
+     * Abandon connection attempts that have gone quiet.
+     *
+     * gattlib never ends one of these itself. `gattlib_connect` waits for BlueZ to report
+     * `ServicesResolved` turning true and arms `_stop_connect_func` (`dbus/gattlib.c`) as a
+     * timeout, but that handler only clears its own timer id: it does not fail the attempt, does
+     * not call the connection callback and does not release the link. So an attempt BlueZ accepts
+     * but never resolves produces no callback at all, and before this the registry simply grew --
+     * the journal shows it reaching seven pending attempts while no link was up and every
+     * broadcast went to zero devices.
+     */
+    internal suspend fun reapExpiredAttempts(now: Long) {
+        val expired = connectionMutex.withLock { linkPolicy.expiredAttempts(now) }
+        if (expired.isEmpty()) return
+
+        expired.forEach { address ->
+            logInfo(TAG, "Abandoning connection attempt to ${address.take(8)}: no result from " +
+                    "gattlib within ${CentralLinkPolicy.CONNECT_TIMEOUT_MS}ms")
+            gattClient.disconnect(address)
+            connectionMutex.withLock { linkPolicy.onReleased(address, now) }
+        }
+    }
+
+    private fun startAttemptReaper() {
+        if (reaperJob?.isActive == true) return
+        reaperJob = coroutineScopeFacade.applicationScope.launch {
+            logInfo(TAG, "Central link reaper started (deadline " +
+                    "${CentralLinkPolicy.CONNECT_TIMEOUT_MS}ms, sweep " +
+                    "${CentralLinkPolicy.SWEEP_INTERVAL_MS}ms)")
+            while (isActive) {
+                delay(CentralLinkPolicy.SWEEP_INTERVAL_MS)
+                reapExpiredAttempts(currentTimeMillis())
+            }
         }
     }
 

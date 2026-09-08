@@ -37,8 +37,9 @@ class DesktopConnectionService(
         mutex.withLock { connected.clear() }
     }
 
-    override suspend fun broadcastPacket(packetData: ByteArray) {
+    override suspend fun broadcastPacket(packetData: ByteArray): Boolean {
         println("DesktopMacConnectionService.broadcastPacket: stub (${packetData.size} bytes)")
+        return false
     }
 
     override fun hasRequiredPermissions(): Boolean = true

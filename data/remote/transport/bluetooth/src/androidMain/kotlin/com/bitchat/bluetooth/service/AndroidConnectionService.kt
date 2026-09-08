@@ -189,7 +189,7 @@ class AndroidConnectionService(
         }
     }
 
-    override suspend fun broadcastPacket(packetData: ByteArray) {
+    override suspend fun broadcastPacket(packetData: ByteArray): Boolean {
         val (clientDevices, serverDevices) = deviceMutex.withLock {
             Pair(discoveredDevices.toList(), serverConnectedDevices.toList())
         }
@@ -197,7 +197,7 @@ class AndroidConnectionService(
         val totalDevices = clientDevices.size + serverDevices.size
         if (totalDevices == 0) {
             Log.w(TAG, "No connected devices to broadcast to")
-            return
+            return false
         }
 
         Log.i(TAG, "Broadcasting to ${clientDevices.size} clients, ${serverDevices.size} servers (${packetData.size} bytes)")
@@ -227,6 +227,8 @@ class AndroidConnectionService(
                 }
             }
         }
+
+        return true
     }
 
     suspend fun start() {

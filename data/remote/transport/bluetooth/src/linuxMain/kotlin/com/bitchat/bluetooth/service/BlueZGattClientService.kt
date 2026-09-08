@@ -154,19 +154,7 @@ class BlueZGattClientService(
         )
 
         if (result != GATTLIB_SUCCESS) {
-            val errorHex = result.toUInt().toString(16)
-            val errorModule = (result.toUInt() and 0xF0000000u).toInt()
-            val errorCode = (result.toUInt() and 0x0FFFFFFFu).toInt()
-            val module = when (errorModule) {
-                0x10000000 -> "D-Bus"
-                0x20000000 -> "BlueZ"
-                0x30000000 -> "Unix"
-                else -> "module ${errorModule.toUInt().toString(16)}"
-            }
-            logError(
-                TAG,
-                "Failed to initiate connection to $deviceAddress: $result (0x$errorHex, $module code $errorCode)"
-            )
+            logError(TAG, "Failed to initiate connection to $deviceAddress: ${describeError(result)}")
             return false
         }
 
@@ -339,6 +327,30 @@ class BlueZGattClientService(
         }
 
         discoverServices(entry)
+    }
+
+    /**
+     * Render a gattlib status as something a journal reader can act on.
+     *
+     * gattlib packs the failing subsystem into the top nibble and, for D-Bus, the GLib error domain
+     * and code into the low bits (`GATTLIB_ERROR_DBUS_WITH_ERROR`, `include/gattlib.h`). BlueZ
+     * exposes no disconnect reason on D-Bus at all, so this is the only reason code available to
+     * us; the matching text is in gattlib's own log line, which for every failed connect on this
+     * device reads `org.bluez.Error.Failed: le-connection-abort-by-local` -- the host cancelling
+     * its own connection attempt because the radio was also scanning or already initiating.
+     */
+    private fun describeError(status: Int): String {
+        val raw = status.toUInt()
+        val module = when ((raw and 0xF0000000u).toLong()) {
+            0x10000000L -> "D-Bus"
+            0x20000000L -> "BlueZ"
+            0x30000000L -> "Unix"
+            0x80000000L -> "gattlib"
+            else -> "module ${(raw shr 28).toString(16)}"
+        }
+        val domain = ((raw shr 8) and 0xFFFFFu).toInt()
+        val code = (raw and 0xFFu).toInt()
+        return "$status (0x${raw.toString(16)}, $module domain $domain code $code)"
     }
 
     override fun onDisconnected(address: String, error: String?) {

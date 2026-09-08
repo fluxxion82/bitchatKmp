@@ -51,17 +51,18 @@ class NativeBleConnectionService(
         }
     }
 
-    override suspend fun broadcastPacket(packetData: ByteArray) {
-        if (nativeAvailable) {
-            println("NativeBleConnectionService.broadcastPacket: native bridge active size=${packetData.size}")
-            if (packetData.size <= CHUNK_SIZE) {
-                NativeBleBridge.broadcast(packetData)
-            } else {
-                broadcastChunked(packetData)
-            }
+    override suspend fun broadcastPacket(packetData: ByteArray): Boolean {
+        if (!nativeAvailable) return fallback.broadcastPacket(packetData)
+
+        println("NativeBleConnectionService.broadcastPacket: native bridge active size=${packetData.size}")
+        if (packetData.size <= CHUNK_SIZE) {
+            NativeBleBridge.broadcast(packetData)
         } else {
-            fallback.broadcastPacket(packetData)
+            broadcastChunked(packetData)
         }
+        // The native bridge reports no per-link delivery status, so a send is treated as reaching
+        // somebody. Only the BlueZ path can tell a caller otherwise.
+        return true
     }
 
     private suspend fun broadcastChunked(data: ByteArray) {

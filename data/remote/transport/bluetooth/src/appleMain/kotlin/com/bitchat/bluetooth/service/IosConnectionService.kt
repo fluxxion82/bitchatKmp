@@ -67,7 +67,7 @@ class IosConnectionService(
         }
     }
 
-    override suspend fun broadcastPacket(packetData: ByteArray) {
+    override suspend fun broadcastPacket(packetData: ByteArray): Boolean {
         val readyClients = gattClient.getReadyDeviceAddresses()
         val (clientDevices, serverDevices) = deviceMutex.withLock {
             Pair(discoveredDevices.toList(), serverConnectedDevices.toList())
@@ -82,7 +82,7 @@ class IosConnectionService(
 
         if (totalDevices == 0) {
             logDebug("BROADCAST_WRITE", "No devices to write to")
-            return
+            return false
         }
 
         if (pendingClients.isNotEmpty()) {
@@ -111,6 +111,8 @@ class IosConnectionService(
                 }
             }
         }
+
+        return true
     }
 
     override fun hasRequiredPermissions(): Boolean {

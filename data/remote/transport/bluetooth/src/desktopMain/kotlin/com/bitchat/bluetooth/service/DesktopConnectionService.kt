@@ -30,8 +30,9 @@ class DesktopConnectionService : BluetoothConnectionService {
         println("DesktopConnectionService.clearConnections: Desktop BLE not implemented")
     }
 
-    override suspend fun broadcastPacket(packetData: ByteArray) {
+    override suspend fun broadcastPacket(packetData: ByteArray): Boolean {
         println("DesktopConnectionService.broadcastPacket: Desktop BLE not implemented (${packetData.size} bytes)")
+        return false
     }
 
     override fun hasRequiredPermissions(): Boolean {

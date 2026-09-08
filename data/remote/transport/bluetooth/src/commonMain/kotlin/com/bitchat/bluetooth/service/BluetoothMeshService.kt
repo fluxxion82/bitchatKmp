@@ -7,6 +7,7 @@ import com.bitchat.bluetooth.handler.MessageHandler
 import com.bitchat.bluetooth.handler.MessageHandlerDelegate
 import com.bitchat.bluetooth.manager.FragmentManager
 import com.bitchat.bluetooth.manager.HandshakeSupervisor
+import com.bitchat.bluetooth.manager.PeerLinkDirectory
 import com.bitchat.bluetooth.manager.PeerManager
 import com.bitchat.bluetooth.manager.PeerManagerDelegate
 import com.bitchat.bluetooth.manager.SecurityManager
@@ -37,6 +38,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.concurrent.Volatile
 import kotlin.time.Clock
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -59,13 +61,18 @@ class BluetoothMeshService(
 ) : ConnectionEstablishedCallback {
     val myPeerID: String = cryptoSigning.getIdentityFingerprint()
 
-    private val noiseEncryption = NoiseEncryptionFacade()
+    private val noiseEncryption = NoiseEncryptionFacade(myPeerID)
     private val peerManager = PeerManager()
     private val securityManager = SecurityManager(noiseEncryption, cryptoSigning, myPeerID)
     private val fragmentManager = FragmentManager()
     private val devicePeerLock = Mutex()
-    private val peerToDevices = mutableMapOf<String, MutableSet<String>>()
-    private val deviceToPeer = mutableMapOf<String, String>()
+    private val peerLinks = PeerLinkDirectory()
+
+    // A lock-free view of [peerLinks] for the connection service, which has to answer "is this
+    // address the peer I am already linked to?" while deciding whether to connect and cannot
+    // suspend to take devicePeerLock.
+    @Volatile
+    private var peerLinkSnapshot: Map<String, String> = emptyMap()
     private lateinit var messageHandler: MessageHandler
     private lateinit var packetProcessor: PacketProcessor
 
@@ -82,12 +89,32 @@ class BluetoothMeshService(
     private val handshakeSupervisor = HandshakeSupervisor()
     private val handshakeMutex = Mutex()
 
+    // Peers this node owes a handshake to but could not send one for, because no link could carry
+    // it. They are retried when a link to them comes up rather than on a timer. Guarded by
+    // handshakeMutex.
+    private val handshakesOwed = mutableSetOf<String>()
+
+    // When the handshake with a peer was last (re)started, so two link-up signals for the same
+    // link -- the inbound packet that binds the address and the outbound connection becoming
+    // ready, which the journal shows 315ms apart -- do not tear down a handshake that has only
+    // just been sent. Guarded by handshakeMutex.
+    private val handshakeStartedAt = mutableMapOf<String, Long>()
+
     init {
         setupComponents()
         setupDelegates()
         wireConnectionService()
 
         connectionService.setConnectionEstablishedCallback(this)
+
+        // Let the connection service recognise a peer it is already linked to when the peer turns
+        // up under a rotated address. Reads the lock-free snapshot: it is called while a connection
+        // decision is being taken and must not suspend.
+        connectionService.setPeerAddressLookup { deviceAddress ->
+            val snapshot = peerLinkSnapshot
+            val peerID = snapshot[deviceAddress] ?: return@setPeerAddressLookup emptySet()
+            snapshot.filterValues { it == peerID }.keys
+        }
 
         connectionService.setConnectionReadyCallback(object : ConnectionReadyCallback {
             override fun onConnectionReady(deviceAddress: String) {
@@ -128,7 +155,7 @@ class BluetoothMeshService(
             try {
                 val packet = BinaryProtocol.decode(data)
                 if (packet == null) {
-                    val mappedPeer = devicePeerLock.withLock { deviceToPeer[deviceAddress] }
+                    val mappedPeer = devicePeerLock.withLock { peerLinks.peerFor(deviceAddress) }
                     val preview = data.take(16).joinToString(" ") { byte ->
                         (byte.toInt() and 0xFF).toString(16).padStart(2, '0')
                     }
@@ -141,8 +168,11 @@ class BluetoothMeshService(
                 }
 
                 val peerID = packet.senderID.toHexString()
-                val isNewLink = recordPeerDeviceMapping(peerID, deviceAddress)
-                if (isNewLink) onPeerLinkRefreshed(peerID)
+                val binding = recordPeerDeviceMapping(peerID, deviceAddress)
+                if (binding.isNewLink) {
+                    releaseSupersededLinks(peerID, binding.superseded)
+                    onPeerLinkRefreshed(peerID)
+                }
 
                 val messageType = MessageType.fromValue(packet.type)?.name ?: "UNKNOWN"
                 val recipientHex = packet.recipientID?.toHexString() ?: "null"
@@ -231,12 +261,23 @@ class BluetoothMeshService(
             override fun onSessionEstablished(peerID: String) {
                 logInfo("BluetoothMeshService", "Noise session established with $peerID")
                 serviceScope.launch {
-                    handshakeMutex.withLock { handshakeSupervisor.reset(peerID) }
+                    handshakeMutex.withLock {
+                        handshakeSupervisor.reset(peerID)
+                        handshakesOwed.remove(peerID)
+                        handshakeStartedAt.remove(peerID)
+                    }
                     delegate?.onSessionEstablished(peerID)
                 }
             }
 
             override fun onPeerLeft(peerID: String) {
+                serviceScope.launch {
+                    handshakeMutex.withLock {
+                        handshakesOwed.remove(peerID)
+                        handshakeStartedAt.remove(peerID)
+                        handshakeSupervisor.reset(peerID)
+                    }
+                }
                 delegate?.didUpdatePeerList(peerManager.getAllPeers().map { it.id })
             }
 
@@ -281,7 +322,9 @@ class BluetoothMeshService(
             // A link we already know the peer behind has just come back up. If we bind the address
             // later (the usual case with rotating addresses) the same re-arm happens from
             // onPacketReceived instead.
-            devicePeerLock.withLock { deviceToPeer[deviceAddress] }?.let { onPeerLinkRefreshed(it) }
+            devicePeerLock.withLock { peerLinks.peerFor(deviceAddress) }?.let {
+                onPeerLinkRefreshed(it)
+            }
         }
     }
 
@@ -296,10 +339,41 @@ class BluetoothMeshService(
      */
     private fun onPeerLinkRefreshed(peerID: String) {
         serviceScope.launch {
-            handshakeMutex.withLock { handshakeSupervisor.reset(peerID) }
+            val now = Clock.System.now().toEpochMilliseconds()
+            val owed = handshakeMutex.withLock {
+                handshakeSupervisor.reset(peerID)
+                peerID in handshakesOwed
+            }
 
             if (noiseEncryption.hasEstablishedSession(peerID)) return@launch
-            if (!noiseEncryption.isHandshaking(peerID)) return@launch
+
+            if (!noiseEncryption.isHandshaking(peerID)) {
+                // Nothing in flight. A handshake we could not send for want of a link is owed and
+                // this is the moment to pay it; anything else is a peer we have no reason to talk
+                // to yet.
+                if (owed) {
+                    logInfo(
+                        "BluetoothMeshService",
+                        "Peer $peerID is reachable again; sending the handshake it is owed"
+                    )
+                    initiateNoiseHandshake(peerID)
+                }
+                return@launch
+            }
+
+            // One physical link produces two link-up signals in quick succession -- the inbound
+            // packet that binds the address, then the outbound connection becoming ready, 315ms
+            // apart in the device journal. Restarting on the second one throws away a handshake
+            // that has only just gone out over a link that is fine.
+            val startedAt = handshakeMutex.withLock { handshakeStartedAt[peerID] }
+            if (startedAt != null && now - startedAt < HANDSHAKE_RESTART_GRACE_MS) {
+                logDebug(
+                    "BluetoothMeshService",
+                    "Peer $peerID reappeared ${now - startedAt}ms after its handshake went out; " +
+                        "letting it stand"
+                )
+                return@launch
+            }
 
             logInfo(
                 "BluetoothMeshService",
@@ -352,6 +426,9 @@ class BluetoothMeshService(
             noiseEncryption.removeSession(peerID)
 
             if (peerManager.isPeerActive(peerID)) {
+                // initiateNoiseHandshake defers to the link coming up if nothing can carry it, so
+                // a peer that is "active" only because its announce is still inside the three
+                // minute window no longer costs an attempt.
                 initiateNoiseHandshake(peerID)
             } else {
                 logInfo(
@@ -506,23 +583,33 @@ class BluetoothMeshService(
     }
 
     private fun broadcastPacket(packet: BitchatPacket) {
-        serviceScope.launch {
-            try {
-                val packetTypeName = MessageType.entries.find { it.value == packet.type }?.name ?: "UNKNOWN"
-                logInfo("BROADCAST", "Broadcasting $packetTypeName (${packet.payload.size}B, TTL:${packet.ttl})")
+        serviceScope.launch { sendPacket(packet) }
+    }
 
-                val signedPacket = signPacket(packet)
-                val binaryData = BinaryProtocol.encode(signedPacket)
-                if (binaryData == null) {
-                    logError("BROADCAST", "Failed to encode $packetTypeName")
-                    return@launch
-                }
+    /**
+     * Sign, encode and hand [packet] to the link layer.
+     *
+     * @return true when at least one live link carried it. Callers that keep a retry budget need
+     *   this: a send into no links at all used to be indistinguishable from a delivered one, so a
+     *   Noise handshake spent all five of its attempts while `clients:0, servers:0` -- thirty such
+     *   broadcasts in one twelve-minute window of the device journal.
+     */
+    private suspend fun sendPacket(packet: BitchatPacket): Boolean {
+        return try {
+            val packetTypeName = MessageType.entries.find { it.value == packet.type }?.name ?: "UNKNOWN"
+            logInfo("BROADCAST", "Broadcasting $packetTypeName (${packet.payload.size}B, TTL:${packet.ttl})")
 
-                connectionService.broadcastPacket(binaryData)
-
-            } catch (e: Exception) {
-                logError("BROADCAST", "Broadcast error: ${e.message}")
+            val signedPacket = signPacket(packet)
+            val binaryData = BinaryProtocol.encode(signedPacket)
+            if (binaryData == null) {
+                logError("BROADCAST", "Failed to encode $packetTypeName")
+                return false
             }
+
+            connectionService.broadcastPacket(binaryData)
+        } catch (e: Exception) {
+            logError("BROADCAST", "Broadcast error: ${e.message}")
+            false
         }
     }
 
@@ -541,25 +628,46 @@ class BluetoothMeshService(
         }
     }
 
-    /** @return true when [peerID] has just been bound to a device address it did not hold before. */
-    private suspend fun recordPeerDeviceMapping(peerID: String, deviceAddress: String): Boolean {
-        var isNewDevice = false
-        devicePeerLock.withLock {
-            val existingPeer = deviceToPeer[deviceAddress]
-            if (existingPeer != peerID) {
-                isNewDevice = true
-                deviceToPeer[deviceAddress] = peerID
-            }
-            val devices = peerToDevices.getOrPut(peerID) { mutableSetOf() }
-            devices.add(deviceAddress)
+    /** Bind [deviceAddress] to [peerID], reporting whether this is a link the peer did not hold. */
+    private suspend fun recordPeerDeviceMapping(
+        peerID: String,
+        deviceAddress: String
+    ): PeerLinkDirectory.Binding {
+        val binding = devicePeerLock.withLock {
+            peerLinks.bind(peerID, deviceAddress).also { peerLinkSnapshot = peerLinks.snapshot() }
         }
-        if (isNewDevice) {
+        if (binding.isNewLink) {
             logDebug(
                 "BluetoothMeshService",
                 "Mapped device ${deviceAddress.take(8)} to peer ${peerID.take(8)}"
             )
         }
-        return isNewDevice
+        return binding
+    }
+
+    /**
+     * Drop the links a peer used before it turned up on [superseded]'s replacement.
+     *
+     * BLE allows one link between two devices, so an address a peer has moved off names either a
+     * link that is already gone or a duplicate of the one it is using now. Holding those open costs
+     * the controller a connection slot it does not have -- on the embedded radio that budget is
+     * what the churn was spending -- and keeps the GATT server notifying into nothing.
+     */
+    private suspend fun releaseSupersededLinks(peerID: String, superseded: List<String>) {
+        if (superseded.isEmpty()) return
+
+        logInfo(
+            "BluetoothMeshService",
+            "Peer ${peerID.take(8)} moved address; releasing ${superseded.size} superseded " +
+                "link(s): ${superseded.joinToString { it.take(8) }}"
+        )
+        superseded.forEach { address ->
+            devicePeerLock.withLock {
+                peerLinks.release(address)
+                peerLinkSnapshot = peerLinks.snapshot()
+            }
+            connectionService.disconnectDeviceByAddress(address)
+        }
     }
 
     fun getPeerNicknames(): Map<String, String> {
@@ -622,10 +730,29 @@ class BluetoothMeshService(
                     ttl = 3u
                 )
 
-                // Sign and broadcast
-                broadcastPacket(packet)
+                // An attempt only counts once a link has actually carried it. Counting a send
+                // into nothing burned the budget while the peer could not possibly answer, and by
+                // the time a link existed the peer had none left.
+                val delivered = sendPacket(packet)
+                if (!delivered) {
+                    logInfo(
+                        "BluetoothMeshService",
+                        "No live link can carry a handshake to $peerID; it will be sent when one " +
+                            "comes up"
+                    )
+                    // The session is dropped rather than left handshaking: initiateHandshake()
+                    // returns empty while one exists, so keeping it would block the retry that the
+                    // link coming up is about to ask for.
+                    noiseEncryption.removeSession(peerID)
+                    handshakeMutex.withLock { handshakesOwed.add(peerID) }
+                    return@launch
+                }
+
                 val attempts = handshakeMutex.withLock {
-                    handshakeSupervisor.recordAttempt(peerID, Clock.System.now().toEpochMilliseconds())
+                    val now = Clock.System.now().toEpochMilliseconds()
+                    handshakeSupervisor.recordAttempt(peerID, now)
+                    handshakeStartedAt[peerID] = now
+                    handshakesOwed.add(peerID)
                     handshakeSupervisor.attemptsFor(peerID)
                 }
 
@@ -695,45 +822,19 @@ class BluetoothMeshService(
             .map { it.id }
     }
 
-    fun getDeviceAddressForPeer(peerID: String): String? {
-        return if (devicePeerLock.tryLock()) {
-            try {
-                peerToDevices[peerID]?.firstOrNull()
-            } finally {
-                devicePeerLock.unlock()
-            }
-        } else {
-            peerToDevices[peerID]?.firstOrNull()
-        }
-    }
+    fun getDeviceAddressForPeer(peerID: String): String? =
+        peerLinkSnapshot.entries.firstOrNull { it.value == peerID }?.key
 
-    fun getDeviceAddressToPeerMapping(): Map<String, String> {
-        return if (devicePeerLock.tryLock()) {
-            try {
-                deviceToPeer.toMap()
-            } finally {
-                devicePeerLock.unlock()
-            }
-        } else {
-            deviceToPeer.toMap()
-        }
-    }
+    fun getDeviceAddressToPeerMapping(): Map<String, String> = peerLinkSnapshot
 
     fun printDeviceAddressesForPeers(): String {
-        return if (devicePeerLock.tryLock()) {
-            try {
-                if (deviceToPeer.isEmpty()) {
-                    "No device mappings yet"
-                } else {
-                    deviceToPeer.entries.joinToString(", ") { (device, peer) ->
-                        "${device.take(8)} -> ${peer.take(8)}"
-                    }
-                }
-            } finally {
-                devicePeerLock.unlock()
-            }
-        } else {
+        val mappings = peerLinkSnapshot
+        return if (mappings.isEmpty()) {
             "No device mappings yet"
+        } else {
+            mappings.entries.joinToString(", ") { (device, peer) ->
+                "${device.take(8)} -> ${peer.take(8)}"
+            }
         }
     }
 
@@ -883,6 +984,19 @@ class BluetoothMeshService(
     private fun calculateSHA256Fingerprint(publicKey: ByteArray): String {
         val hash = Cryptography.getDigestHash(publicKey)
         return hash.joinToString("") { it.toHexString() }
+    }
+
+    companion object {
+        /**
+         * How long a freshly sent handshake is protected from being restarted by a link-up signal.
+         *
+         * One physical link announces itself twice: the first packet over it binds the peer to the
+         * address, and the outbound connection then reports itself ready. The device journal shows
+         * the two 315ms apart, each restarting the handshake and discarding the one the other had
+         * just sent, so the peer's reply had no session left to arrive into. Two seconds covers
+         * that gap without holding on to a handshake whose link genuinely died.
+         */
+        private const val HANDSHAKE_RESTART_GRACE_MS = 2_000L
     }
 }
 
