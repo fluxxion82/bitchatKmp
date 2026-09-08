@@ -124,6 +124,17 @@ class MessageHandler(
             return
         }
 
+        // Only decrypt what is addressed to us. Handshakes have always been filtered this way
+        // (SecurityManager), but encrypted payloads were not, so a direct message this node was
+        // merely relaying from A to C was fed into our own session with A. It cannot authenticate,
+        // and the failed attempt leaves the session's receive nonce set to a counter from a
+        // conversation we are not part of -- after which every real message from A is refused as
+        // going backwards. In any mesh of three that silently and permanently kills direct
+        // messages, and a forged packet does the same on purpose.
+        if (!securityManager.isAddressedToUs(packet)) {
+            return
+        }
+
         handleEncryptedPayload(peerID, packet.payload, requeueOnFailure = true)
     }
 

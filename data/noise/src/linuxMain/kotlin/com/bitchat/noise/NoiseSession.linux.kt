@@ -483,13 +483,21 @@ actual class NoiseSession actual constructor(
             val ciphertextLength = data.size + macLength
 
             val ciphertextBuffer = ByteArray(ciphertextLength)
+                // noise-c encrypts in place and appends its 16-byte MAC, so the buffer it is given
+                // must have room for both. Pointing it at the plaintext array while advertising
+                // plaintext-plus-tag capacity had it write the tag past the end of that array, and
+                // then read the same 16 bytes back out again -- an out-of-bounds write and read on
+                // every outbound encrypted message. The ciphertext array was allocated and pinned
+                // for this and simply never used, so the plaintext is copied into it and encrypted
+                // there.
+            data.copyInto(ciphertextBuffer)
 
             memScoped {
                 val noiseBuffer = alloc<NoiseBuffer>()
 
-                data.usePinned { dataPinned ->
-                    ciphertextBuffer.usePinned { ciphertextPinned ->
-                        noiseBuffer.data = dataPinned.addressOf(0).reinterpret()
+                ciphertextBuffer.usePinned { ciphertextPinned ->
+                    run {
+                        noiseBuffer.data = ciphertextPinned.addressOf(0).reinterpret()
                         noiseBuffer.size = data.size.toULong()
                         noiseBuffer.max_size = ciphertextLength.toULong()
 
@@ -505,9 +513,12 @@ actual class NoiseSession actual constructor(
                             throw SessionError.EncryptionFailed
                         }
 
+                        // Encrypted in place; nothing to copy back. The size is checked because a
+                        // short result would leave stale plaintext in the tail of the buffer.
                         val encryptedSize = noiseBuffer.size.toInt()
-                        for (i in 0 until encryptedSize) {
-                            ciphertextBuffer[i] = noiseBuffer.data!![i].toInt().toByte()
+                        if (encryptedSize != ciphertextLength) {
+                            println("[NoiseSession-Linux] Unexpected ciphertext length $encryptedSize, wanted $ciphertextLength")
+                            throw SessionError.EncryptionFailed
                         }
                     }
                 }

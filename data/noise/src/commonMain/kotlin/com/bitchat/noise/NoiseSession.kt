@@ -74,17 +74,22 @@ sealed class SessionError(message: String, cause: Throwable? = null) : Exception
 
 object ReplayProtection {
     fun isValidNonce(receivedNonce: Long, highestReceivedNonce: Long, replayWindow: ByteArray): Boolean {
-        if (receivedNonce + NoiseConstants.REPLAY_WINDOW_SIZE <= highestReceivedNonce) {
-            return false  // Too old, outside window
-        }
+        if (receivedNonce < 0) return false
 
         if (receivedNonce > highestReceivedNonce) {
             return true  // Always accept newer nonces
         }
 
-        val offset = (highestReceivedNonce - receivedNonce).toInt()
-        val byteIndex = offset / 8
-        val bitIndex = offset % 8
+        // Kept as a Long until it is known to be in range. Narrowing first let a nonce far below the
+        // window wrap into a small offset and index the bitmap out of bounds, which a peer could
+        // trigger with one forged value.
+        val offset = highestReceivedNonce - receivedNonce
+        if (offset >= NoiseConstants.REPLAY_WINDOW_SIZE) {
+            return false  // Too old, outside window
+        }
+
+        val byteIndex = (offset / 8).toInt()
+        val bitIndex = (offset % 8).toInt()
 
         return (replayWindow[byteIndex].toInt() and (1 shl bitIndex)) == 0  // Not yet seen
     }
@@ -94,34 +99,40 @@ object ReplayProtection {
         val newReplayWindow = replayWindow.copyOf()
 
         if (receivedNonce > highestReceivedNonce) {
-            val shift = (receivedNonce - highestReceivedNonce).toInt()
+            val shift = receivedNonce - highestReceivedNonce
 
             if (shift >= NoiseConstants.REPLAY_WINDOW_SIZE) {
-                // Clear entire window - shift is too large
+                // Everything remembered is now older than the window.
                 newReplayWindow.fill(0)
             } else {
-                // Shift window right by `shift` bits
-                for (i in (NoiseConstants.REPLAY_WINDOW_BYTES - 1) downTo 0) {
-                    val sourceByteIndex = i - shift / 8
-                    var newByte = 0
+                // A nonce is recorded at bit offset (highest - nonce), so advancing the highest by
+                // `shift` moves every remembered nonce that many offsets FURTHER from the front.
+                // Shifting the other way -- as this did -- carried them out of the window instead of
+                // along it, and the bitmap forgot nonce 0 as soon as nonce 1 arrived, which made
+                // every message replayable one packet after it was sent.
+                val byteShift = (shift / 8).toInt()
+                val bitShift = (shift % 8).toInt()
 
-                    if (sourceByteIndex >= 0) {
-                        newByte = (newReplayWindow[sourceByteIndex].toInt() and 0xFF) ushr (shift % 8)
-                        if (sourceByteIndex > 0 && shift % 8 != 0) {
-                            newByte = newByte or ((newReplayWindow[sourceByteIndex - 1].toInt() and 0xFF) shl (8 - shift % 8))
+                for (i in NoiseConstants.REPLAY_WINDOW_BYTES - 1 downTo 0) {
+                    val source = i - byteShift
+                    var moved = 0
+                    if (source >= 0) {
+                        moved = (newReplayWindow[source].toInt() and 0xFF) shl bitShift
+                        if (bitShift != 0 && source - 1 >= 0) {
+                            moved = moved or ((newReplayWindow[source - 1].toInt() and 0xFF) ushr (8 - bitShift))
                         }
                     }
-
-                    newReplayWindow[i] = (newByte and 0xFF).toByte()
+                    newReplayWindow[i] = (moved and 0xFF).toByte()
                 }
             }
 
             newHighestReceivedNonce = receivedNonce
-            newReplayWindow[0] = (newReplayWindow[0].toInt() or 1).toByte()  // Mark most recent bit as seen
+            newReplayWindow[0] = (newReplayWindow[0].toInt() or 1).toByte()  // Offset 0 is the new highest
         } else {
-            val offset = (highestReceivedNonce - receivedNonce).toInt()
-            val byteIndex = offset / 8
-            val bitIndex = offset % 8
+            val offset = highestReceivedNonce - receivedNonce
+            if (offset >= NoiseConstants.REPLAY_WINDOW_SIZE) return Pair(newHighestReceivedNonce, newReplayWindow)
+            val byteIndex = (offset / 8).toInt()
+            val bitIndex = (offset % 8).toInt()
             newReplayWindow[byteIndex] = (newReplayWindow[byteIndex].toInt() or (1 shl bitIndex)).toByte()
         }
 

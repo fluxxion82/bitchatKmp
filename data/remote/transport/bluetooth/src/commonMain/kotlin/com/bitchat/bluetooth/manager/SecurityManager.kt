@@ -180,6 +180,17 @@ class SecurityManager(
     /**
      * Convert hex string to bytes
      */
+    /**
+     * Whether [packet] is addressed to this node, or to everyone.
+     *
+     * Handshake handling has always applied this; encrypted payloads did not, which is how a direct
+     * message this node was only relaying ended up being fed to our own session with its sender.
+     */
+    fun isAddressedToUs(packet: BitchatPacket): Boolean {
+        val recipient = packet.recipientID ?: return true
+        return recipient.contentEquals(myPeerIDBytes)
+    }
+
     private fun hexToBytes(hex: String): ByteArray {
         return hex.chunked(2)
             .map { it.toInt(16).toByte() }
