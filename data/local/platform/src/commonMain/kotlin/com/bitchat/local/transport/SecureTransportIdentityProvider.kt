@@ -1,6 +1,8 @@
 package com.bitchat.local.transport
 
+import com.bitchat.local.prefs.PreferenceStoreState
 import com.bitchat.local.prefs.SecureIdentityPreferences
+import com.bitchat.transport.IdentityStoreState
 import com.bitchat.transport.TransportIdentityProvider
 
 class SecureTransportIdentityProvider(
@@ -25,5 +27,11 @@ class SecureTransportIdentityProvider(
 
     override fun clearAll() {
         securePrefs.clearIdentityData()
+    }
+
+    override fun storeState(): IdentityStoreState = when (securePrefs.storeState()) {
+        PreferenceStoreState.FIRST_RUN -> IdentityStoreState.FIRST_RUN
+        PreferenceStoreState.POPULATED -> IdentityStoreState.POPULATED
+        PreferenceStoreState.UNREADABLE -> IdentityStoreState.UNREADABLE
     }
 }

@@ -1,6 +1,8 @@
 package com.bitchat.local.prefs.impl
 
 import com.bitchat.local.prefs.EncryptionSettingsFactory
+import com.bitchat.local.prefs.HealthReportingSettings
+import com.bitchat.local.prefs.PreferenceStoreState
 import com.bitchat.local.prefs.SecureIdentityPreferences
 import com.bitchat.local.util.toHexString
 import com.russhwolf.settings.contains
@@ -164,6 +166,13 @@ class LocalSecureIdentityPreferences(
     override fun hasSecureValue(key: String): Boolean {
         return settings.contains(key)
     }
+
+    override fun storeState(): PreferenceStoreState = PreferenceStoreState.of(
+        // Only the file-backed embedded store can hand back a half-loaded store; the Keychain
+        // and EncryptedSharedPreferences backends throw instead, so they are always intact.
+        damage = (settings as? HealthReportingSettings)?.storeDamage.orEmpty(),
+        isEmpty = settings.keys.isEmpty(),
+    )
 
     override fun clearSecureValues(vararg keys: String) {
         keys.forEach { key ->

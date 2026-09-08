@@ -17,4 +17,12 @@ interface SecureIdentityPreferences {
     fun removeSecureValue(key: String)
     fun hasSecureValue(key: String): Boolean
     fun clearSecureValues(vararg keys: String)
+
+    /**
+     * How the backing store presented itself when it was opened.
+     *
+     * [getSecureValue] returns null both for a key that was never written and for a key whose
+     * store failed to load. Callers that would create the missing key must tell those apart.
+     */
+    fun storeState(): PreferenceStoreState
 }

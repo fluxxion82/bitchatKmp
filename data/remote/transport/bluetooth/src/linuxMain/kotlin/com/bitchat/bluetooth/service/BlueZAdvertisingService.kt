@@ -401,9 +401,16 @@ class BlueZAdvertisingService(
                     </node>
                 """.trimIndent()
                 val reply = dbus_message_new_method_return(message) ?: return@memScoped false
+                // dbus_message_append_args takes the ADDRESS of the value for every basic type,
+                // so a string argument has to be a char**, exactly as in the appends above and
+                // in the matching dbus_message_get_args calls. Passing the char* itself made
+                // libdbus read the first eight bytes of the XML as a pointer and dereference
+                // it, which is a wild read on any introspection of the advertisement object.
+                val xmlVar = alloc<CPointerVar<ByteVar>>()
+                xmlVar.value = xml.cstr.ptr
                 dbus_message_append_args(
                     reply,
-                    DBUS_TYPE_STRING.toInt(), xml.cstr.ptr,
+                    DBUS_TYPE_STRING.toInt(), xmlVar.ptr,
                     DBUS_TYPE_INVALID
                 )
                 dbus_connection_send(dbusConnection, reply, null)

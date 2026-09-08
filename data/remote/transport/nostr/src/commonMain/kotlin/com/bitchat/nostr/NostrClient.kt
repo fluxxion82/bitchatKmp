@@ -422,9 +422,23 @@ class NostrClient(
             return try {
                 NostrIdentity.fromPrivateKey(existingKey)
             } catch (e: Exception) {
-                // Log.e(TAG, "Failed to create identity from stored key: ${e.message}")
+                // A key IS stored, it just did not parse. Generating a replacement here would
+                // write over it, so this path stays closed and Nostr is simply unavailable.
+                println("NostrClient: stored Nostr key is unusable (${e.message}); not replacing it")
                 null
             }
+        }
+
+        // No key came back. That is only a first run if the store itself is sound - see
+        // NostrIdentityMintPolicy for why the difference matters.
+        when (val decision = NostrIdentityMintPolicy.decide(identityProvider.storeState(), NOSTR_PRIVATE_KEY)) {
+            is MintDecision.Refuse -> {
+                println("NostrClient: ${decision.reason}")
+                return null
+            }
+
+            is MintDecision.Allowed.Noteworthy -> println("NostrClient: ${decision.reason}")
+            MintDecision.Allowed.FirstRun -> Unit
         }
 
         // Generate new identity
@@ -517,6 +531,16 @@ class NostrClient(
             if (existingSeed != null) {
 
                 return Base64.decode(existingSeed) //android.util.Base64.decode(existingSeed, android.util.Base64.DEFAULT)
+            }
+
+            // Same rule as the Nostr private key: a seed that could not be read must not be
+            // replaced, because every geohash identity on this device derives from it.
+            val decision = NostrIdentityMintPolicy.decide(identityProvider.storeState(), DEVICE_SEED_KEY)
+            if (decision is MintDecision.Refuse) {
+                error("NostrClient: ${decision.reason}")
+            }
+            if (decision is MintDecision.Allowed.Noteworthy) {
+                println("NostrClient: ${decision.reason}")
             }
 
             // Generate new seed
