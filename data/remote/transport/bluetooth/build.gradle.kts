@@ -101,6 +101,15 @@ kotlin {
                 implementation(libs.jna)
             }
         }
+        // JVM home for the tests of the pure logic in commonMain: the handshake deadline and the
+        // GATT-server client registry. Running them here keeps them off the Android toolchain.
+        val desktopTest by getting {
+            dependencies {
+                implementation(libs.kotlin.test)
+                implementation(libs.kotlin.test.junit)
+                implementation(libs.kotlinx.coroutines.test)
+            }
+        }
         val androidUnitTest by getting {
             dependencies {
                 implementation(libs.kotlin.test)

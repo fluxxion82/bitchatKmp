@@ -3,6 +3,9 @@ package com.bitchat.bluetooth.service
 import cnames.structs.DBusConnection
 import cnames.structs.DBusMessage
 import cnames.structs.DBusPendingCall
+import com.bitchat.bluetooth.manager.BlueZObjectPath
+import com.bitchat.bluetooth.manager.BroadcastTargets
+import com.bitchat.bluetooth.manager.GattClientRegistry
 import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
@@ -54,6 +57,17 @@ class BlueZGattServerService(
         private const val PROPERTIES_IFACE = "org.freedesktop.DBus.Properties"
         private const val INTROSPECTABLE_IFACE = "org.freedesktop.DBus.Introspectable"
         private const val ADAPTER_PATH = "/org/bluez/hci0"
+
+        // BlueZ never calls us when a central goes away: the only inbound traffic on our own
+        // object tree is WriteValue. These two match rules are how the peripheral role learns that
+        // a link is gone -- a device turning Connected=false, and BlueZ dropping the device object
+        // altogether, which is what an Android phone rotating its address looks like.
+        private const val DEVICE_PROPERTIES_MATCH =
+            "type='signal',sender='org.bluez',interface='org.freedesktop.DBus.Properties'," +
+                "member='PropertiesChanged',arg0='org.bluez.Device1'"
+        private const val INTERFACES_REMOVED_MATCH =
+            "type='signal',sender='org.bluez'," +
+                "interface='org.freedesktop.DBus.ObjectManager',member='InterfacesRemoved'"
         private const val APP_PATH = "/org/bitchat/gatt"
         private const val SERVICE_PATH = "/org/bitchat/gatt/service0"
         private const val CHAR_PATH = "/org/bitchat/gatt/service0/char0"
@@ -154,7 +168,12 @@ class BlueZGattServerService(
     private val dispatchRunning = AtomicInt(0)
 
     // Connected clients tracked by device address
-    private val connectedClients = mutableSetOf<String>()
+    private val connectedClients = GattClientRegistry()
+
+    // The connection the signal match rules were installed on, or null when they are not
+    // installed. Removal is gated on it and it is cleared before the call, so a second teardown
+    // is a no-op rather than a request the daemon has to reject.
+    private var matchConnection: CPointer<DBusConnection>? = null
 
     // Reassembly buffers for chunked incoming data
     private data class ReassemblyBuffer(
@@ -218,24 +237,57 @@ class BlueZGattServerService(
             return false
         }
 
-        if (!connectedClients.contains(deviceAddress)) {
-            logDebug(TAG, "Client $deviceAddress not connected, skipping notify")
+        if (!connectedClients.isConnected(deviceAddress)) {
+            logError(TAG, "Notify to ${deviceAddress.take(8)} failed: no live link to that client")
             return false
         }
 
+        return emitNotification(deviceAddress.take(8), data)
+    }
+
+    /**
+     * Emit one notification to every subscribed central.
+     *
+     * The `PropertiesChanged` signal carries the characteristic's object path, which names no
+     * device, so a single emission reaches every subscriber. Emitting it once per registry entry
+     * therefore sent N copies of every packet to everyone, which is where the duplicated
+     * `Packet received` lines in the device journal came from.
+     *
+     * @return false when there is no live link at all, so a caller can tell a delivered broadcast
+     *   from one that went nowhere.
+     */
+    suspend fun notifySubscribers(data: ByteArray): Boolean {
+        if (!isActive) {
+            logError(TAG, "Cannot notify - server not active")
+            return false
+        }
+
+        val clientCount = connectedClients.size()
+        if (clientCount == 0) {
+            logError(TAG, "Notify of ${data.size}B failed: no client holds a live link")
+            return false
+        }
+
+        return emitNotification("$clientCount client(s)", data)
+    }
+
+    private suspend fun emitNotification(target: String, data: ByteArray): Boolean {
         // Use chunking for large payloads
         return if (data.size > MAX_CHUNK_SIZE) {
-            notifyChunked(deviceAddress, data)
+            notifyChunked(target, data)
         } else {
-            notifySingle(deviceAddress, data)
+            notifySingle(target, data)
         }
     }
 
-    private fun notifySingle(deviceAddress: String, data: ByteArray): Boolean {
-        // In a full implementation, this would use D-Bus PropertiesChanged signal
-        // to notify the characteristic value change to subscribed clients.
-        // For now, we store it and it will be sent when the client reads.
-        logDebug(TAG, "Notify ${data.size}B to ${deviceAddress.take(8)}")
+    /**
+     * Emit the characteristic's value as a `PropertiesChanged` signal.
+     *
+     * [target] is a label for the log only: the signal is addressed to the characteristic's object
+     * path, which is device-agnostic, so this reaches every subscribed central regardless.
+     */
+    private fun notifySingle(target: String, data: ByteArray): Boolean {
+        logDebug(TAG, "Notify ${data.size}B to $target")
 
         val connection = dbusConnection ?: return false
 
@@ -320,13 +372,13 @@ class BlueZGattServerService(
         }
     }
 
-    private suspend fun notifyChunked(deviceAddress: String, data: ByteArray): Boolean {
+    private suspend fun notifyChunked(target: String, data: ByteArray): Boolean {
         val totalSize = data.size
         var offset = 0
         var chunkNumber = 0
         val totalChunks = (totalSize + MAX_CHUNK_SIZE - 1) / MAX_CHUNK_SIZE
 
-        logInfo(TAG, "Chunking $totalSize bytes into $totalChunks chunks for ${deviceAddress.take(8)}")
+        logInfo(TAG, "Chunking $totalSize bytes into $totalChunks chunks for $target")
 
         while (offset < totalSize) {
             val remaining = totalSize - offset
@@ -356,7 +408,7 @@ class BlueZGattServerService(
                 }
             }
 
-            if (!notifySingle(deviceAddress, chunk)) {
+            if (!notifySingle(target, chunk)) {
                 logError(TAG, "Failed to notify chunk ${chunkNumber + 1}/$totalChunks")
                 return false
             }
@@ -369,7 +421,7 @@ class BlueZGattServerService(
             }
         }
 
-        logInfo(TAG, "Successfully notified $totalChunks chunks ($totalSize bytes) to ${deviceAddress.take(8)}")
+        logInfo(TAG, "Successfully notified $totalChunks chunks ($totalSize bytes) to $target")
         return true
     }
 
@@ -417,6 +469,70 @@ class BlueZGattServerService(
 
             else -> delegate?.onDataReceived(value, deviceAddress)
         }
+    }
+
+    /**
+     * Ask the bus to route us the two signals that say a central has gone away.
+     *
+     * Without them nothing ever calls [onClientDisconnected]: the registry only grew, so an
+     * Android phone rotating its resolvable private address left one dead entry behind per
+     * rotation and handshakes were emitted into links that had been down for a minute.
+     *
+     * A failure here is logged and tolerated. The GATT server is still useful without pruning --
+     * that is exactly the behaviour that shipped -- and refusing to start would trade a
+     * degradation for an outage.
+     */
+    private fun addDeviceSignalMatches(connection: CPointer<DBusConnection>) {
+        if (matchConnection != null) {
+            logDebug(TAG, "Device signal matches already installed")
+            return
+        }
+
+        val installed = mutableListOf<String>()
+        memScoped {
+            listOf(DEVICE_PROPERTIES_MATCH, INTERFACES_REMOVED_MATCH).forEach { rule ->
+                val error = alloc<DBusError>()
+                dbus_error_init(error.ptr)
+                dbus_bus_add_match(connection, rule, error.ptr)
+                if (dbus_error_is_set(error.ptr) != 0u) {
+                    logError(TAG, "Failed to watch device signals: ${error.message?.toKString()}")
+                    dbus_error_free(error.ptr)
+                } else {
+                    installed.add(rule)
+                }
+            }
+        }
+
+        if (installed.isEmpty()) {
+            logError(TAG, "No device signal match installed; stale clients will not be pruned")
+            return
+        }
+
+        matchConnection = connection
+        dbus_connection_flush(connection)
+        logInfo(TAG, "Watching BlueZ device signals (${installed.size} match rule(s))")
+    }
+
+    /**
+     * Drop the match rules, against the connection they were installed on and exactly once. The
+     * field is cleared before the calls so a second teardown does nothing at all.
+     */
+    private fun removeDeviceSignalMatches() {
+        val connection = matchConnection ?: return
+        matchConnection = null
+
+        memScoped {
+            listOf(DEVICE_PROPERTIES_MATCH, INTERFACES_REMOVED_MATCH).forEach { rule ->
+                val error = alloc<DBusError>()
+                dbus_error_init(error.ptr)
+                dbus_bus_remove_match(connection, rule, error.ptr)
+                if (dbus_error_is_set(error.ptr) != 0u) {
+                    logDebug(TAG, "Removing a device signal match failed: ${error.message?.toKString()}")
+                    dbus_error_free(error.ptr)
+                }
+            }
+        }
+        logDebug(TAG, "Stopped watching BlueZ device signals")
     }
 
     private fun initDbusConnection(): Boolean {
@@ -638,6 +754,8 @@ class BlueZGattServerService(
             return false
         }
 
+        addDeviceSignalMatches(connection)
+
         objectsRegistered = true
 
         // NOTE: Do NOT start dispatch loop here!
@@ -712,6 +830,8 @@ class BlueZGattServerService(
     private fun unregisterDbusObjects(connection: CPointer<DBusConnection>) {
         // Stop dispatch loop first
         stopDbusDispatchLoop()
+
+        removeDeviceSignalMatches()
 
         if (objectsRegistered) {
             dbus_connection_unregister_object_path(connection, CHAR_PATH)
@@ -1034,7 +1154,7 @@ class BlueZGattServerService(
                                     dbus_message_iter_get_basic(variantIter.ptr, pathPtr.ptr)
                                     val path = pathPtr.value?.toKString() ?: ""
                                     // Extract MAC from path like /org/bluez/hci0/dev_XX_XX_XX_XX_XX_XX
-                                    deviceAddress = path.substringAfterLast("dev_").replace("_", ":")
+                                    deviceAddress = BlueZObjectPath.deviceAddress(path) ?: deviceAddress
                                 }
                             }
                         }
@@ -1203,7 +1323,7 @@ class BlueZGattServerService(
      * Called when a client connects (from advertising service or connection tracking).
      */
     internal fun onClientConnected(deviceAddress: String) {
-        if (connectedClients.add(deviceAddress)) {
+        if (connectedClients.onConnected(deviceAddress)) {
             logInfo(TAG, "Client connected: $deviceAddress")
             delegate?.onClientConnected(deviceAddress)
         }
@@ -1213,7 +1333,7 @@ class BlueZGattServerService(
      * Called when a client disconnects.
      */
     internal fun onClientDisconnected(deviceAddress: String) {
-        if (connectedClients.remove(deviceAddress)) {
+        if (connectedClients.onDisconnected(deviceAddress)) {
             logInfo(TAG, "Client disconnected: $deviceAddress")
             reassemblyBuffers.remove(deviceAddress)
             delegate?.onClientDisconnected(deviceAddress)
@@ -1223,7 +1343,17 @@ class BlueZGattServerService(
     /**
      * Get list of connected client addresses.
      */
-    fun getConnectedClients(): Set<String> = connectedClients.toSet()
+    fun getConnectedClients(): Set<String> = connectedClients.addresses()
+
+    /** True while [deviceAddress] holds a link to this server. */
+    fun isClientConnected(deviceAddress: String): Boolean = connectedClients.isConnected(deviceAddress)
+
+    /** True when at least one central holds a link, i.e. there is anything a signal could prune. */
+    internal fun hasConnectedClients(): Boolean = !connectedClients.isEmpty()
+
+    /** Which of [addresses] still hold a link here, and which are stale entries to drop. */
+    fun partitionBroadcastTargets(addresses: List<String>): BroadcastTargets =
+        connectedClients.partitionTargets(addresses)
 }
 
 /**
@@ -1241,6 +1371,13 @@ private fun dbusMessageFilter(
     }
 
     val server = gattServerInstance ?: return DBusHandlerResult.DBUS_HANDLER_RESULT_NOT_YET_HANDLED
+
+    // Signals are observed, never consumed: other filters on this shared system-bus connection
+    // (the advertising service's, for one) must still see them.
+    if (dbus_message_get_type(message) == DBUS_MESSAGE_TYPE_SIGNAL) {
+        observeDeviceSignal(message, server)
+        return DBusHandlerResult.DBUS_HANDLER_RESULT_NOT_YET_HANDLED
+    }
 
     // Only handle method calls
     if (dbus_message_get_type(message) != DBUS_MESSAGE_TYPE_METHOD_CALL) {
@@ -1292,6 +1429,113 @@ private fun dbusMessageFilter(
     } else {
         DBusHandlerResult.DBUS_HANDLER_RESULT_NOT_YET_HANDLED
     }
+}
+
+/**
+ * Turn a BlueZ signal that says a central went away into [BlueZGattServerService.onClientDisconnected].
+ *
+ * Two shapes count, and BlueZ emits them in either order depending on why the link ended:
+ *  - `org.bluez.Device1` reporting `Connected = false` for a device we hold, and
+ *  - the device object being dropped entirely (`InterfacesRemoved` naming `org.bluez.Device1`),
+ *    which is what an Android phone rotating its resolvable private address looks like.
+ *
+ * Dropping a client twice is harmless: the registry reports whether anything was removed and only
+ * then tells the delegate.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun observeDeviceSignal(message: CPointer<DBusMessage>, server: BlueZGattServerService) {
+    // The Device1 match also carries every RSSI update BlueZ emits while scanning. With no client
+    // registered there is nothing any of them could prune, which is the common case.
+    if (!server.hasConnectedClients()) return
+
+    val iface = dbus_message_get_interface(message)?.toKString() ?: return
+    val member = dbus_message_get_member(message)?.toKString() ?: return
+
+    when {
+        iface == "org.freedesktop.DBus.Properties" && member == "PropertiesChanged" -> {
+            val path = dbus_message_get_path(message)?.toKString() ?: return
+            val address = BlueZObjectPath.deviceAddress(path) ?: return
+            if (readDeviceDisconnected(message)) server.onClientDisconnected(address)
+        }
+
+        iface == "org.freedesktop.DBus.ObjectManager" && member == "InterfacesRemoved" -> {
+            val path = readRemovedDevicePath(message) ?: return
+            val address = BlueZObjectPath.deviceAddress(path) ?: return
+            server.onClientDisconnected(address)
+        }
+    }
+}
+
+/**
+ * True when this `PropertiesChanged` is `org.bluez.Device1` reporting `Connected = false`.
+ * Signature: `s` interface name, `a{sv}` changed properties, `as` invalidated properties.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun readDeviceDisconnected(message: CPointer<DBusMessage>): Boolean = memScoped {
+    val iter = alloc<DBusMessageIter>()
+    if (dbus_message_iter_init(message, iter.ptr) == 0u) return@memScoped false
+
+    if (dbus_message_iter_get_arg_type(iter.ptr) != DBUS_TYPE_STRING.toInt()) return@memScoped false
+    val ifacePtr = alloc<CPointerVar<ByteVar>>()
+    dbus_message_iter_get_basic(iter.ptr, ifacePtr.ptr)
+    if (ifacePtr.value?.toKString() != "org.bluez.Device1") return@memScoped false
+
+    dbus_message_iter_next(iter.ptr)
+    if (dbus_message_iter_get_arg_type(iter.ptr) != DBUS_TYPE_ARRAY.toInt()) return@memScoped false
+
+    val changedIter = alloc<DBusMessageIter>()
+    dbus_message_iter_recurse(iter.ptr, changedIter.ptr)
+    while (dbus_message_iter_get_arg_type(changedIter.ptr) == DBUS_TYPE_DICT_ENTRY.toInt()) {
+        val entryIter = alloc<DBusMessageIter>()
+        dbus_message_iter_recurse(changedIter.ptr, entryIter.ptr)
+
+        if (dbus_message_iter_get_arg_type(entryIter.ptr) == DBUS_TYPE_STRING.toInt()) {
+            val keyPtr = alloc<CPointerVar<ByteVar>>()
+            dbus_message_iter_get_basic(entryIter.ptr, keyPtr.ptr)
+            if (keyPtr.value?.toKString() == "Connected") {
+                dbus_message_iter_next(entryIter.ptr)
+                if (dbus_message_iter_get_arg_type(entryIter.ptr) == DBUS_TYPE_VARIANT.toInt()) {
+                    val variantIter = alloc<DBusMessageIter>()
+                    dbus_message_iter_recurse(entryIter.ptr, variantIter.ptr)
+                    if (dbus_message_iter_get_arg_type(variantIter.ptr) == DBUS_TYPE_BOOLEAN.toInt()) {
+                        val connected = alloc<UIntVar>()
+                        dbus_message_iter_get_basic(variantIter.ptr, connected.ptr)
+                        return@memScoped connected.value == 0u
+                    }
+                }
+            }
+        }
+        dbus_message_iter_next(changedIter.ptr)
+    }
+    false
+}
+
+/**
+ * The object path of an `InterfacesRemoved` that dropped `org.bluez.Device1`, or null.
+ * Signature: `o` object path, `as` the interfaces that went away.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun readRemovedDevicePath(message: CPointer<DBusMessage>): String? = memScoped {
+    val iter = alloc<DBusMessageIter>()
+    if (dbus_message_iter_init(message, iter.ptr) == 0u) return@memScoped null
+
+    if (dbus_message_iter_get_arg_type(iter.ptr) != DBUS_TYPE_OBJECT_PATH.toInt()) return@memScoped null
+    val pathPtr = alloc<CPointerVar<ByteVar>>()
+    dbus_message_iter_get_basic(iter.ptr, pathPtr.ptr)
+    val path = pathPtr.value?.toKString() ?: return@memScoped null
+
+    dbus_message_iter_next(iter.ptr)
+    if (dbus_message_iter_get_arg_type(iter.ptr) != DBUS_TYPE_ARRAY.toInt()) return@memScoped null
+
+    val ifacesIter = alloc<DBusMessageIter>()
+    dbus_message_iter_recurse(iter.ptr, ifacesIter.ptr)
+    while (dbus_message_iter_get_arg_type(ifacesIter.ptr) == DBUS_TYPE_STRING.toInt()) {
+        val ifacePtr = alloc<CPointerVar<ByteVar>>()
+        dbus_message_iter_get_basic(ifacesIter.ptr, ifacePtr.ptr)
+        if (ifacePtr.value?.toKString() == "org.bluez.Device1") return@memScoped path
+        dbus_message_iter_next(ifacesIter.ptr)
+    }
+    null
 }
 
 /**

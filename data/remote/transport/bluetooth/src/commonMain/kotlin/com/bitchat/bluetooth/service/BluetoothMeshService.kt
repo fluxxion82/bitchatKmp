@@ -6,6 +6,7 @@ import com.bitchat.bluetooth.facade.NoiseEncryptionFacade
 import com.bitchat.bluetooth.handler.MessageHandler
 import com.bitchat.bluetooth.handler.MessageHandlerDelegate
 import com.bitchat.bluetooth.manager.FragmentManager
+import com.bitchat.bluetooth.manager.HandshakeSupervisor
 import com.bitchat.bluetooth.manager.PeerManager
 import com.bitchat.bluetooth.manager.PeerManagerDelegate
 import com.bitchat.bluetooth.manager.SecurityManager
@@ -76,6 +77,11 @@ class BluetoothMeshService(
     private val pendingAnnounces = mutableSetOf<String>()
     private val announceMutex = Mutex()
 
+    // Deadline and retry budget for handshakes still in flight. Guarded by handshakeMutex
+    // because the sweeper and initiateNoiseHandshake both run on serviceScope's dispatcher.
+    private val handshakeSupervisor = HandshakeSupervisor()
+    private val handshakeMutex = Mutex()
+
     init {
         setupComponents()
         setupDelegates()
@@ -135,7 +141,8 @@ class BluetoothMeshService(
                 }
 
                 val peerID = packet.senderID.toHexString()
-                recordPeerDeviceMapping(peerID, deviceAddress)
+                val isNewLink = recordPeerDeviceMapping(peerID, deviceAddress)
+                if (isNewLink) onPeerLinkRefreshed(peerID)
 
                 val messageType = MessageType.fromValue(packet.type)?.name ?: "UNKNOWN"
                 val recipientHex = packet.recipientID?.toHexString() ?: "null"
@@ -224,6 +231,7 @@ class BluetoothMeshService(
             override fun onSessionEstablished(peerID: String) {
                 logInfo("BluetoothMeshService", "Noise session established with $peerID")
                 serviceScope.launch {
+                    handshakeMutex.withLock { handshakeSupervisor.reset(peerID) }
                     delegate?.onSessionEstablished(peerID)
                 }
             }
@@ -269,6 +277,101 @@ class BluetoothMeshService(
                 logInfo("BluetoothMeshService", "Connection ready: $deviceAddress; sending announce")
                 sendBroadcastAnnounce()
             }
+
+            // A link we already know the peer behind has just come back up. If we bind the address
+            // later (the usual case with rotating addresses) the same re-arm happens from
+            // onPacketReceived instead.
+            devicePeerLock.withLock { deviceToPeer[deviceAddress] }?.let { onPeerLinkRefreshed(it) }
+        }
+    }
+
+    /**
+     * A peer has reappeared on a link we know is live — either a fresh address bound to it by an
+     * incoming packet, or a reconnect on an address we had already mapped.
+     *
+     * A handshake still in flight at this point cannot complete: our message went out over the
+     * link that has just been replaced, and the peer never saw it. Discard the stalled session and
+     * start over, and give the peer a fresh retry budget, since its history says nothing about a
+     * link it did not have.
+     */
+    private fun onPeerLinkRefreshed(peerID: String) {
+        serviceScope.launch {
+            handshakeMutex.withLock { handshakeSupervisor.reset(peerID) }
+
+            if (noiseEncryption.hasEstablishedSession(peerID)) return@launch
+            if (!noiseEncryption.isHandshaking(peerID)) return@launch
+
+            logInfo(
+                "BluetoothMeshService",
+                "Peer $peerID reappeared with a handshake in flight; restarting it on the new link"
+            )
+            noiseEncryption.removeSession(peerID)
+            initiateNoiseHandshake(peerID)
+        }
+    }
+
+    /**
+     * Abandon handshakes that have been in flight past the deadline and, while the peer still
+     * looks reachable and the retry budget allows, start a fresh one.
+     *
+     * Without this a single lost handshake packet is permanent: [NoiseEncryptionFacade
+     * .initiateHandshake] returns empty while a session is handshaking, so nothing can ever
+     * replace it and every later direct message to that peer is queued and never sent.
+     *
+     * A session that is past the deadline but is still inside its retry backoff is deliberately
+     * left in place: it is the marker that says a handshake is owed, and dropping it early would
+     * lose the only record that the retry is still coming.
+     */
+    internal suspend fun sweepStalledHandshakes(now: Long) {
+        val inFlight = noiseEncryption.handshakesInFlight()
+        if (inFlight.isEmpty()) return
+
+        inFlight.forEach { (peerID, startedAt) ->
+            if (!handshakeSupervisor.isExpired(startedAt, now)) return@forEach
+
+            val exhausted = handshakeMutex.withLock { handshakeSupervisor.isExhausted(peerID) }
+            if (exhausted) {
+                logInfo(
+                    "BluetoothMeshService",
+                    "Noise handshake with $peerID stalled for ${now - startedAt}ms and the retry " +
+                        "budget is spent; discarding the session and giving up until the peer returns"
+                )
+                noiseEncryption.removeSession(peerID)
+                return@forEach
+            }
+
+            val mayRetry = handshakeMutex.withLock { handshakeSupervisor.mayAttempt(peerID, now) }
+            if (!mayRetry) return@forEach
+
+            val attempts = handshakeMutex.withLock { handshakeSupervisor.attemptsFor(peerID) }
+            logInfo(
+                "BluetoothMeshService",
+                "Noise handshake with $peerID stalled for ${now - startedAt}ms after $attempts " +
+                    "attempt(s); discarding the session"
+            )
+            noiseEncryption.removeSession(peerID)
+
+            if (peerManager.isPeerActive(peerID)) {
+                initiateNoiseHandshake(peerID)
+            } else {
+                logInfo(
+                    "BluetoothMeshService",
+                    "Not retrying the handshake with $peerID: the peer is no longer active"
+                )
+            }
+        }
+    }
+
+    private fun startHandshakeSweeper() {
+        serviceScope.launch {
+            while (isActive) {
+                delay(HandshakeSupervisor.SWEEP_INTERVAL_MS)
+                try {
+                    sweepStalledHandshakes(Clock.System.now().toEpochMilliseconds())
+                } catch (e: Exception) {
+                    logError("BluetoothMeshService", "Handshake sweep failed: ${e.message}")
+                }
+            }
         }
     }
 
@@ -283,6 +386,7 @@ class BluetoothMeshService(
 
             sendBroadcastAnnounce()
             sendPeriodicBroadcastAnnounce()
+            startHandshakeSweeper()
         }
     }
 
@@ -437,7 +541,8 @@ class BluetoothMeshService(
         }
     }
 
-    private suspend fun recordPeerDeviceMapping(peerID: String, deviceAddress: String) {
+    /** @return true when [peerID] has just been bound to a device address it did not hold before. */
+    private suspend fun recordPeerDeviceMapping(peerID: String, deviceAddress: String): Boolean {
         var isNewDevice = false
         devicePeerLock.withLock {
             val existingPeer = deviceToPeer[deviceAddress]
@@ -454,6 +559,7 @@ class BluetoothMeshService(
                 "Mapped device ${deviceAddress.take(8)} to peer ${peerID.take(8)}"
             )
         }
+        return isNewDevice
     }
 
     fun getPeerNicknames(): Map<String, String> {
@@ -462,6 +568,15 @@ class BluetoothMeshService(
 
     fun hasEstablishedSession(peerID: String): Boolean {
         return securityManager.hasEstablishedSession(peerID)
+    }
+
+    /**
+     * True while a handshake with [peerID] has been started and has neither completed nor been
+     * abandoned. Callers that queue a message use this to decide whether initiating again would
+     * be a duplicate or the only thing that will ever unstick the peer.
+     */
+    fun isHandshakeInFlight(peerID: String): Boolean {
+        return noiseEncryption.isHandshaking(peerID)
     }
 
     fun getSessionState(peerID: String): String {
@@ -509,8 +624,12 @@ class BluetoothMeshService(
 
                 // Sign and broadcast
                 broadcastPacket(packet)
+                val attempts = handshakeMutex.withLock {
+                    handshakeSupervisor.recordAttempt(peerID, Clock.System.now().toEpochMilliseconds())
+                    handshakeSupervisor.attemptsFor(peerID)
+                }
 
-                logError("BluetoothMeshService", "Initiated Noise handshake with $peerID")
+                logInfo("BluetoothMeshService", "Initiated Noise handshake with $peerID (attempt $attempts)")
 
             } catch (e: Exception) {
                 logError("BluetoothMeshService", "Error initiating handshake: ${e.message}")

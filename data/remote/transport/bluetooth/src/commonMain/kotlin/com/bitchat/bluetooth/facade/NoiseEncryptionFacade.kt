@@ -15,6 +15,21 @@ class NoiseEncryptionFacade {
         return sessions[peerID]?.isEstablished() == true
     }
 
+    /** True while a handshake with [peerID] has been started but has not completed or failed. */
+    fun isHandshaking(peerID: String): Boolean {
+        return sessions[peerID]?.isHandshaking() == true
+    }
+
+    /**
+     * Every peer whose session is mid-handshake, mapped to the epoch-millis instant the session
+     * was created. That instant is when the handshake started, so it is the deadline's origin.
+     */
+    fun handshakesInFlight(): Map<String, Long> {
+        return sessions
+            .filterValues { it.isHandshaking() }
+            .mapValues { (_, session) -> session.getCreationTime() }
+    }
+
     fun initiateHandshake(peerID: String, localStaticPrivateKey: ByteArray, localStaticPublicKey: ByteArray): ByteArray {
         // Check if session already exists and is handshaking or established
         val existingSession = sessions[peerID]
@@ -47,14 +62,19 @@ class NoiseEncryptionFacade {
         localStaticPrivateKey: ByteArray,
         localStaticPublicKey: ByteArray
     ): ByteArray? {
-        val session = sessions[peerID] ?: NoiseSession(
-            peerID = peerID,
-            isInitiator = false,
-            localStaticPrivateKey = localStaticPrivateKey,
-            localStaticPublicKey = localStaticPublicKey
-        ).also { sessions[peerID] = it }
-
+        // The construction is inside the try. Every current actual swallows its own init failure
+        // into NoiseSessionState.Failed, but a throw from here would propagate through
+        // MessageHandler into the per-peer actor loop in PacketProcessor and kill that coroutine,
+        // after which every packet from this peer is swallowed by a channel with no consumer.
+        // Nothing about the call site guarantees it cannot throw, so it is covered.
         return try {
+            val session = sessions[peerID] ?: NoiseSession(
+                peerID = peerID,
+                isInitiator = false,
+                localStaticPrivateKey = localStaticPrivateKey,
+                localStaticPublicKey = localStaticPublicKey
+            ).also { sessions[peerID] = it }
+
             session.processHandshakeMessage(message)
         } catch (e: Exception) {
             println("[NoiseEncryptionFacade] Handshake failed for $peerID: ${e.message}")

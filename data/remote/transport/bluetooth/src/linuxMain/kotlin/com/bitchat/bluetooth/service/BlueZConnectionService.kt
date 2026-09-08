@@ -109,12 +109,25 @@ class BlueZConnectionService(
             }
         }
 
-        // Notify server connections (we are Peripheral)
-        servers.forEach { deviceAddress ->
+        // Notify server connections (we are Peripheral). The GATT server's notification is a
+        // PropertiesChanged signal on the characteristic's object path, which names no device, so
+        // one emission reaches every subscribed central: emitting per entry sent N copies to
+        // everyone. The server's own registry is the authority on which entries are live, and any
+        // entry it no longer holds is dropped here too rather than being counted as a delivery.
+        if (servers.isNotEmpty()) {
             coroutineScopeFacade.applicationScope.launch {
-                val success = gattServer.notifyCharacteristic(deviceAddress, packetData)
-                if (!success) {
-                    logDebug(TAG, "Server notify failed: ${deviceAddress.take(8)}")
+                val targets = gattServer.partitionBroadcastTargets(servers)
+                if (targets.stale.isNotEmpty()) {
+                    logInfo(TAG, "Dropping ${targets.stale.size} server entry/entries with no live " +
+                            "link: ${targets.stale.joinToString { it.take(8) }}")
+                    targets.stale.forEach { onServerClientDisconnected(it) }
+                }
+
+                if (!targets.deliverable) {
+                    logInfo(TAG, "Server notify failed: none of the ${servers.size} server " +
+                            "entry/entries holds a live link")
+                } else if (!gattServer.notifySubscribers(packetData)) {
+                    logInfo(TAG, "Server notify failed for ${targets.live.size} client(s)")
                 }
             }
         }

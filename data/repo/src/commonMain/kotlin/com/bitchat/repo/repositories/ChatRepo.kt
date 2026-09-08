@@ -1281,13 +1281,16 @@ class ChatRepo(
                     // Queue and initiate handshake
                     println("📦 Queuing to outbox, initiating handshake")
                     val q = outbox.getOrPut(toPeerID) { mutableListOf() }
-                    val isFirstMessage = q.isEmpty()
                     q.add(Triple(content, recipientNickname, messageId))
                     println("📦 Outbox size for $toPeerID: ${q.size}")
-                    if (isFirstMessage) {
-                        mesh.initiateNoiseHandshake(toPeerID)
-                    } else {
+                    // Gate on the handshake actually being in flight, not on this being the first
+                    // queued message. A handshake whose packet was lost used to leave the outbox
+                    // non-empty forever, so every later message took the "already in progress"
+                    // branch against a session that had already been abandoned.
+                    if (mesh.isHandshakeInFlight(toPeerID)) {
                         println("📦 Handshake already in progress, message queued")
+                    } else {
+                        mesh.initiateNoiseHandshake(toPeerID)
                     }
                 }
             }
