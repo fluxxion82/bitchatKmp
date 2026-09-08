@@ -23,6 +23,16 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
     // collision or an ordinary opening.
     private val initiatedPeers = mutableSetOf<String>()
 
+    // Renegotiations running alongside a session that is still carrying traffic.
+    //
+    // A peer that restarts has lost its keys and must be able to handshake again, but its message 1
+    // must not be allowed to take down the session we are still using: handshakes travel as
+    // broadcast packets with a TTL, so duplicates and echoes of one arrive as a matter of course,
+    // and before this any of them could strip two peers of a working session. So a handshake that
+    // arrives while a session is established is negotiated here, off to one side, and only replaces
+    // the live session once it has completed.
+    private val pendingSessions = mutableMapOf<String, NoiseSession>()
+
     fun hasEstablishedSession(peerID: String): Boolean {
         return sessions[peerID]?.isEstablished() == true
     }
@@ -69,6 +79,71 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
         return session.startHandshake()
     }
 
+    /** A handshake handled off to the side, and whatever should be sent back for it. */
+    private class Renegotiated(val response: ByteArray?)
+
+    /**
+     * Handle [message] against a session that is already established, or against a renegotiation
+     * already running for [peerID]. Returns null when there is nothing established to protect and
+     * the ordinary path should run.
+     *
+     * The live session is never fed one of these messages and never destroyed by one failing. That
+     * is the whole point: an established session is only ever replaced by a completed one.
+     */
+    private fun renegotiation(
+        peerID: String,
+        message: ByteArray,
+        localStaticPrivateKey: ByteArray,
+        localStaticPublicKey: ByteArray
+    ): Renegotiated? {
+        val isOpening = message.size == NoiseConstants.XX_MESSAGE_1_SIZE
+        val pending = pendingSessions[peerID]
+
+        if (pending == null && sessions[peerID]?.isEstablished() != true) return null
+
+        if (pending != null && !isOpening) {
+            return Renegotiated(advanceRenegotiation(peerID, pending, message))
+        }
+
+        if (!isOpening) {
+            // A stray message 2 or 3 with no renegotiation to belong to. There is nothing to do
+            // with it, and feeding it to the live session is what used to destroy the live session.
+            println("[NoiseEncryptionFacade] Ignoring a stray handshake message from $peerID; the established session stands")
+            return Renegotiated(null)
+        }
+
+        // A fresh opening. Any half-finished renegotiation is stale, so it gives way to this one.
+        pending?.destroy()
+        val session = NoiseSession(
+            peerID = peerID,
+            isInitiator = false,
+            localStaticPrivateKey = localStaticPrivateKey,
+            localStaticPublicKey = localStaticPublicKey
+        )
+        pendingSessions[peerID] = session
+        println("[NoiseEncryptionFacade] Renegotiating with $peerID alongside the established session")
+        return Renegotiated(advanceRenegotiation(peerID, session, message))
+    }
+
+    /** Feed [message] to a renegotiation, promoting it if it completes and dropping it if it fails. */
+    private fun advanceRenegotiation(peerID: String, session: NoiseSession, message: ByteArray): ByteArray? {
+        val response = try {
+            session.processHandshakeMessage(message)
+        } catch (e: Exception) {
+            println("[NoiseEncryptionFacade] Renegotiation with $peerID failed: ${e.message}; the established session stands")
+            pendingSessions.remove(peerID)?.destroy()
+            return null
+        }
+
+        if (session.isEstablished()) {
+            println("[NoiseEncryptionFacade] Renegotiation with $peerID completed; replacing the established session")
+            pendingSessions.remove(peerID)
+            sessions.put(peerID, session)?.destroy()
+            initiatedPeers.remove(peerID)
+        }
+        return response
+    }
+
     /**
      * Whether an incoming handshake [message] from [peerID] collides with a handshake we started,
      * and if so whether this node is the one that must give way.
@@ -112,6 +187,8 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
         // MessageHandler into the per-peer actor loop in PacketProcessor and kill that coroutine,
         // after which every packet from this peer is swallowed by a channel with no consumer.
         // Nothing about the call site guarantees it cannot throw, so it is covered.
+        renegotiation(peerID, message, localStaticPrivateKey, localStaticPublicKey)?.let { return it.response }
+
         when (collisionVerdict(peerID, message)) {
             CollisionVerdict.HOLD -> {
                 println(
@@ -189,6 +266,10 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
 
     fun removeSession(peerID: String) {
         sessions.remove(peerID)?.destroy()
+        // A renegotiation only exists to replace the session being removed here, so it goes too --
+        // otherwise it would outlive its purpose and later promote itself over a session the peer
+        // has since built by other means.
+        pendingSessions.remove(peerID)?.destroy()
         initiatedPeers.remove(peerID)
     }
 
