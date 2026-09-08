@@ -116,6 +116,36 @@ class CentralLinkPolicy(
     }
 
     /**
+     * gattlib refused a new attempt to [address] because it still owns an earlier one, at [now].
+     *
+     * This is the state the reaper leaves behind. It abandons an attempt that produced no callback,
+     * but nothing on this side can cancel the native attempt: `gattlib_disconnect` needs a
+     * connection pointer that only a successful connect produces, and it refuses a device still in
+     * `CONNECTING` anyway. So the address stays gattlib's until gattlib lets go, and asking again
+     * returns `GATTLIB_BUSY`.
+     *
+     * Two things follow. The connect slot is freed, because there is one initiator and holding it
+     * for an address we cannot use stops the node reaching anybody else. And the address goes to the
+     * longest backoff rather than the base one, because retrying sooner only collects another
+     * refusal.
+     */
+    fun onNativeBusy(address: String, now: Long) {
+        pending.remove(address)
+        established.remove(address)
+        attemptCount[address] = attemptsForMaxBackoff()
+        lastActivity[address] = now
+    }
+
+    /** The attempt count at which [backoffFor] has saturated at [maxBackoffMs]. */
+    private fun attemptsForMaxBackoff(): Int {
+        var attempts = 1
+        while (backoffFor(attempts) < maxBackoffMs && attempts < MAX_BACKOFF_ATTEMPT_CEILING) {
+            attempts++
+        }
+        return attempts
+    }
+
+    /**
      * Attempts started long enough ago that no callback is coming. gattlib never fails these on its
      * own, so abandoning them here is what frees the initiator for the next peer.
      */
@@ -175,5 +205,8 @@ class CentralLinkPolicy(
 
         const val BASE_BACKOFF_MS = 5_000L
         const val MAX_BACKOFF_MS = 60_000L
+
+        /** Stops [attemptsForMaxBackoff] looping if the backoff constants are ever made unreachable. */
+        private const val MAX_BACKOFF_ATTEMPT_CEILING = 32
     }
 }

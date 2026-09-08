@@ -17,19 +17,19 @@ import kotlinx.coroutines.sync.withLock
  * Combines Central role (scanning + GATT client) and Peripheral role
  * (advertising + GATT server) to enable full mesh communication.
  *
- * The central role is deliberately unhurried. A BLE controller has one initiator, so two
- * overlapping connection attempts cannot both proceed: the host cancels one and BlueZ reports
- * `org.bluez.Error.Failed: le-connection-abort-by-local`. This service therefore takes
- * [CentralLinkPolicy]'s permission before every outbound connection and abandons an attempt gattlib
- * has stopped reporting on. See [onDeviceDiscovered] and [reapExpiredAttempts].
+ * The central role is deliberately unhurried. A BLE controller has one initiator, so two overlapping
+ * connection attempts cannot both proceed. This service therefore takes [CentralLinkPolicy]'s
+ * permission before every outbound connection and abandons an attempt gattlib has stopped reporting
+ * on. See [onDeviceDiscovered] and [reapExpiredAttempts].
  *
- * The scan deliberately keeps running across a connection attempt. Stopping it for the attempt's
- * duration looks right on paper -- the radio would have the attempt to itself -- and it was tried
- * on the device: across twenty-five minutes and a dozen attempts not one link came up, every
- * attempt ending either in `le-connection-abort-by-local` after three seconds or in the full
- * twenty-five second D-Bus timeout, where the same build with the scan left running had been
- * connecting in 1.5 to 3.2 seconds. BlueZ appears to need its discovery session to keep a
- * scan-discovered device connectable, so the scan stays up.
+ * Do not read `org.bluez.Error.Failed: le-connection-abort-by-local` as evidence of that contention,
+ * whatever earlier comments here claimed. BlueZ's `att_connect_cb` turns nearly any ATT connect error
+ * into `-ECONNABORTED`, which prints as that string, so it names no cause at all.
+ *
+ * The scan keeps running across a connection attempt. The experiment once cited here -- that stopping
+ * it stopped links coming up -- does not support the conclusion drawn from it, because
+ * [BlueZScanningService.stopScan] also calls `stopMainLoop`, so it stopped gattlib's entire event
+ * dispatch rather than just the scan. The scan stays up because nothing has shown it should not.
  */
 class BlueZConnectionService(
     private val coroutineScopeFacade: CoroutineScopeFacade,
@@ -77,7 +77,7 @@ class BlueZConnectionService(
 
     override suspend fun connectToDevice(deviceAddress: String) {
         logInfo(TAG, "Connect request: $deviceAddress")
-        gattClient.connect(deviceAddress)
+        handleConnectOutcome(deviceAddress, gattClient.connect(deviceAddress))
     }
 
     override suspend fun confirmDevice() {
@@ -255,11 +255,32 @@ class BlueZConnectionService(
                 "(links: ${connectionMutex.withLock { linkPolicy.establishedCount() }})")
 
         logInfo(TAG, "Connect request: $deviceAddress")
-        if (!gattClient.connect(deviceAddress)) {
-            // gattlib refused outright, so no callback is coming for this one either. Releasing it
-            // now rather than at the deadline frees the initiator in milliseconds instead of
-            // holding it for the full timeout.
-            onClientConnectionFailed(deviceAddress, "gattlib refused the connection")
+        handleConnectOutcome(deviceAddress, gattClient.connect(deviceAddress))
+    }
+
+    /**
+     * Record what gattlib made of a connection request.
+     *
+     * A refusal means no callback is coming, so releasing the address now frees the initiator in
+     * milliseconds rather than holding it for the reaper's full deadline. BUSY is different: gattlib
+     * is still holding an attempt this side has already given up on, and asking again before it lets
+     * go only collects another refusal. See [CentralLinkPolicy.onNativeBusy].
+     */
+    private suspend fun handleConnectOutcome(
+        deviceAddress: String,
+        outcome: BlueZGattClientService.ConnectOutcome
+    ) {
+        when (outcome) {
+            BlueZGattClientService.ConnectOutcome.STARTED -> Unit
+
+            BlueZGattClientService.ConnectOutcome.BUSY -> {
+                logInfo(TAG, "gattlib still owns the previous attempt to ${deviceAddress.take(8)}; " +
+                        "freeing the slot and backing off")
+                connectionMutex.withLock { linkPolicy.onNativeBusy(deviceAddress, currentTimeMillis()) }
+            }
+
+            BlueZGattClientService.ConnectOutcome.REFUSED ->
+                onClientConnectionFailed(deviceAddress, "gattlib refused the connection")
         }
     }
 
@@ -339,6 +360,11 @@ class BlueZConnectionService(
         expired.forEach { address ->
             logInfo(TAG, "Abandoning connection attempt to ${address.take(8)}: no result from " +
                     "gattlib within ${CentralLinkPolicy.CONNECT_TIMEOUT_MS}ms")
+            // This frees the policy's slot, not gattlib's. [BlueZGattClientService.disconnect]
+            // returns immediately when there is no registry entry, which is always the case for an
+            // attempt that never connected, and gattlib refuses to disconnect a device still in
+            // `CONNECTING`. So gattlib keeps the address until it lets go on its own, and the next
+            // offer for it comes back BUSY -- handled in [handleConnectOutcome].
             gattClient.disconnect(address)
             connectionMutex.withLock { linkPolicy.onReleased(address, now) }
         }

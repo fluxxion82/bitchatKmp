@@ -215,4 +215,47 @@ class CentralLinkPolicyTest {
             policy.onDiscovered(phoneA, now = CentralLinkPolicy.BASE_BACKOFF_MS + 2)
         )
     }
+
+    @Test
+    fun anAttemptGattlibStillOwnsFreesTheSlotForOtherPeers() {
+        val policy = policy()
+
+        // The reaper cannot cancel a native attempt, so a reaped address can come back BUSY. Holding
+        // the single connect slot for it would stop the node talking to anyone else.
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 0L))
+        policy.onNativeBusy(phoneA, now = 1_000L)
+
+        assertEquals(0, policy.pendingCount())
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(other, now = 1_100L))
+    }
+
+    @Test
+    fun anAttemptGattlibStillOwnsIsNotRetriedAtTheBaseBackoff() {
+        val policy = policy()
+
+        policy.onDiscovered(phoneA, now = 0L)
+        policy.onNativeBusy(phoneA, now = 1_000L)
+
+        // Retrying on the ordinary backoff just collects another BUSY: gattlib holds that address
+        // until it lets go, and nothing this side can hurry it.
+        assertIs<CentralLinkPolicy.Decision.Skip>(
+            policy.onDiscovered(phoneA, now = 1_000L + CentralLinkPolicy.BASE_BACKOFF_MS)
+        )
+        assertIs<CentralLinkPolicy.Decision.Connect>(
+            policy.onDiscovered(phoneA, now = 1_000L + CentralLinkPolicy.MAX_BACKOFF_MS)
+        )
+    }
+
+    @Test
+    fun aBusyAddressStopsBeingPenalisedOnceItConnects() {
+        val policy = policy()
+
+        policy.onDiscovered(phoneA, now = 0L)
+        policy.onNativeBusy(phoneA, now = 1_000L)
+        policy.onDiscovered(phoneA, now = 1_000L + CentralLinkPolicy.MAX_BACKOFF_MS)
+        policy.onConnected(phoneA)
+        policy.onReleased(phoneA, now = 2_000_000L)
+
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 2_000_001L))
+    }
 }

@@ -114,16 +114,34 @@ class BlueZGattClientService(
         this.delegate = delegate
     }
 
+    /** What gattlib made of a connection request. */
+    enum class ConnectOutcome {
+        /** gattlib accepted the request; a callback will follow, or the reaper's deadline will. */
+        STARTED,
+
+        /**
+         * gattlib still owns an earlier attempt to this address and will not start another.
+         *
+         * Nothing here can hurry that along: `gattlib_disconnect` needs a connection pointer only a
+         * successful connect produces, and it refuses a device still in `CONNECTING`. The address
+         * belongs to gattlib until gattlib lets go.
+         */
+        BUSY,
+
+        /** gattlib refused outright. No callback is coming. */
+        REFUSED
+    }
+
     /**
      * Connect to a BLE peripheral.
      *
      * @param deviceAddress MAC address of the device
-     * @return true if connection initiated successfully
+     * @return what gattlib made of the request
      */
-    suspend fun connect(deviceAddress: String): Boolean {
+    suspend fun connect(deviceAddress: String): ConnectOutcome {
         if (connections.value.containsKey(deviceAddress)) {
             logDebug(TAG, "Already connected to $deviceAddress")
-            return true
+            return ConnectOutcome.STARTED
         }
 
         logInfo(TAG, "Connecting to $deviceAddress...")
@@ -131,14 +149,14 @@ class BlueZGattClientService(
         val adapter = manager.getAdapter() ?: run {
             if (!manager.openAdapter()) {
                 logError(TAG, "Failed to open adapter")
-                return false
+                return ConnectOutcome.REFUSED
             }
             manager.getAdapter()
         }
 
         if (adapter == null) {
             logError(TAG, "Adapter is null")
-            return false
+            return ConnectOutcome.REFUSED
         }
 
         // Try connecting with random address support (Android devices use random BLE addresses)
@@ -154,13 +172,18 @@ class BlueZGattClientService(
             selfRef.asCPointer()
         )
 
+        if (result == GATTLIB_BUSY) {
+            logDebug(TAG, "gattlib still owns an attempt to $deviceAddress")
+            return ConnectOutcome.BUSY
+        }
+
         if (result != GATTLIB_SUCCESS) {
             logError(TAG, "Failed to initiate connection to $deviceAddress: ${describeError(result)}")
-            return false
+            return ConnectOutcome.REFUSED
         }
 
         logDebug(TAG, "Connection initiated to $deviceAddress")
-        return true
+        return ConnectOutcome.STARTED
     }
 
     override suspend fun writeCharacteristic(deviceAddress: String, data: ByteArray): Boolean {
