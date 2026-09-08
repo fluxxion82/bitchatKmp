@@ -5,6 +5,7 @@ import com.bitchat.nostr.model.NostrEvent
 import com.bitchat.nostr.model.NostrIdentity
 import com.bitchat.nostr.model.NostrKind
 import com.bitchat.nostr.util.toLittleEndianBytes
+import com.bitchat.transport.IdentityRefusedException
 import com.bitchat.transport.TransportIdentityProvider
 import io.ktor.utils.io.core.*
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +19,9 @@ import kotlin.time.Clock
 
 private const val NOSTR_PRIVATE_KEY = "nostr_private_key"
 private const val DEVICE_SEED_KEY = "nostr_device_seed"
+
+/** The device seed has no public form; the ledger records only that it exists. */
+private const val SEED_CLAIM = "present"
 
 /**
  * NIP-17 Protocol Implementation for Private Direct Messages
@@ -416,38 +420,29 @@ class NostrClient(
      * Get or create the current Nostr identity
      */
     fun getCurrentNostrIdentity(): NostrIdentity? {
-        // Try to load existing Nostr private key
-        val existingKey = identityProvider.loadKey(NOSTR_PRIVATE_KEY) // loadNostrPrivateKey(stateManager)
-        if (existingKey != null) {
-            return try {
-                NostrIdentity.fromPrivateKey(existingKey)
-            } catch (e: Exception) {
-                // A key IS stored, it just did not parse. Generating a replacement here would
-                // write over it, so this path stays closed and Nostr is simply unavailable.
-                println("NostrClient: stored Nostr key is unusable (${e.message}); not replacing it")
-                null
-            }
+        // The store is never asked "is it there" and then told "make one": those two questions
+        // have a gap between them that a truncated or half-read store falls straight into.
+        // loadOrMint is one decision, taken by the one custodian that may create identity
+        // material at all, and it refuses rather than replacing anything it cannot rule out.
+        val privateKeyHex = try {
+            identityProvider.loadOrMint(
+                key = NOSTR_PRIVATE_KEY,
+                publicFormOf = { NostrIdentity.fromPrivateKey(it).publicKeyHex },
+                mint = { NostrIdentity.generate().privateKeyHex },
+            )
+        } catch (e: IdentityRefusedException) {
+            println("NostrClient: refusing to create a Nostr identity: ${e.message}")
+            return null
         }
 
-        // No key came back. That is only a first run if the store itself is sound - see
-        // NostrIdentityMintPolicy for why the difference matters.
-        when (val decision = NostrIdentityMintPolicy.decide(identityProvider.storeState(), NOSTR_PRIVATE_KEY)) {
-            is MintDecision.Refuse -> {
-                println("NostrClient: ${decision.reason}")
-                return null
-            }
-
-            is MintDecision.Allowed.Noteworthy -> println("NostrClient: ${decision.reason}")
-            MintDecision.Allowed.FirstRun -> Unit
+        return try {
+            NostrIdentity.fromPrivateKey(privateKeyHex)
+        } catch (e: Exception) {
+            // A key IS stored, it just did not parse. Generating a replacement here would
+            // write over it, so this path stays closed and Nostr is simply unavailable.
+            println("NostrClient: stored Nostr key is unusable (${e.message}); not replacing it")
+            null
         }
-
-        // Generate new identity
-        val newIdentity = NostrIdentity.generate()
-        identityProvider.saveKey(key = NOSTR_PRIVATE_KEY, value = newIdentity.privateKeyHex)
-        // saveNostrPrivateKey(stateManager, newIdentity.privateKeyHex)
-
-        // Log.i(TAG, "Created new Nostr identity: ${newIdentity.getShortNpub()}")
-        return newIdentity
     }
 
     /**
@@ -526,33 +521,22 @@ class NostrClient(
 
     private fun getOrCreateDeviceSeed(): ByteArray {
         try {
-            // Use public methods instead of reflection to access the encrypted preferences
-            val existingSeed = identityProvider.loadKey(DEVICE_SEED_KEY)
-            if (existingSeed != null) {
+            // Same rule as the Nostr private key, and the same single custodian: a seed that
+            // could not be read must not be replaced, because every geohash identity on this
+            // device derives from it. The seed has no public form, so its ledger claim is the
+            // literal string "present" rather than a digest of a secret.
+            val seedBase64 = identityProvider.loadOrMint(
+                key = DEVICE_SEED_KEY,
+                publicFormOf = { SEED_CLAIM },
+                mint = {
+                    val seed = ByteArray(32)
+                    Random.nextBytes(seed)
+                    //SecureRandom().nextBytes(seed)
+                    Base64.encode(seed) // android.util.Base64.encodeToString(seed, android.util.Base64.DEFAULT)
+                },
+            )
 
-                return Base64.decode(existingSeed) //android.util.Base64.decode(existingSeed, android.util.Base64.DEFAULT)
-            }
-
-            // Same rule as the Nostr private key: a seed that could not be read must not be
-            // replaced, because every geohash identity on this device derives from it.
-            val decision = NostrIdentityMintPolicy.decide(identityProvider.storeState(), DEVICE_SEED_KEY)
-            if (decision is MintDecision.Refuse) {
-                error("NostrClient: ${decision.reason}")
-            }
-            if (decision is MintDecision.Allowed.Noteworthy) {
-                println("NostrClient: ${decision.reason}")
-            }
-
-            // Generate new seed
-            val seed = ByteArray(32)
-            Random.nextBytes(seed)
-            //SecureRandom().nextBytes(seed)
-
-            val seedBase64 = Base64.encode(seed) // android.util.Base64.encodeToString(seed, android.util.Base64.DEFAULT)
-            identityProvider.saveKey(DEVICE_SEED_KEY, seedBase64)
-
-            // Log.d(TAG, "Generated new device seed for geohash identity derivation")
-            return seed
+            return Base64.decode(seedBase64) //android.util.Base64.decode(existingSeed, android.util.Base64.DEFAULT)
         } catch (e: Exception) {
             // Log.e(TAG, "Failed to get/create device seed: ${e.message}")
             throw e

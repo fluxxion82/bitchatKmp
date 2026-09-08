@@ -21,6 +21,17 @@ class SecureTransportIdentityProvider(
         return securePrefs.hasSecureValue(key)
     }
 
+    /**
+     * Delegates to the same custodian the Bluetooth module reaches through
+     * [SecureIdentityPreferences.loadOrMintSigningKey]. There is exactly one of it per process,
+     * and it is the only code in the tree that may create identity key material.
+     */
+    override fun loadOrMint(
+        key: String,
+        publicFormOf: (String) -> String,
+        mint: () -> String,
+    ): String = securePrefs.loadOrMintSecureValue(key, publicFormOf, mint)
+
     override fun removeKeys(vararg keys: String) {
         securePrefs.clearSecureValues(*keys)
     }

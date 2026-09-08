@@ -1,5 +1,9 @@
 package com.bitchat.local.di
 
+import com.bitchat.local.identity.DomainInspector
+import com.bitchat.local.identity.LedgerStore
+import com.bitchat.local.identity.LinuxDomainInspector
+import com.bitchat.local.identity.LinuxLedgerStore
 import com.bitchat.local.prefs.EncryptionSettingsFactory
 import com.bitchat.local.prefs.LinuxEncryptionSettingsFactory
 import com.bitchat.local.prefs.LinuxFileSettings
@@ -25,6 +29,16 @@ actual val localModule = module {
     single<EncryptionSettingsFactory> {
         LinuxEncryptionSettingsFactory()
     }
+
+    // createdAtStart, and this is load-bearing rather than a preference. LinuxDomainInspector
+    // takes its reading of the identity domain in its constructor, and that reading is only
+    // meaningful if it happens before this application has written anything: its own first file
+    // makes the domain inhabited, and an inhabited domain with no ledger refuses to mint. Built
+    // eagerly, while Koin assembles the graph, the reading is taken before any preference store
+    // exists, so a genuine first run is still seen as one.
+    single<DomainInspector>(createdAtStart = true) { LinuxDomainInspector() }
+
+    single<LedgerStore> { LinuxLedgerStore() }
 
     single<GeocoderService> { StubGeocoderService() }
 

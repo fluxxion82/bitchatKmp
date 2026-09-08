@@ -26,6 +26,26 @@ sealed interface MintDecision {
  * loses it, and every message addressed to the old key is undeliverable. The old code could not
  * tell the two apart, because a store that failed to load looks exactly like a store that was
  * never written.
+ *
+ * ## Its role now
+ *
+ * Nothing calls this in production any more. Every mint goes through the single custodian, whose
+ * decision table is `com.bitchat.local.identity.IdentityMintGate`.
+ *
+ * It is kept, deliberately, as the **frozen reference definition** of the decision this code
+ * made on platforms that have no directory domain and no identity ledger - Android, Apple and
+ * JVM desktop, which is to say everything but the embedded Linux build.
+ * `IdentityMintGateTest.platforms with no domain and no ledger reproduce the pre-custodian
+ * decision exactly` asserts the gate against *this class*, not against a copy of its table, so a
+ * drift on either side fails a test rather than quietly changing behaviour on three platforms.
+ *
+ * It cannot become a delegation to that gate, which is what the plan asked for: the gate lives
+ * in `:data:local:platform`, and this module cannot depend on it without a cycle
+ * (`:data:local:platform` already depends on `:data:remote:transport:nostr`). Being the oracle
+ * rather than a forwarder is also the stronger arrangement - a forwarder asserts nothing.
+ *
+ * Do not change the strings below without deciding, deliberately, that the three
+ * keychain-backed platforms should behave differently than they did.
  */
 object NostrIdentityMintPolicy {
 

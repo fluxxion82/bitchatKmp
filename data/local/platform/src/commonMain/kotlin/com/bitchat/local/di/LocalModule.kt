@@ -2,6 +2,8 @@ package com.bitchat.local.di
 
 import com.bitchat.cache.di.cacheModule
 import com.bitchat.domain.connectivity.repository.ConnectivityRepository
+import com.bitchat.local.identity.DomainInspector
+import com.bitchat.local.identity.LedgerStore
 import com.bitchat.local.prefs.AppPreferences
 import com.bitchat.local.prefs.BackgroundPreferences
 import com.bitchat.local.prefs.BlockListPreferences
@@ -37,7 +39,17 @@ val commonLocal = module {
 
     single<AppPreferences> { LocalAppPreferences(settingsFactory = get()) }
     single<UserPreferences> { LocalUserPreferences(encryptedPreferenceFactory = get()) }
-    single<SecureIdentityPreferences> { LocalSecureIdentityPreferences(encryptedPreferenceFactory = get()) }
+    // The identity store owns the one custodian that may create identity key material, so it
+    // needs the two things that custodian consults. Every platform's localModule registers a
+    // DomainInspector and a LedgerStore; all but the embedded Linux build register the no-op
+    // pair, which reproduces the pre-custodian behaviour exactly.
+    single<SecureIdentityPreferences> {
+        LocalSecureIdentityPreferences(
+            encryptedPreferenceFactory = get(),
+            domainInspector = get<DomainInspector>(),
+            ledgerStore = get<LedgerStore>(),
+        )
+    }
     single<NostrPreferences> { LocalNostrPreferences(settingsFactory = get()) }
     single<GeohashPreferences> { LocalGeohashPreferences(settingsFactory = get()) }
     single<ChannelPreferences> { LocalChannelPreferences(settingsFactory = get()) }

@@ -72,6 +72,142 @@ internal fun ensureDirectory(path: String) {
 }
 
 /**
+ * Creates [path] if it is not there, and leaves its mode alone if it is.
+ *
+ * For directories this application needs but does not own - `$HOME/.config`, say. [ensureDirectory]
+ * would `chmod 0700` an existing one, and quietly tightening a directory the user shares with
+ * every other application on the box is not this code's business.
+ */
+@OptIn(ExperimentalForeignApi::class)
+internal fun ensureParentDirectory(path: String) {
+    if (mkdir(path, MODE_0700) != 0 && errno != EEXIST) {
+        throw posixError("creating directory", path)
+    }
+}
+
+/**
+ * Returns the whole file at [path] as text, or null when it has never been written.
+ *
+ * Extracted verbatim from `LinuxFileSettings`, which is its only other caller. Reading the whole
+ * file in one go matters: the reader this replaced pulled 4096-byte `fgets` chunks and treated
+ * each chunk as a line, so every record longer than that was cut in two.
+ *
+ * Bytes are decoded once, at the end, because a UTF-8 sequence can straddle two reads.
+ */
+// T7: replace with PosixFiles (open once, O_NOFOLLOW, checks against the fstat of that fd).
+@OptIn(ExperimentalForeignApi::class)
+internal fun readWholeFileOrNull(path: String): String? {
+    val file = fopen(path, "rb")
+    if (file == null) {
+        if (errno == ENOENT) return null
+        throw posixError("opening", path)
+    }
+
+    try {
+        val chunks = mutableListOf<ByteArray>()
+        var total = 0
+        val buffer = ByteArray(64 * 1024)
+        buffer.usePinned { pinned ->
+            while (true) {
+                val read = fread(pinned.addressOf(0), 1.convert(), buffer.size.convert(), file).toLong().toInt()
+                if (read <= 0) break
+                chunks += buffer.copyOf(read)
+                total += read
+            }
+        }
+        if (ferror(file) != 0) throw posixError("reading", path)
+
+        val bytes = ByteArray(total)
+        var offset = 0
+        for (chunk in chunks) {
+            chunk.copyInto(bytes, offset)
+            offset += chunk.size
+        }
+        return bytes.decodeToString()
+    } finally {
+        fclose(file)
+    }
+}
+
+/**
+ * Writes [payload] to [path] atomically and durably: a fresh `mkstemp` file in the same
+ * directory, `fchmod` 0600, the whole payload, `fsync`, `close`, `rename` over the target, then
+ * `fsync` of the directory so the rename itself reaches the disk.
+ *
+ * Extracted verbatim from `LinuxFileSettings.saveToFile`; unchanged in behaviour. **The live
+ * file is never moved aside first**, precisely because that would open a window in which the
+ * only copy of an identity does not exist - which is how "absent file" came to be read as
+ * "new device" in the first place.
+ */
+// T7: replace with PosixFiles.writeDurably.
+@OptIn(ExperimentalForeignApi::class)
+internal fun writeFileDurably(path: String, payload: ByteArray) {
+    val directory = path.substringBeforeLast('/', ".").ifEmpty { "/" }
+
+    memScoped {
+        // mkstemp rewrites the template in place, so it needs a mutable buffer, and it
+        // creates the file 0600 regardless of umask.
+        val template = "$path.tmpXXXXXX".encodeToByteArray()
+        val templateBuffer = allocArray<ByteVar>(template.size + 1)
+        for (i in template.indices) templateBuffer[i] = template[i]
+        templateBuffer[template.size] = 0
+
+        val fd = mkstemp(templateBuffer)
+        if (fd < 0) throw posixError("creating a temporary file next to", path)
+        val tempPath = templateBuffer.toKString()
+
+        try {
+            // Explicit, so the mode does not depend on mkstemp's documented behaviour, and
+            // so that renaming over an older 0664 file leaves 0600 behind.
+            if (fchmod(fd, MODE_0600) != 0) throw posixError("setting the mode of", tempPath)
+
+            if (payload.isNotEmpty()) {
+                payload.usePinned { pinned ->
+                    var written = 0
+                    while (written < payload.size) {
+                        val n = write(
+                            fd,
+                            pinned.addressOf(written),
+                            (payload.size - written).convert(),
+                        ).toLong()
+                        if (n <= 0L) {
+                            if (n < 0L && errno == EINTR) continue
+                            throw posixError("writing", tempPath)
+                        }
+                        written += n.toInt()
+                    }
+                }
+            }
+
+            if (fsync(fd) != 0) throw posixError("flushing", tempPath)
+        } catch (e: Throwable) {
+            close(fd)
+            unlink(tempPath)
+            throw e
+        }
+
+        if (close(fd) != 0) {
+            unlink(tempPath)
+            throw posixError("closing", tempPath)
+        }
+
+        // Atomic: readers see the whole old file or the whole new one.
+        if (rename(tempPath, path) != 0) {
+            val failure = posixError("renaming $tempPath over", path)
+            unlink(tempPath)
+            throw failure
+        }
+
+        // The rename itself has to reach the disk, or a power cut can still lose it.
+        val dirFd = open(directory, O_RDONLY)
+        if (dirFd >= 0) {
+            fsync(dirFd)
+            close(dirFd)
+        }
+    }
+}
+
+/**
  * Linux implementation of EncryptionSettingsFactory.
  *
  * Uses file-based storage with POSIX file permissions. For embedded/headless Linux systems
@@ -149,106 +285,10 @@ class LinuxFileSettings(private val filepath: String) : Settings, HealthReportin
         }
     }
 
-    /** Returns the file's bytes as text, or null when the file has never been written. */
-    private fun readWholeFile(): String? {
-        val file = fopen(filepath, "rb")
-        if (file == null) {
-            if (errno == ENOENT) return null
-            throw posixError("opening", filepath)
-        }
-
-        try {
-            val chunks = mutableListOf<ByteArray>()
-            var total = 0
-            val buffer = ByteArray(64 * 1024)
-            buffer.usePinned { pinned ->
-                while (true) {
-                    val read = fread(pinned.addressOf(0), 1.convert(), buffer.size.convert(), file).toLong().toInt()
-                    if (read <= 0) break
-                    chunks += buffer.copyOf(read)
-                    total += read
-                }
-            }
-            if (ferror(file) != 0) throw posixError("reading", filepath)
-
-            // Decoded once, at the end: a UTF-8 sequence can straddle two reads.
-            val bytes = ByteArray(total)
-            var offset = 0
-            for (chunk in chunks) {
-                chunk.copyInto(bytes, offset)
-                offset += chunk.size
-            }
-            return bytes.decodeToString()
-        } finally {
-            fclose(file)
-        }
-    }
+    private fun readWholeFile(): String? = readWholeFileOrNull(filepath)
 
     private fun saveToFile() {
-        val payload = FlatFileFormat.encode(data).encodeToByteArray()
-        val directory = filepath.substringBeforeLast('/', ".").ifEmpty { "/" }
-
-        memScoped {
-            // mkstemp rewrites the template in place, so it needs a mutable buffer, and it
-            // creates the file 0600 regardless of umask.
-            val template = "$filepath.tmpXXXXXX".encodeToByteArray()
-            val templateBuffer = allocArray<ByteVar>(template.size + 1)
-            for (i in template.indices) templateBuffer[i] = template[i]
-            templateBuffer[template.size] = 0
-
-            val fd = mkstemp(templateBuffer)
-            if (fd < 0) throw posixError("creating a temporary file next to", filepath)
-            val tempPath = templateBuffer.toKString()
-
-            try {
-                // Explicit, so the mode does not depend on mkstemp's documented behaviour, and
-                // so that renaming over an older 0664 file leaves 0600 behind.
-                if (fchmod(fd, MODE_0600) != 0) throw posixError("setting the mode of", tempPath)
-
-                if (payload.isNotEmpty()) {
-                    payload.usePinned { pinned ->
-                        var written = 0
-                        while (written < payload.size) {
-                            val n = write(
-                                fd,
-                                pinned.addressOf(written),
-                                (payload.size - written).convert(),
-                            ).toLong()
-                            if (n <= 0L) {
-                                if (n < 0L && errno == EINTR) continue
-                                throw posixError("writing", tempPath)
-                            }
-                            written += n.toInt()
-                        }
-                    }
-                }
-
-                if (fsync(fd) != 0) throw posixError("flushing", tempPath)
-            } catch (e: Throwable) {
-                close(fd)
-                unlink(tempPath)
-                throw e
-            }
-
-            if (close(fd) != 0) {
-                unlink(tempPath)
-                throw posixError("closing", tempPath)
-            }
-
-            // Atomic: readers see the whole old file or the whole new one.
-            if (rename(tempPath, filepath) != 0) {
-                val failure = posixError("renaming $tempPath over", filepath)
-                unlink(tempPath)
-                throw failure
-            }
-
-            // The rename itself has to reach the disk, or a power cut can still lose it.
-            val dirFd = open(directory, O_RDONLY)
-            if (dirFd >= 0) {
-                fsync(dirFd)
-                close(dirFd)
-            }
-        }
+        writeFileDurably(filepath, FlatFileFormat.encode(data).encodeToByteArray())
 
         // The file that is now on disk is exactly what is in memory.
         storeDamage = emptyList()
