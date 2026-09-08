@@ -10,6 +10,7 @@ import dbus.*
 import kotlinx.cinterop.*
 import platform.posix.CLOCK_MONOTONIC
 import platform.posix.clock_gettime
+import platform.posix.getenv
 import platform.posix.timespec
 import platform.posix.usleep
 import kotlin.concurrent.AtomicInt
@@ -85,6 +86,23 @@ class BlueZAdvertisingService(
     override suspend fun startAdvertising(serviceUuid: String, deviceName: String) {
         if (isCurrentlyAdvertising) {
             logDebug(TAG, "Already advertising")
+            return
+        }
+
+        // Setting BITCHAT_BLE_NO_ADVERTISE runs this node central-only.
+        //
+        // It exists because the kernel pauses and resumes advertising around every outbound
+        // connection (`hci_le_create_conn_sync`), and on this controller the firmware refuses:
+        // `Bluetooth: hci0: Opcode 0x2036 failed: -16` and `0x2039 failed: -16` appear in the
+        // kernel log exactly once per connect request -- sixteen for sixteen over the hour
+        // measured. Every attempt establishes a link and loses it immediately afterwards. Running
+        // without an advertisement removes that pause from the picture, which is the cheapest way
+        // to find out whether the peripheral role is what kills our outbound links.
+        //
+        // The GATT server is deliberately left running: this suppresses the advertisement, not the
+        // ability to serve a central that already knows us.
+        if (getenv("BITCHAT_BLE_NO_ADVERTISE") != null) {
+            logInfo(TAG, "BITCHAT_BLE_NO_ADVERTISE set: staying central-only, not advertising")
             return
         }
 
