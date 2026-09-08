@@ -197,7 +197,7 @@ timeout 240 ssh -tt sterling@192.168.4.58 'sudo -n btmon -w /tmp/degraded.btsnoo
 ```
 
 Then read the LE Connection Complete `Status`/`Role` and the Disconnection Complete `Reason` for a
-failed attempt, and write them up in `docs/reviews/2026-09-08-pi-outbound-degradation.md`.
+failed attempt, and write them up in `../docs/reviews/2026-09-08-pi-outbound-degradation.md`.
 
 ---
 
@@ -300,7 +300,7 @@ peripheral role out of any future experiment.
 
 - `scripts/ble-outbound-report.sh` distinguishes the two states and is validated against both.
 - A `btmon` capture exists of a **failed** attempt, with its LE Connection Complete `Status`/`Role` and
-  Disconnection Complete `Reason`, written up in `docs/reviews/`.
+  Disconnection Complete `Reason`, written up in `../docs/reviews/`.
 - The degradation has a mechanism, or a documented reason we stopped looking.
 - `NRestarts` unchanged and no SEGV across a soak in the healthy state.
 - The KDoc in `CentralLinkPolicy` and `BlueZConnectionService` describes the device's real behaviour.
