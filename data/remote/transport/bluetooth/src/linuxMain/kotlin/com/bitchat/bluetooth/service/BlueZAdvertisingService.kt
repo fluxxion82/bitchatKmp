@@ -46,6 +46,12 @@ class BlueZAdvertisingService(
     private var dispatchWorker: Worker? = null
     private val dispatchRunning = AtomicInt(0)
 
+    // Teardown state. libdbus aborts the process when asked to remove a filter or
+    // unregister an object path it never had, so both are removed only against the
+    // connection they were installed on, and only when the install actually succeeded.
+    private var filterConnection: CPointer<DBusConnection>? = null
+    private var objectPathConnection: CPointer<DBusConnection>? = null
+
     override suspend fun startAdvertising(serviceUuid: String, deviceName: String) {
         if (isCurrentlyAdvertising) {
             logDebug(TAG, "Already advertising")
@@ -244,19 +250,23 @@ class BlueZAdvertisingService(
             advertisingServiceInstance = null
             return
         }
+        objectPathConnection = connection
 
         val filterAdded = dbus_connection_add_filter(
             connection,
-            staticCFunction(::advertisementMessageFilter),
+            advertisementFilterFn,
             null,
             null
         )
         if (filterAdded == 0u) {
             logError(TAG, "Failed to add D-Bus filter for advertisement")
+            dbus_connection_unregister_object_path(connection, ADVERTISEMENT_PATH)
+            objectPathConnection = null
             dispatchRunning.value = 0
             advertisingServiceInstance = null
             return
         }
+        filterConnection = connection
 
         dispatchWorker = Worker.start(name = "DBusAdvDispatch")
         dispatchWorker?.execute(
@@ -284,11 +294,20 @@ class BlueZAdvertisingService(
         if (dispatchRunning.compareAndSet(1, 0)) {
             usleep(200_000u) // allow worker to exit
             dispatchWorker = null
-            dbusConnection?.let {
-                dbus_connection_unregister_object_path(it, ADVERTISEMENT_PATH)
-                dbus_connection_remove_filter(it, staticCFunction(::advertisementMessageFilter), null)
-            }
         }
+
+        // Undo the registrations independently of the dispatch flag, each against the
+        // connection it was made on, and each exactly once. Nulling before the call
+        // makes a second teardown a no-op instead of a libdbus abort.
+        objectPathConnection?.let { conn ->
+            objectPathConnection = null
+            dbus_connection_unregister_object_path(conn, ADVERTISEMENT_PATH)
+        }
+        filterConnection?.let { conn ->
+            filterConnection = null
+            dbus_connection_remove_filter(conn, advertisementFilterFn, null)
+        }
+
         advertisingServiceInstance = null
     }
 
@@ -633,6 +652,18 @@ private fun advertisementMessageFilter(
     val handled = adv.handleAdvertisementMethod(message)
     return if (handled) DBusHandlerResult.DBUS_HANDLER_RESULT_HANDLED else DBusHandlerResult.DBUS_HANDLER_RESULT_NOT_YET_HANDLED
 }
+
+/**
+ * The C function pointer for [advertisementMessageFilter], materialised exactly once.
+ *
+ * Every `staticCFunction(::f)` call site makes the compiler lift its own copy of `f` and emit its
+ * own C bridge for it, so two call sites naming the same Kotlin function yield two different
+ * pointers. libdbus matches filters by (function, user data) and calls `_dbus_abort()` when a
+ * removal finds no match, so add and remove must be handed this one value, never two
+ * `staticCFunction` expressions.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private val advertisementFilterFn = staticCFunction(::advertisementMessageFilter)
 
 // Keep a reference for the static filter
 private var advertisingServiceInstance: BlueZAdvertisingService? = null
