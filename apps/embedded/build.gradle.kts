@@ -70,7 +70,20 @@ kotlin {
                     // Skia/Skiko font dependencies
                     "-lfontconfig", "-lfreetype",
                     "-lpng16", "-lz", "-lexpat", "-lbz2",
-                    // No GLX/X11: upstream skiko-linuxarm64 >= 0.9.47 bundles an EGL-only Skia
+                    // Nothing to do with Skiko, whatever the old comment here said: skiko
+                    // linuxarm64 ships static archives inside the klib, and this flag only relaxes
+                    // symbol resolution for shared objects on the link line. What it covers is
+                    // glibc version skew between the extracted Pi sysroot and the older glibc
+                    // Kotlin/Native links linux_arm64 against. Dropping it fails with exactly
+                    // three errors, measured:
+                    //   stat64@GLIBC_2.33, fstat64@GLIBC_2.33  <- sysroot libdrm.so
+                    //   pow@GLIBC_2.29                         <- sysroot libpng16.so
+                    // All three resolve fine on the device (Debian bookworm, glibc 2.36), so this
+                    // is a build-host artefact, not a missing symbol. libgbm.so.1 and
+                    // libEGL_mesa.so.0 never even reach the check: LLD skips a DSO whose own
+                    // DT_NEEDED entries are not all on the link line, and the sysroot has no
+                    // libwayland-*, libxcb-* or libexpat.so.1. Keep the flag; the experiment has
+                    // been run twice now.
                     "--allow-shlib-undefined",
                 )
             }

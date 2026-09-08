@@ -758,11 +758,12 @@ class BlueZGattServerService(
 
         objectsRegistered = true
 
-        // NOTE: Do NOT start dispatch loop here!
-        // The dbus_connection_send_with_reply_and_block() in registerGattApplication()
-        // internally dispatches messages (including GetManagedObjects).
-        // Starting our own dispatch loop creates a race condition.
-        // We'll start it AFTER RegisterApplication completes.
+        // NOTE: Do NOT start the dispatch loop here.
+        // registerGattApplicationWithManualDispatch() pumps the connection on the calling thread
+        // for the duration of RegisterApplication, so that one thread both sends the call and
+        // answers the GetManagedObjects that BlueZ makes before it replies. A worker dispatching
+        // the same connection at the same time would race it for those messages.
+        // The long-lived loop starts AFTER RegisterApplication completes.
 
         logInfo(TAG, "D-Bus message filter registered for GATT objects")
         return true

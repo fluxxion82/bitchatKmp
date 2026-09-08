@@ -15,6 +15,7 @@ This document is the single reference for what needs to be cloned, built, and pu
 | 3 | Koin | [fluxxion82/koin](https://github.com/fluxxion82/koin) | `sa_linux` | `4.1.2` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
 | 4 | MeshCore | [fluxxion82/MeshCore](https://github.com/fluxxion82/MeshCore) | `orangepi-zero3-sx1276` | N/A (native binary) | Built on-device | `/usr/local/bin/meshcored` |
 | 5 | Meshtastic Firmware | [fluxxion82/firmware](https://github.com/fluxxion82/firmware) | `orangepi-rfm95w` | 2.7.x (native binary) | Built on-device | `/usr/bin/meshtasticd` |
+| 6 | gattlib | [fluxxion82/gattlib](https://github.com/fluxxion82/gattlib) | `bitchat-null-guards` | N/A (native static lib) | `scripts/build-native-linux-arm64.sh` step 5 | `native/gattlib/build/linux-arm64/install/lib/libgattlib.a` |
 
 ## Build Configuration
 
@@ -250,6 +251,59 @@ source ~/meshtastic-venv/bin/activate
 pio run -e native
 sudo cp .pio/build/native/program /usr/bin/meshtasticd
 ```
+
+---
+
+## 6. gattlib
+
+**What:** the BLE GATT client library used for the Central role on the embedded target. Unlike the other five
+entries this is a git submodule, not a `forks/` checkout: `data/remote/transport/bluetooth/native/gattlib`,
+pinned by SHA, so `.gitmodules` and the submodule pointer are the whole mechanism.
+
+**Why:** gdbus-codegen cached-property getters return `NULL` once a peer's BlueZ objects have gone away
+mid-discovery, and gattlib dereferenced four of them — `gattlib_string_to_uuid()` passes its argument to
+`strlen()`, the flags loop dereferences the array head, and `gattlib_discover_char_range()` hands the Device
+property to `strcmp()`. The library holds its own recursive mutex for the length of a discovery call, so this
+cannot be guarded from Kotlin.
+
+**Repo & Branch:** [fluxxion82/gattlib](https://github.com/fluxxion82/gattlib) `bitchat-null-guards`, branched
+from upstream `labapart/gattlib` @ `1580056`.
+
+**Changes:**
+- `dbus/gattlib.c` (the compiled `BLUEZ_VERSION >= 5.38` branch only) — NULL guards on the four property
+  getters; `g_clear_error()` in place of `g_error_free()` so a freed `GError` is not read again on the next
+  iteration; `g_object_unref()` on the skip paths that leaked a proxy.
+
+**Behaviour change:** discovery now returns fewer entries where it used to crash. A peer missing the bitchat
+characteristic is already abandoned by `BlueZGattClientService.discoverCharacteristics()`, which is the
+correct outcome — the scanner re-offers it under the existing backoff.
+
+**Rebuild:**
+
+```bash
+docker run --platform linux/amd64 --rm \
+  -v "$PWD/data/remote/transport/bluetooth/native:/build" \
+  bitchat-linux-arm64-cross bash /build/build-gattlib-linux-arm64.sh
+```
+
+Measured at **23 s**, and byte-reproducible: two consecutive builds of the same source produce identical
+archives. So unlike Arti and libsodium this one is safe to rebuild casually — the blanket "the prebuilt native
+archives take hours to rebuild" warning in `CLAUDE.md` §4 is about those, not about gattlib. Note that
+`build-gattlib-linux-arm64.sh:43` does `rm -rf` on the build directory, so copy the existing `libgattlib.a`
+aside first if you want a guaranteed rollback.
+
+**Restoring the patch if the submodule is reset.** The change lives in a commit on the fork, so
+`git submodule update --init data/remote/transport/bluetooth/native/gattlib` restores it from `.gitmodules`.
+If the submodule is ever pointed back at `labapart/gattlib`, recover with:
+
+```bash
+cd data/remote/transport/bluetooth/native/gattlib
+git remote set-url origin https://github.com/fluxxion82/gattlib.git
+git fetch origin bitchat-null-guards
+git checkout f647d32657207143b8acc9aa5ab264a07661fcb7
+```
+
+No upstream PR has been opened against `labapart/gattlib` yet.
 
 ---
 

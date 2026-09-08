@@ -12,4 +12,4 @@
 	url = https://gitlab.torproject.org/tpo/core/arti.git
 [submodule "data/remote/transport/bluetooth/native/gattlib"]
 	path = data/remote/transport/bluetooth/native/gattlib
-	url = https://github.com/labapart/gattlib.git
+	url = https://github.com/fluxxion82/gattlib.git

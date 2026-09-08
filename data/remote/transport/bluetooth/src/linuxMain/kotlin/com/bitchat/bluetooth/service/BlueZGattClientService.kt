@@ -8,6 +8,7 @@ import kotlinx.cinterop.*
 import kotlinx.coroutines.delay
 import kotlin.concurrent.AtomicInt
 import kotlin.concurrent.AtomicReference
+import platform.posix.free
 import platform.posix.size_t
 
 /**
@@ -412,47 +413,56 @@ class BlueZGattClientService(
             servicesPtr.value = null
             servicesCount.value = 0
 
-            val result = gattlib_discover_primary(entry.connection, servicesPtr.ptr, servicesCount.ptr)
+            // gattlib_discover_primary() calloc's the array and hands us ownership. Nothing freed
+            // it. The try starts here, after the out-params are known-null, so the finally is a
+            // no-op when gattlib returns without writing them. bitchatService points *into* this
+            // array and discoverCharacteristics() reads its handle range, so the free has to stay
+            // out here where that nested call has already returned.
+            try {
+                val result = gattlib_discover_primary(entry.connection, servicesPtr.ptr, servicesCount.ptr)
 
-            if (result != GATTLIB_SUCCESS) {
-                abandon(entry, "service discovery failed ($result)")
-                return
-            }
-
-            val services = servicesPtr.value
-            val count = servicesCount.value
-            if (services == null || count <= 0) {
-                abandon(entry, "no GATT services reported")
-                return
-            }
-
-            var bitchatService: gattlib_primary_service_t? = null
-            for (i in 0 until count) {
-                val service = services[i]
-                if (manager.uuidToString(service.uuid).equals(BlueZManager.SERVICE_UUID, ignoreCase = true)) {
-                    bitchatService = service
-                    break
+                if (result != GATTLIB_SUCCESS) {
+                    abandon(entry, "service discovery failed ($result)")
+                    return
                 }
-            }
 
-            if (bitchatService == null) {
-                abandon(entry, "no bitchat service among $count services")
-                return
-            }
+                val services = servicesPtr.value
+                val count = servicesCount.value
+                if (services == null || count <= 0) {
+                    abandon(entry, "no GATT services reported")
+                    return
+                }
 
-            // gattlib_discover_primary() is a long run of synchronous D-Bus round trips. If the peer
-            // vanished during it, its D-Bus object list has already been freed, so re-entering
-            // gattlib would walk freed memory.
-            if (!entry.isAlive) {
-                abandon(entry, "peer disconnected during service discovery")
-                return
-            }
-            if (topologyEpoch.value != epoch) {
-                abandon(entry, "BLE topology changed during service discovery")
-                return
-            }
+                var bitchatService: gattlib_primary_service_t? = null
+                for (i in 0 until count) {
+                    val service = services[i]
+                    if (manager.uuidToString(service.uuid).equals(BlueZManager.SERVICE_UUID, ignoreCase = true)) {
+                        bitchatService = service
+                        break
+                    }
+                }
 
-            discoverCharacteristics(entry, bitchatService, count, epoch)
+                if (bitchatService == null) {
+                    abandon(entry, "no bitchat service among $count services")
+                    return
+                }
+
+                // gattlib_discover_primary() is a long run of synchronous D-Bus round trips. If the peer
+                // vanished during it, its D-Bus object list has already been freed, so re-entering
+                // gattlib would walk freed memory.
+                if (!entry.isAlive) {
+                    abandon(entry, "peer disconnected during service discovery")
+                    return
+                }
+                if (topologyEpoch.value != epoch) {
+                    abandon(entry, "BLE topology changed during service discovery")
+                    return
+                }
+
+                discoverCharacteristics(entry, bitchatService, count, epoch)
+            } finally {
+                free(servicesPtr.value)
+            }
         }
     }
 
@@ -470,62 +480,69 @@ class BlueZGattClientService(
             charsPtr.value = null
             charsCount.value = 0
 
-            val result = gattlib_discover_char_range(
-                entry.connection,
-                service.attr_handle_start,
-                service.attr_handle_end,
-                charsPtr.ptr,
-                charsCount.ptr
-            )
+            // Same ownership as the service array: gattlib calloc's it, we free it. bitchatCharacteristic
+            // is a uuid_t inside this array, and gattlib_notification_start() reads it through before
+            // returning, so freeing here rather than eagerly after the scan keeps that read valid.
+            try {
+                val result = gattlib_discover_char_range(
+                    entry.connection,
+                    service.attr_handle_start,
+                    service.attr_handle_end,
+                    charsPtr.ptr,
+                    charsCount.ptr
+                )
 
-            if (result != GATTLIB_SUCCESS) {
-                abandon(entry, "characteristic discovery failed ($result)")
-                return
-            }
+                if (result != GATTLIB_SUCCESS) {
+                    abandon(entry, "characteristic discovery failed ($result)")
+                    return
+                }
 
-            if (!entry.isAlive) {
-                abandon(entry, "peer disconnected during characteristic discovery")
-                return
-            }
-            if (topologyEpoch.value != epoch) {
-                abandon(entry, "BLE topology changed during characteristic discovery")
-                return
-            }
+                if (!entry.isAlive) {
+                    abandon(entry, "peer disconnected during characteristic discovery")
+                    return
+                }
+                if (topologyEpoch.value != epoch) {
+                    abandon(entry, "BLE topology changed during characteristic discovery")
+                    return
+                }
 
-            val chars = charsPtr.value
-            val count = charsCount.value
+                val chars = charsPtr.value
+                val count = charsCount.value
 
-            var bitchatCharacteristic: uuid_t? = null
-            if (chars != null) {
-                for (i in 0 until count) {
-                    val characteristic = chars[i]
-                    if (manager.uuidToString(characteristic.uuid)
-                            .equals(BlueZManager.CHARACTERISTIC_UUID, ignoreCase = true)
-                    ) {
-                        bitchatCharacteristic = characteristic.uuid
-                        break
+                var bitchatCharacteristic: uuid_t? = null
+                if (chars != null) {
+                    for (i in 0 until count) {
+                        val characteristic = chars[i]
+                        if (manager.uuidToString(characteristic.uuid)
+                                .equals(BlueZManager.CHARACTERISTIC_UUID, ignoreCase = true)
+                        ) {
+                            bitchatCharacteristic = characteristic.uuid
+                            break
+                        }
                     }
                 }
-            }
 
-            if (bitchatCharacteristic == null) {
-                abandon(entry, "bitchat characteristic missing from $count characteristics")
-                return
-            }
+                if (bitchatCharacteristic == null) {
+                    abandon(entry, "bitchat characteristic missing from $count characteristics")
+                    return
+                }
 
-            if (!enableNotifications(entry, bitchatCharacteristic)) {
-                abandon(entry, "could not subscribe to notifications")
-                return
-            }
+                if (!enableNotifications(entry, bitchatCharacteristic)) {
+                    abandon(entry, "could not subscribe to notifications")
+                    return
+                }
 
-            if (!entry.isAlive) {
-                abandon(entry, "peer disconnected during subscription")
-                return
-            }
+                if (!entry.isAlive) {
+                    abandon(entry, "peer disconnected during subscription")
+                    return
+                }
 
-            entry.markReady()
-            logInfo(TAG, "Discovery complete for $address: $serviceCount services, $count characteristics, ready")
-            onConnectionReady?.invoke(address)
+                entry.markReady()
+                logInfo(TAG, "Discovery complete for $address: $serviceCount services, $count characteristics, ready")
+                onConnectionReady?.invoke(address)
+            } finally {
+                free(charsPtr.value)
+            }
         }
     }
 
