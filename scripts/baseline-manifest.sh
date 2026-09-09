@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Snapshot everything a fork-dependent build relies on, so upgrades can be diffed and rolled back.
-# Output: docs/baseline/<date>.md (commit it).
+# Output: docs/baseline/<date>.md (untracked; local to this machine).
 set -euo pipefail
 export LC_ALL=C  # deterministic sort/hash order regardless of the caller's locale
 cd "$(dirname "$0")/.."

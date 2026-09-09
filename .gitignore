@@ -98,3 +98,8 @@ docs/superpowers/
 
 # Quarantined Gradle output the ntfs3 driver corrupted and cannot delete
 data/remote/transport/bluetooth/build.corrupt*/
+
+# Local-only working notes and test fixtures
+docs/plans/
+docs/baseline/
+tests/

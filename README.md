@@ -110,7 +110,7 @@ For iOS, open `apps/iosApp/iosApp.xcodeproj` in Xcode. The shared framework is `
 
 ### 4. Verify
 
-`scripts/verify.sh [quick|desktop|android|ios|embedded|full]` runs the per-platform build gates (default `quick` = `:domain:jvmTest` + desktop compile); the last recorded results live in `docs/baseline/`.
+`scripts/verify.sh [quick|desktop|android|ios|embedded|full]` runs the per-platform build gates (default `quick` = `:domain:jvmTest` + desktop compile); the last recorded results are written to `docs/baseline/`, which is untracked and local to each machine.
 On a Homebrew JDK, `desktop`/`full` need `GRADLE_ARGS='-Pcompose.desktop.packaging.checkJdkVendor=false'` (see the `scripts/verify.sh` header).
 
 Agent/editor notes live in the gitignored CLAUDE.md; docs/architecture-summary.md is the tracked source for the module map.

@@ -4,7 +4,7 @@
 #
 # The embedded build's outbound BLE works and then, after some hours, stops: connect attempts reach
 # `Connected: true` and lose the link immediately, and every attempt fails. It survives an app restart,
-# so it is not in our process. See docs/plans/2026-09-08-pi-outbound-bluetooth.md.
+# so it is not in our process. See the untracked docs/plans/2026-09-08-pi-outbound-bluetooth.md.
 #
 # The tell is in the kernel log rather than ours. `Opcode 0x2036/0x2039 failed: -16` -- LE Set Extended
 # Advertising Parameters and Enable, refused as Command Disallowed -- appears about once per outbound
@@ -18,7 +18,7 @@
 # WHEN is anything journalctl accepts: "-6h", "2026-09-08 05:12", "today".
 #
 # The second form counts saved journal text instead of reaching for the device, which is how the
-# verdict logic is tested (tests/ble-outbound-report/) and how a window that journald has since
+# verdict logic is tested (the untracked tests/ble-outbound-report/) and how a window that journald has since
 # vacuumed can still be reported on. Save one with:
 #   ssh HOST 'journalctl -u bitchat.service --since ... --no-pager' > app.log
 #   ssh HOST 'journalctl -k --since ... --no-pager' > kernel.log
