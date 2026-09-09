@@ -51,6 +51,17 @@ class BlueZConnectionService(
     // Permission to open an outbound link, and the deadline gattlib does not enforce on one.
     private val linkPolicy = CentralLinkPolicy()
 
+    /**
+     * Every address the scanner has ever named, so the sweep can offer one again.
+     *
+     * BlueZ announces a device once, when it first appears. gattlib's discovery callback passes
+     * that straight through, so a peer whose connect failed is never offered a second time and the
+     * policy's backoff -- which assumes repeated offers -- never gets to expire. Measured on the
+     * Pi: two connects failed within ten seconds of start-up and the radio then sat idle with zero
+     * links while both peers were still advertising.
+     */
+    private val knownPeers = mutableSetOf<String>()
+
     // Addresses of peers this node is already talking to, keyed by peer ID rather than by MAC.
     // Android rotates its advertising address, so the same phone is offered by the scanner under a
     // new MAC every minute or so; the mesh service publishes the mapping here as it learns it.
@@ -234,6 +245,7 @@ class BlueZConnectionService(
      */
     suspend fun onDeviceDiscovered(deviceAddress: String, deviceName: String?) {
         val decision = connectionMutex.withLock {
+            knownPeers.add(deviceAddress)
             linkPolicy.onDiscovered(
                 address = deviceAddress,
                 now = currentTimeMillis(),
@@ -385,6 +397,20 @@ class BlueZConnectionService(
         }
     }
 
+    /**
+     * Offer peers the scanner will not mention again.
+     *
+     * Every candidate goes back through [onDeviceDiscovered], so the policy makes the same decision
+     * it would for a fresh sighting: backoff, in-flight attempts and the inbound-link rules all
+     * still apply and a peer that should be left alone is skipped. Addresses we already hold a link
+     * to are filtered out first, which keeps the common case to a set difference.
+     */
+    internal suspend fun reofferKnownPeers() {
+        val held = gattClient.heldAddresses() + serverConnections.toSet()
+        val candidates = connectionMutex.withLock { knownPeers - held }
+        candidates.forEach { address -> onDeviceDiscovered(address, null) }
+    }
+
     private fun startAttemptReaper() {
         if (reaperJob?.isActive == true) return
         reaperJob = coroutineScopeFacade.applicationScope.launch {
@@ -394,6 +420,7 @@ class BlueZConnectionService(
             while (isActive) {
                 delay(CentralLinkPolicy.SWEEP_INTERVAL_MS)
                 reapExpiredAttempts(currentTimeMillis())
+                reofferKnownPeers()
             }
         }
     }
