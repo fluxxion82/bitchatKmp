@@ -9,6 +9,12 @@ plugins {
 version = "1.0.0"
 
 val bleNativeProp = (findProperty("bleNative") as? String)?.lowercase()
+// Log levels for the SLF4J loggers configured in src/main/resources/logback.xml. JavaExec forks its
+// own JVM and does not inherit -D from the Gradle command line, so they arrive as -P and are passed
+// on explicitly. -PbleLevel=DEBUG recovers the scanner's snapshot lines; -PbleDbusLevel=TRACE gives
+// dbus-java's wire trace, which needs no root privileges.
+val bleLevelProp = (findProperty("bleLevel") as? String)?.uppercase()
+val bleDbusLevelProp = (findProperty("bleDbusLevel") as? String)?.uppercase()
 val locationNativeProp = (findProperty("locationNative") as? String)?.lowercase()
 val currentOs = org.gradle.internal.os.OperatingSystem.current()
 
@@ -100,6 +106,12 @@ compose.desktop {
         }
         if (bleNativeProp != null) {
             jvmArgs += listOf("-Dble.native=$bleNativeProp")
+        }
+        if (bleLevelProp != null) {
+            jvmArgs += listOf("-Dble.level=$bleLevelProp")
+        }
+        if (bleDbusLevelProp != null) {
+            jvmArgs += listOf("-Dble.dbus.level=$bleDbusLevelProp")
         }
         if (locationNativeProp != null) {
             jvmArgs += listOf("-Dlocation.native=$locationNativeProp")

@@ -81,14 +81,26 @@ cd bitchatKmp/
 
 ### 3. Build and run
 
-Plain `./gradlew :apps:desktop:run` works without any native build (no BLE, IP-based location).
+Plain `./gradlew :apps:desktop:run` works without any native build.
+
+On **Linux** that includes working Bluetooth: the desktop talks to BlueZ over D-Bus from the JVM, so
+there is no native library to build. **macOS** still needs `-PbleNative=macos`, which bridges to a
+CoreBluetooth shared library. Location is IP-based on Linux either way, and Tor needs its native
+library built (see `data/remote/tor/native/build-desktop.sh`).
+
+Add `--console=plain` when you want to capture or grep the output — it turns off Gradle's animated
+console so the app's own logging is the only thing on stdout. It changes nothing about how the app
+runs.
 
 ```bash
 # Android
 ./gradlew :apps:droid:installDebug
 
-# Desktop (JVM, no native prerequisites)
+# Desktop (JVM; Linux gets BLE with no native prerequisites)
 ./gradlew :apps:desktop:run
+
+# Desktop, with readable output for a log
+./gradlew :apps:desktop:run --console=plain
 
 # Desktop (macOS native BLE)
 ./gradlew :apps:desktop:clean :apps:desktop:run -PbleNative=macos --rerun-tasks

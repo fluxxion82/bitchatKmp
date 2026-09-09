@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Without this file logback defaults to DEBUG on root, which makes dbus-java pretty-print every raw
+  D-Bus message on its single receiver thread. That is both noise and a latency hazard on the thread
+  carrying inbound BLE data.
+
+  What this does NOT control: most of the mesh logs through raw println, which no logging
+  configuration can touch. This file governs the SLF4J loggers only, meaning dbus-java and the Linux
+  BLE transport.
+
+  (Note for editors: XML comments may not contain a double hyphen. A malformed comment here makes
+  logback reject the whole file and silently fall back to its default, which is how this file was
+  broken once already.)
+-->
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <!--
+              Full logger name, deliberately not %logger{0}. Abbreviating to the last segment turns
+              bitchat.ble.connection into "connection", which is prettier and destroys the ability to
+              grep a log by subsystem, the thing every diagnosis of this transport has needed.
+            -->
+            <pattern>%d{HH:mm:ss.SSS} %-5level %-28logger %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!--
+      dbus-java logs every marshalled message at DEBUG/TRACE. Invaluable when something is wrong on
+      the wire, drowning when it is not, so it is off unless asked for:
+          ./gradlew :apps:desktop:run -PbleDbusLevel=TRACE
+    -->
+    <logger name="org.freedesktop.dbus" level="${ble.dbus.level:-WARN}"/>
+
+    <!--
+      The BLE transport loggers are named bitchat.ble.* by tag, not by class, so a com.bitchat rule
+      would not reach them. The scanner's snapshot lines are DEBUG and are the only evidence of what
+      discovery can see, so they must be recoverable on their own:
+          ./gradlew :apps:desktop:run -PbleLevel=DEBUG
+    -->
+    <logger name="bitchat.ble" level="${ble.level:-INFO}"/>
+    <!-- BlueZBus and BleChunker log by class rather than by tag. -->
+    <logger name="com.bitchat.bluetooth.linux" level="${ble.level:-INFO}"/>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>
