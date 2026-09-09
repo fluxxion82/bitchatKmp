@@ -101,16 +101,23 @@ ls /dev/dri/card*
 
 `scripts/deploy-pi.sh` links the binary, ships it to the Pi as a versioned release, verifies it there and (re)starts it as `bitchat.service`:
 
+No device, account or address is checked into this repository. Point the script at yours with `PI_HOST` (an ssh
+destination: `user@host`, or a `Host` alias from `~/.ssh/config`) or `--host`; both are otherwise unset and the
+script refuses to run. The account the unit runs as comes from the user part of that target, so `PI_HOST=pi@box`
+installs `User=pi`; set `PI_USER` (and `PI_GROUP`, which defaults to it) when the target is a bare host or an alias.
+
 ```bash
-scripts/deploy-pi.sh                    # debug build to $PI_HOST (default sterling@192.168.4.58)
+export PI_HOST=user@orangepi            # required; or pass --host to every invocation
+scripts/deploy-pi.sh                    # debug build to $PI_HOST
 scripts/deploy-pi.sh --release          # release build
 scripts/deploy-pi.sh --no-build         # reuse the existing link output (sidecar must match the kexe)
 scripts/deploy-pi.sh --no-restart       # upload, verify and switch current; do not install/restart the unit
 scripts/deploy-pi.sh --dry-run          # build and stage locally, print BUILD_INFO and SHA256SUMS, no ssh
-scripts/deploy-pi.sh --host user@host   # or export PI_HOST=user@host
+scripts/deploy-pi.sh --host user@host   # one-off target, overrides $PI_HOST
+PI_USER=pi scripts/deploy-pi.sh --host orangepi   # ssh alias: name the account explicitly
 ```
 
-In order: runs `./gradlew -Pembedded.enabled=true :apps:embedded:link{Debug,Release}ExecutableLinuxArm64`; reads the `bitchat-embedded.build-info` sidecar the link task writes next to the kexe and checks the executable's SHA-256 against it; stages the kexe, `compose-resources/`, `systemd/bitchat.service`, `systemd/wait-for-input-devices.sh`, `BUILD_INFO` and a `SHA256SUMS` manifest; rsyncs them to `/opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/`; runs `sha256sum -c` and `bitchat-embedded.kexe --version` on the device and requires the output to equal the sidecar's `identity=` line; swaps the `/opt/bitchat/releases/current` symlink atomically; installs the unit through the sudoers rule and reloads systemd; re-reads `After=` of both `bitchat.service` and `multi-user.target` and warns loudly (never fatally) if the boot ordering cycle is back (see "Boot ordering" below); enables and restarts it; then polls the new invocation's journal until it logs that same identity line, and keeps polling for about four more seconds (two 2 s polls) to confirm the unit is still `active` under the same invocation before declaring success. On a clean tree a second run is UP-TO-DATE in Gradle, reuses the same release directory and rewrites only `BUILD_INFO` and `SHA256SUMS`.
+In order: runs `./gradlew -Pembedded.enabled=true :apps:embedded:link{Debug,Release}ExecutableLinuxArm64`; reads the `bitchat-embedded.build-info` sidecar the link task writes next to the kexe and checks the executable's SHA-256 against it; stages the kexe, `compose-resources/`, `systemd/bitchat.service` (with its `__BITCHAT_USER__`/`__BITCHAT_GROUP__` placeholders filled in from `PI_USER`/`PI_GROUP`), `systemd/wait-for-input-devices.sh`, `BUILD_INFO` and a `SHA256SUMS` manifest; rsyncs them to `/opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/`; runs `sha256sum -c` and `bitchat-embedded.kexe --version` on the device and requires the output to equal the sidecar's `identity=` line; swaps the `/opt/bitchat/releases/current` symlink atomically; installs the unit through the sudoers rule and reloads systemd; re-reads `After=` of both `bitchat.service` and `multi-user.target` and warns loudly (never fatally) if the boot ordering cycle is back (see "Boot ordering" below); enables and restarts it; then polls the new invocation's journal until it logs that same identity line, and keeps polling for about four more seconds (two 2 s polls) to confirm the unit is still `active` under the same invocation before declaring success. On a clean tree a second run is UP-TO-DATE in Gradle, reuses the same release directory and rewrites only `BUILD_INFO` and `SHA256SUMS`.
 
 Release layout on the device:
 
@@ -147,10 +154,12 @@ sudo systemctl start bitchat.service       # hand it back afterwards
 
 One-time device preparation (needs the password once):
 
+Run these on the device, as the account you ssh in as (`$USER` below is that account):
+
 ```bash
-sudo mkdir -p /opt/bitchat/releases && sudo chown sterling:sterling /opt/bitchat/releases
-sudo install -o sterling -g sterling -m 644 /dev/null /opt/bitchat/bitchat.service   # placeholder; the script overwrites it in place
-sudo usermod -aG systemd-journal sterling                                             # journal read access for the post-restart check
+sudo mkdir -p /opt/bitchat/releases && sudo chown "$USER:$USER" /opt/bitchat/releases
+sudo install -o "$USER" -g "$USER" -m 644 /dev/null /opt/bitchat/bitchat.service   # placeholder; the script overwrites it in place
+sudo usermod -aG systemd-journal "$USER"                                           # journal read access for the post-restart check
 ```
 
 plus a sudoers entry that lets the ssh user run, without a password, `systemctl daemon-reload`,

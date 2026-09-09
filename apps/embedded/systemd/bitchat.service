@@ -2,6 +2,10 @@
 # The binary and its compose-resources/ live in /opt/bitchat/releases/<release>/;
 # /opt/bitchat/releases/current is a symlink the deploy script swaps atomically.
 #
+# __BITCHAT_USER__ and __BITCHAT_GROUP__ are placeholders: no account name is checked in.
+# deploy-pi.sh substitutes them while staging, from PI_USER/PI_GROUP or the user part of the
+# target ($PI_HOST / --host). Installing this file by hand means substituting them by hand.
+#
 # Ordering: After=multi-user.target is load-bearing, do not remove it. systemd adds an
 # implicit After= from a target to every unit that target Wants -- unless an ordering
 # dependency between the two already exists, in which case the implicit reverse edge is
@@ -23,8 +27,8 @@ After=multi-user.target cardkb.service xpt2046-touch.service
 
 [Service]
 Type=simple
-User=sterling
-Group=sterling
+User=__BITCHAT_USER__
+Group=__BITCHAT_GROUP__
 SupplementaryGroups=video render input
 WorkingDirectory=/opt/bitchat/releases/current
 # The app scans for its input devices once at startup, so wait for them first. The script

@@ -173,14 +173,16 @@ Run `./scripts/build-all-ios.sh` or `./scripts/build-all-desktop.sh`. You need R
    ```bash
    ./gradlew -Pembedded.enabled=true :apps:embedded:linkReleaseExecutableLinuxArm64
    ```
-3. Deploy to the device and (re)start `bitchat.service` (`PI_HOST=user@host` or `--host` overrides the default `sterling@192.168.4.58`; this step also does the link from step 2):
+3. Deploy to the device and (re)start `bitchat.service` (this step also does the link from step 2). The target is
+   yours to supply: no host or account is checked into this repository, so set `PI_HOST` (or pass `--host`):
    ```bash
+   export PI_HOST=user@orangepi          # ssh destination; a Host alias from ~/.ssh/config works too
    scripts/deploy-pi.sh --release
    ```
-   The script uploads to `/opt/bitchat/releases/<sha12>[-dirty]-release-<digest8>/`, verifies `SHA256SUMS` and `bitchat-embedded.kexe --version` on the device, swaps the `current` symlink and restarts the unit. One-time device prep (sterling-owned `/opt/bitchat/releases`, the placeholder `/opt/bitchat/bitchat.service`, the sudoers rule) and rollback are in [`apps/embedded/README.md`](apps/embedded/README.md#deploy-and-run).
+   The script uploads to `/opt/bitchat/releases/<sha12>[-dirty]-release-<digest8>/`, verifies `SHA256SUMS` and `bitchat-embedded.kexe --version` on the device, swaps the `current` symlink and restarts the unit. One-time device prep (`/opt/bitchat/releases` owned by the ssh user, the placeholder `/opt/bitchat/bitchat.service`, the sudoers rule) and rollback are in [`apps/embedded/README.md`](apps/embedded/README.md#deploy-and-run).
 4. Watch it run:
    ```bash
-   ssh user@<orangepi-ip> journalctl -u bitchat.service -f
+   ssh "$PI_HOST" journalctl -u bitchat.service -f
    ```
 
 For full setup (display, touch, CardKB, LoRa protocol stack), use the docs map below.

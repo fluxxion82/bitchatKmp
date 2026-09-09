@@ -6,14 +6,18 @@ Scripts for testing RFM95W LoRa module on Orange Pi Zero 3.
 
 ### 1. Copy scripts to Orange Pi
 
+`$PI_HOST` is your own ssh destination (`user@host`, or a `Host` alias from `~/.ssh/config`); it is not
+checked into this repository.
+
 ```bash
-scp lora_test.py gpio_discover.sh sterling@192.168.6.210:~/
+export PI_HOST=user@orangepi
+scp lora_test.py gpio_discover.sh "$PI_HOST:~/"
 ```
 
 ### 2. SSH to Orange Pi
 
 ```bash
-ssh sterling@192.168.6.210
+ssh "$PI_HOST"
 ```
 
 ### 3. Install dependencies

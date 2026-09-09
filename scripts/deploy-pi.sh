@@ -6,8 +6,8 @@
 #                                                              SHA256SUMS, BUILD_INFO, bitchat.service,
 #                                                              wait-for-input-devices.sh
 #   /opt/bitchat/releases/current -> <release dir>             swapped atomically (ln + mv -T)
-#   /opt/bitchat/bitchat.service                               sterling-owned copy that the
-#                                                              sudoers rule lets us install
+#   /opt/bitchat/bitchat.service                               copy owned by the deploy user
+#                                                              that the sudoers rule lets us install
 #   ~/bitchat-embedded.kexe -> .../current/bitchat-embedded.kexe   convenience symlink, kept
 #                                                              current by every deploy
 #
@@ -29,7 +29,6 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
-DEFAULT_HOST="sterling@192.168.4.58"
 RELEASES="/opt/bitchat/releases"
 RSYNC="${RSYNC:-rsync}"
 
@@ -44,23 +43,33 @@ wait-for-input-devices.sh, uploads it to
 verifies it on the device, swaps $RELEASES/current and
 restarts bitchat.service.
 
+The target is not baked into this repository. Set PI_HOST (an ssh
+destination: user@host, or a Host alias from ~/.ssh/config) or pass
+--host. Key-based ssh must work without a passphrase prompt (BatchMode).
+
 Options:
   --release          link the release binary (default: debug)
   --debug            link the debug binary
   --no-build         reuse the existing link output (its build-info sidecar must match)
   --no-restart       upload, verify and switch, but do not install/restart the unit
   --dry-run          build and stage locally, print what would be uploaded, no ssh
-  --host USER@HOST   target (default: \$PI_HOST or $DEFAULT_HOST)
+  --host DEST        target ssh destination (overrides \$PI_HOST); required if PI_HOST is unset
   -h, --help
 
-Env: PI_HOST (target), RSYNC (rsync binary, default: rsync).
+Env:
+  PI_HOST   target ssh destination (required unless --host is given)
+  PI_USER   account the unit runs as (default: the user part of the target,
+            so PI_HOST=pi@box implies pi; required when the target is a bare
+            host or an ssh alias)
+  PI_GROUP  group for the unit (default: same as PI_USER)
+  RSYNC     rsync binary (default: rsync)
 USAGE
 }
 die() { echo "deploy-pi.sh: $*" >&2; exit 1; }
 log() { echo "== $*"; }
 
 # --- 1. options -------------------------------------------------------------
-BUILD=debug; DO_BUILD=1; DO_RESTART=1; DRY_RUN=0; HOST="${PI_HOST:-$DEFAULT_HOST}"
+BUILD=debug; DO_BUILD=1; DO_RESTART=1; DRY_RUN=0; HOST="${PI_HOST:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --release)    BUILD=release ;;
@@ -68,13 +77,23 @@ while [[ $# -gt 0 ]]; do
     --no-build)   DO_BUILD=0 ;;
     --no-restart) DO_RESTART=0 ;;
     --dry-run)    DRY_RUN=1 ;;
-    --host)       [[ $# -ge 2 ]] || { echo "deploy-pi.sh: --host needs USER@HOST" >&2; usage >&2; exit 2; }
+    --host)       [[ $# -ge 2 ]] || { echo "deploy-pi.sh: --host needs an ssh destination" >&2; usage >&2; exit 2; }
                   HOST="$2"; shift ;;
     -h|--help)    usage; exit 0 ;;
     *)            echo "deploy-pi.sh: unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
+[[ -n "$HOST" ]] || die "no target; set PI_HOST=user@host or pass --host user@host (see --help)"
+# The unit runs as an unprivileged account on the device. Derive it from the target so a plain
+# PI_HOST=user@host needs nothing else, and let PI_USER/PI_GROUP override for ssh aliases.
+PI_USER="${PI_USER:-}"
+if [[ -z "$PI_USER" && "$HOST" == *@* ]]; then PI_USER="${HOST%%@*}"; fi
+[[ -n "$PI_USER" ]] || die "cannot tell which account bitchat.service should run as: '$HOST' carries no user part, so set PI_USER"
+case "$PI_USER" in *[!A-Za-z0-9._-]*) die "PI_USER '$PI_USER' is not a plain user name" ;; esac
+PI_GROUP="${PI_GROUP:-$PI_USER}"
+case "$PI_GROUP" in *[!A-Za-z0-9._-]*) die "PI_GROUP '$PI_GROUP' is not a plain group name" ;; esac
+
 case "$BUILD" in debug) BUILD_CAP=Debug ;; release) BUILD_CAP=Release ;; esac
 TASK="link${BUILD_CAP}ExecutableLinuxArm64"
 OUT_DIR="$REPO/apps/embedded/build/bin/linuxArm64/${BUILD}Executable"
@@ -125,7 +144,17 @@ trap 'rm -rf "$STAGE"' EXIT
 cp -p "$BINARY" "$STAGE/bitchat-embedded.kexe"
 chmod 755 "$STAGE/bitchat-embedded.kexe"
 cp -Rp "$OUT_DIR/compose-resources" "$STAGE/compose-resources"
-cp -p "$UNIT_FILE" "$STAGE/bitchat.service"
+# bitchat.service ships with __BITCHAT_USER__/__BITCHAT_GROUP__ placeholders so no account
+# name is checked into the repository; fill them in here. touch -r restores the source mtime
+# so an unchanged release still rsyncs as a no-op, and the payload digest stays content-based.
+sed -e "s/__BITCHAT_USER__/$PI_USER/g" -e "s/__BITCHAT_GROUP__/$PI_GROUP/g" \
+  "$UNIT_FILE" > "$STAGE/bitchat.service"
+! grep -q '__BITCHAT_' "$STAGE/bitchat.service" \
+  || die "$UNIT_FILE still has an unsubstituted __BITCHAT_* placeholder"
+grep -q "^User=$PI_USER$" "$STAGE/bitchat.service" \
+  || die "staged bitchat.service has no User=$PI_USER line; check $UNIT_FILE"
+chmod 644 "$STAGE/bitchat.service"
+touch -r "$UNIT_FILE" "$STAGE/bitchat.service"
 cp -p "$WAIT_SCRIPT" "$STAGE/wait-for-input-devices.sh"
 chmod 755 "$STAGE/wait-for-input-devices.sh"
 manifest() { ( cd "$STAGE" && find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 > SHA256SUMS ); }
@@ -246,7 +275,7 @@ if [[ "$DO_RESTART" == 1 ]]; then
       && sudo -n systemctl daemon-reload" || rc=$?
   transport_check "$rc" "install" "$SWAPPED"
   if [[ "$rc" == 42 ]]; then
-    die "/opt/bitchat/bitchat.service is missing or not writable by sterling; create it once with: sudo install -o sterling -g sterling -m 644 /dev/null /opt/bitchat/bitchat.service; $SWAPPED"
+    die "/opt/bitchat/bitchat.service is missing or not writable by $PI_USER; create it once with: sudo install -o $PI_USER -g $PI_GROUP -m 644 /dev/null /opt/bitchat/bitchat.service; $SWAPPED"
   elif [[ "$rc" != 0 ]]; then
     die "installing bitchat.service failed (exit $rc); $SWAPPED"
   fi

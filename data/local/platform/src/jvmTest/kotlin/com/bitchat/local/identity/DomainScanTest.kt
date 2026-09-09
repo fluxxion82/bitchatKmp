@@ -5,9 +5,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-private const val PREFS = "/home/sterling/.bitchat/prefs"
-private const val CONFIG = "/home/sterling/.config/bitchat"
-private const val SETTINGS = "/home/sterling/.bitchat/settings"
+private const val PREFS = "/home/pi/.bitchat/prefs"
+private const val CONFIG = "/home/pi/.config/bitchat"
+private const val SETTINGS = "/home/pi/.bitchat/settings"
 
 private fun domain(
     prefs: List<String> = emptyList(),

@@ -1,5 +1,12 @@
 # RangePi Verification Guide (868.125 Bring-Up)
 
+Steps that reach the Orange Pi use `$PI_HOST`, your own ssh destination (`user@host`, or a `Host` alias from
+`~/.ssh/config`). It is not checked into this repository; export it first:
+
+```bash
+export PI_HOST=user@orangepi
+```
+
 ## 0) One-Time E22 Truth Probe (Required first)
 
 Run `e22_truth_probe.py` on RangePi (as `main.py` in BOOTSEL mode), then capture serial output.
@@ -62,7 +69,7 @@ Pass criteria:
 Start embedded app with probe:
 
 ```bash
-ssh -t sterling@192.168.6.210 'BITCHAT_LORA_PROBE=1 /tmp/bitchat-embedded.kexe'
+ssh -t "$PI_HOST" 'BITCHAT_LORA_PROBE=1 /tmp/bitchat-embedded.kexe'
 ```
 
 Pass criteria:

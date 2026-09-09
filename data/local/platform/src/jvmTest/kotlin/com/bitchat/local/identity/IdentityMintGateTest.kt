@@ -14,7 +14,7 @@ private const val EPOCH = "0123456789abcdef0123456789abcdef"
 private val INHABITED = DomainVerdict.Inhabited(
     listOf(
         DomainArtifact(
-            "/home/sterling/.bitchat/prefs",
+            "/home/pi/.bitchat/prefs",
             "bitchat_identity.prefs",
             ArtifactClass.PLAINTEXT_STORE,
         ),
@@ -131,7 +131,7 @@ class IdentityMintGateTest {
             IdentityMintGate.decide(
                 component = IdentityComponent.MESH_SIGNING,
                 domain = DomainVerdict.Indeterminate(
-                    listOf("/home/sterling/.config/bitchat: Permission denied"),
+                    listOf("/home/pi/.config/bitchat: Permission denied"),
                 ),
                 store = PreferenceStoreState.FIRST_RUN,
                 ledger = LedgerClaims.Absent,

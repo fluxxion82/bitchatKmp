@@ -12,8 +12,11 @@
 # on; the rest is context for reading it.
 #
 # Usage:
-#   scripts/ble-outbound-report.sh [--since WHEN] [--until WHEN] [--host USER@HOST]
+#   scripts/ble-outbound-report.sh [--since WHEN] [--until WHEN] [--host DEST]
 #   scripts/ble-outbound-report.sh --app-log FILE --kernel-log FILE
+#
+# The device is not baked into this repository: the first form needs PI_HOST (an ssh
+# destination -- user@host, or a Host alias from ~/.ssh/config) or --host.
 #
 # WHEN is anything journalctl accepts: "-6h", "2026-09-08 05:12", "today".
 #
@@ -27,7 +30,7 @@ set -uo pipefail
 
 SINCE="-1h"
 UNTIL="now"
-HOST="${PI_HOST:-sterling@192.168.4.58}"
+HOST="${PI_HOST:-}"
 APP_LOG=""
 KERNEL_LOG=""
 
@@ -59,6 +62,7 @@ if [ -n "$APP_LOG" ] || [ -n "$KERNEL_LOG" ]; then
   NRESTARTS="n/a"
   EARLIEST=""
 else
+  [ -n "$HOST" ] || { echo "no target; set PI_HOST=user@host or pass --host user@host (or read saved journals with --app-log/--kernel-log)" >&2; exit 2; }
   SOURCE="$HOST"
   FETCH=$(ssh -o BatchMode=yes "$HOST" "SINCE='$SINCE'; UNTIL='$UNTIL'; APP_RE='$APP_INTEREST'; KERN_RE='$KERNEL_INTEREST'; "'
     echo "===APP==="
