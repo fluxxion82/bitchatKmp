@@ -1,22 +1,20 @@
 [versions]
 ## SDK Versions
-jna = "5.18.1"
-jserialcomm = "2.10.4"
+jna = "5.19.1"
+jserialcomm = "2.11.4"
 usb-serial-android = "3.8.1"
 targetSdk = "36"
 compileSdk = "36"
 minSdk = "26"
 agp = "8.12.3"
-ios-deploymentTarget = "13.0"
 
 # Dependencies
 kotlin = "2.2.10"
-ksp = "2.3.0"
 
-coroutines = "1.10.2"
+coroutines = "1.11.0"
 kotlinx-datetime = "0.7.1"
 
-atomicfu = "0.29.0"
+atomicfu = "0.33.0"
 
 ktor = "3.3.3"
 
@@ -32,7 +30,7 @@ lifecycleViewmodelKtx = "2.10.0"
 media3Exoplayer = "1.8.0"
 mockitoCore = "5.21.0"
 mockitoKotlin = "2.2.0"
-mockkAgentJvm = "1.14.7"
+mockkAgentJvm = "1.14.11"
 mockkCommon = "1.12.5"
 multiplatformSettings = "1.3.0"
 
@@ -40,10 +38,6 @@ exifinterface = "1.4.2"
 
 compose-bom = "2026.01.00"
 navigationCompose = "2.9.1"
-
-compose-multiplatorm = "1.10.0"
-
-composeHotReload = "1.0.0"
 
 coreKtx = "1.17.0"
 androidx-annotation = "1.9.1"
@@ -53,9 +47,8 @@ coil = "3.3.0"
 
 accompanist = "0.37.3"
 camerax = "1.5.2"
-bouncy = "1.83"
-tink = "1.20.0"
-javafx = "21.0.2"
+bouncy = "1.85"
+tink = "1.23.0"
 wire = "5.3.1"
 
 # Linux BLE: BlueZ over D-Bus on the desktop JVM
@@ -151,12 +144,8 @@ bcpkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncy" }
 tink = { module = "com.google.crypto.tink:tink", version.ref = "tink" }
 tink-android = { module = "com.google.crypto.tink:tink-android", version.ref = "tink" }
 
-mockk = { module = "io.mockk:mockk", version = "1.14.7" }
+mockk = { module = "io.mockk:mockk", version = "1.14.11" }
 turbine = { module = "app.cash.turbine:turbine", version = "1.2.1" }
-
-javafx-controls = { module = "org.openjfx:javafx-controls", version.ref = "javafx" }
-javafx-swing = { module = "org.openjfx:javafx-swing", version.ref = "javafx" }
-javafx-web = { module = "org.openjfx:javafx-web", version.ref = "javafx" }
 
 # LoRa serial communication
 jserialcomm = { module = "com.fazecast:jSerialComm", version.ref = "jserialcomm" }
@@ -176,12 +165,10 @@ kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref 
 jetbrains-compose = { id = "org.jetbrains.compose" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 android-kotlin-multiplatform-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
 jetbrains-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 google-services = { id = "com.google.gms.google-services", version = "4.4.4" }
 cocoapods = { id = "org.jetbrains.kotlin.native.cocoapods", version.ref = "kotlin" }
-composeHotReload = { id = "org.jetbrains.compose.hot-reload", version.ref = "composeHotReload" }
 wire = { id = "com.squareup.wire", version.ref = "wire" }
