@@ -167,6 +167,16 @@ class BlueZGattServerService(
     private var dispatchWorker: Worker? = null
     private val dispatchRunning = AtomicInt(0)
 
+    /**
+     * Set by [BlueZConnectionService] so a BlueZ device-gone signal reaps the outbound link to the
+     * same peer, not just the server-side client. gattlib's per-connection disconnect handler is
+     * the only other thing that reports an outbound link dropping, and it does not always fire.
+     */
+    internal var onDeviceLinkGone: ((String) -> Unit)? = null
+
+    /** True when the central side still holds a link that a device-gone signal could prune. */
+    internal var hasOutboundLinks: (() -> Boolean)? = null
+
     // Connected clients tracked by device address
     private val connectedClients = GattClientRegistry()
 
@@ -1331,6 +1341,18 @@ class BlueZGattServerService(
     }
 
     /**
+     * BlueZ says the link to [deviceAddress] is gone, whichever side opened it.
+     *
+     * Reaps the server-side client and hands the address to the central side as well: a link we
+     * dialled out on is invisible to [connectedClients], and gattlib's disconnect callback does not
+     * always fire for one, which used to leave it in the registry forever.
+     */
+    internal fun onDeviceGone(deviceAddress: String) {
+        onClientDisconnected(deviceAddress)
+        onDeviceLinkGone?.invoke(deviceAddress)
+    }
+
+    /**
      * Called when a client disconnects.
      */
     internal fun onClientDisconnected(deviceAddress: String) {
@@ -1445,9 +1467,11 @@ private fun dbusMessageFilter(
  */
 @OptIn(ExperimentalForeignApi::class)
 private fun observeDeviceSignal(message: CPointer<DBusMessage>, server: BlueZGattServerService) {
-    // The Device1 match also carries every RSSI update BlueZ emits while scanning. With no client
-    // registered there is nothing any of them could prune, which is the common case.
-    if (!server.hasConnectedClients()) return
+    // The Device1 match also carries every RSSI update BlueZ emits while scanning. With nothing
+    // registered on either side there is nothing any of them could prune, which is the common case.
+    // The outbound side has to be consulted too: a Pi that only dialled out holds no server client,
+    // and returning here on that alone dropped the one signal that could have reaped its link.
+    if (!server.hasConnectedClients() && server.hasOutboundLinks?.invoke() != true) return
 
     val iface = dbus_message_get_interface(message)?.toKString() ?: return
     val member = dbus_message_get_member(message)?.toKString() ?: return
@@ -1456,13 +1480,13 @@ private fun observeDeviceSignal(message: CPointer<DBusMessage>, server: BlueZGat
         iface == "org.freedesktop.DBus.Properties" && member == "PropertiesChanged" -> {
             val path = dbus_message_get_path(message)?.toKString() ?: return
             val address = BlueZObjectPath.deviceAddress(path) ?: return
-            if (readDeviceDisconnected(message)) server.onClientDisconnected(address)
+            if (readDeviceDisconnected(message)) server.onDeviceGone(address)
         }
 
         iface == "org.freedesktop.DBus.ObjectManager" && member == "InterfacesRemoved" -> {
             val path = readRemovedDevicePath(message) ?: return
             val address = BlueZObjectPath.deviceAddress(path) ?: return
-            server.onClientDisconnected(address)
+            server.onDeviceGone(address)
         }
     }
 }

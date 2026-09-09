@@ -306,6 +306,21 @@ class BlueZConnectionService(
     /**
      * Called when client disconnects.
      */
+    /**
+     * Drop an outbound link BlueZ has already torn down.
+     *
+     * Only acts when the central side still holds the address, so this stays a no-op for the
+     * device-gone signals that name a peer we never dialled -- which is most of them while
+     * scanning. Routing through [BlueZGattClientService.onDisconnected] keeps one teardown path:
+     * it clears the registry entry, marks the connection dead so no later gattlib call walks freed
+     * memory, and fires onConnectionLost, which releases the policy slot.
+     */
+    internal fun reapOutboundLink(deviceAddress: String) {
+        if (!gattClient.holdsConnection(deviceAddress)) return
+        logInfo(TAG, "BlueZ dropped ${deviceAddress.take(8)}; reaping the outbound link")
+        gattClient.onDisconnected(deviceAddress, "BlueZ reported the device gone")
+    }
+
     internal suspend fun onClientDisconnected(deviceAddress: String) {
         connectionMutex.withLock { linkPolicy.onReleased(deviceAddress, currentTimeMillis()) }
         logInfo(TAG, "Client disconnected: ${deviceAddress.take(8)}")
@@ -410,9 +425,20 @@ class BlueZConnectionService(
             }
         })
 
-        // Client connect/disconnect. gattlib only reports a peer going away through the
-        // per-connection disconnect handler BlueZGattClientService registers, so this is the single
-        // place the mesh learns that a client link came up or went down.
+        // A BlueZ device-gone signal reaps the outbound link too. gattlib's per-connection
+        // disconnect handler is not reliable on its own: BlueZ can drop a device object without it
+        // firing, and the link then stayed in the registry forever. The journal showed the effect
+        // directly -- BlueZ reporting one connected device while every broadcast claimed two, so
+        // half of each one went to a peer that was no longer there and still logged success.
+        gattServer.hasOutboundLinks = { gattClient.heldAddresses().isNotEmpty() }
+        gattServer.onDeviceLinkGone = { address ->
+            coroutineScopeFacade.applicationScope.launch {
+                reapOutboundLink(address)
+            }
+        }
+
+        // Client connect/disconnect. This is the other way the mesh learns a client link came up or
+        // went down; the two paths are idempotent, so a peer reaped by both is reported once.
         gattClient.onConnectionReady = { address ->
             coroutineScopeFacade.applicationScope.launch {
                 onClientConnected(address)

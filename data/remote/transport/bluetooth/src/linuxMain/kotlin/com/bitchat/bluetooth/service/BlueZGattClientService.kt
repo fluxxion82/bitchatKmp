@@ -326,6 +326,17 @@ class BlueZGattClientService(
     fun getReadyDeviceAddresses(): List<String> =
         connections.value.values.filter { it.isReady && it.isAlive }.map { it.address }
 
+    /**
+     * True while this service still holds a registry entry for [address], ready or not.
+     *
+     * [getReadyDeviceAddresses] deliberately hides links that have not finished discovery, but a
+     * BlueZ device-gone signal has to be able to reap those too, so the reaper asks this instead.
+     */
+    fun holdsConnection(address: String): Boolean = connections.value.containsKey(address)
+
+    /** Every address this service holds a link for, ready or not. */
+    fun heldAddresses(): Set<String> = connections.value.keys
+
     // BlueZManager.GattDelegate implementation
 
     override fun onConnected(address: String, connection: CPointer<gattlib_connection_t>) {
