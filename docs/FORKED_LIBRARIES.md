@@ -19,7 +19,7 @@ This document is the single reference for what needs to be cloned, built, and pu
 
 ## Build Configuration
 
-All three layers below are active only when the embedded profile is on (`embedded.enabled` defaults to `false` in `gradle.properties`; pass `-Pembedded.enabled=true` or set it in `~/.gradle/gradle.properties`). A plain build resolves Compose 1.11.1 and Koin 4.2.2 from Maven Central and never touches `~/.m2`. Skiko comes from Maven Central either way.
+All three layers below are active only when the embedded profile is on (`embedded.enabled` defaults to `false` in `gradle.properties`; pass `-Pembedded.enabled=true` or set it in `~/.gradle/gradle.properties`). A plain build resolves Compose 1.12.0 and Koin 4.2.2 from Maven Central and never touches `~/.m2`. Skiko comes from Maven Central either way.
 
 bitchatKmp wires in the forked artifacts through three layers of Gradle configuration:
 
@@ -31,7 +31,7 @@ if (embeddedEnabled) {
 }
 ```
 
-With the profile on, `mavenLocal()` is listed first in `dependencyResolutionManagement` (and added to `pluginManagement`) so that forked SNAPSHOT artifacts take priority over upstream releases. Skiko no longer matches anything in `~/.m2` and falls through to `mavenCentral()`. `settings.gradle.kts` also selects the Compose Gradle plugin version there: `embedded.composeForkVersion` (`9999.0.0-SNAPSHOT`) when embedded, `1.10.0` otherwise.
+With the profile on, `mavenLocal()` is listed first in `dependencyResolutionManagement` (and added to `pluginManagement`) so that forked SNAPSHOT artifacts take priority over upstream releases. Skiko no longer matches anything in `~/.m2` and falls through to `mavenCentral()`. `settings.gradle.kts` also selects the Compose Gradle plugin version there: `embedded.composeForkVersion` (`9999.0.0-SNAPSHOT`) when embedded, `1.12.0` otherwise.
 
 ### 2. Version forcing (`build.gradle.kts:26-63`)
 
@@ -133,19 +133,27 @@ This publishes all Compose UI, lifecycle, and savedstate artifacts to `~/.m2/`.
 
 **Why:** Upstream Koin has no `linuxArm64` target. The fork adds it while disabling JS/Wasm targets and aligning the Kotlin version.
 
-**Repo & Branch:** [fluxxion82/koin](https://github.com/fluxxion82/koin) `sa_linux_4.2.2` (the `sa_linux` linuxArm64 commit cherry-picked onto upstream tag `4.2.2`, plus two fix-ups). `sa_linux` is kept as the 4.1.2 line.
+**Repo & Branch:** [fluxxion82/koin](https://github.com/fluxxion82/koin) `sa_linux_4.2.2` — a single commit on upstream tag `4.2.2`, being the `sa_linux` linuxArm64 patch cherry-picked forward and squashed. It does **not** contain the `sa_linux` branch itself, which is kept unchanged as the 4.1.2 line for rollback.
 
 **Changes:**
 - Added `linuxArm64()` target
 - Disabled JS/Wasm targets (not needed, simplifies build)
-- Aligned Kotlin to 2.2.10
+- Pinned Kotlin to 2.4.20. Not cosmetic: 2.3.20 rejects `macosX64()` as a removed target, and
+  `apps/desktop` builds its Intel-Mac BLE dylib from that target.
 - Forced `stdlib-common` resolution
+- Gave the wasmJs `KoinPlatformCoroutinesTools` the `runBlocking` member 4.2.2 added to the expect
+  object. It throws rather than copying the JS actual, whose `GlobalScope.promise(...).getCompleted()`
+  silently returns a wrong result if the block suspends.
 
 **Build & Publish:**
 
 ```bash
 cd forks/koin/projects   # the Gradle root is projects/, not the repo root
-./gradlew publishToMavenLocal
+echo "sdk.dir=$ANDROID_HOME" > local.properties   # the compose modules need it; not checked in
+./gradlew :core:koin-core:publishToMavenLocal \
+          :core:koin-core-viewmodel:publishToMavenLocal \
+          :compose:koin-compose:publishToMavenLocal \
+          :compose:koin-compose-viewmodel:publishToMavenLocal
 ```
 
 **Artifacts produced:** `koin-core-linuxarm64:4.2.2`, `koin-compose-linuxarm64:4.2.2`, `koin-compose-viewmodel-linuxarm64:4.2.2`, `koin-core-viewmodel-linuxarm64:4.2.2`. Publish those four module paths rather than the whole build: modules outside them (navigation3, koin-fu-viewmodel) still carry upstream/fork drift. The fork pins Kotlin 2.4.20 because 2.3.20 rejects `macosX64()`, which `apps/desktop` needs for its Intel-Mac BLE dylib.
@@ -347,7 +355,11 @@ cd ../components
 
 ```bash
 cd forks/koin/projects   # the Gradle root is projects/, not the repo root
-./gradlew publishToMavenLocal
+echo "sdk.dir=$ANDROID_HOME" > local.properties   # the compose modules need it; not checked in
+./gradlew :core:koin-core:publishToMavenLocal \
+          :core:koin-core-viewmodel:publishToMavenLocal \
+          :compose:koin-compose:publishToMavenLocal \
+          :compose:koin-compose-viewmodel:publishToMavenLocal
 ```
 
 ### 5. Create sysroot (see [embedded README](../apps/embedded/README.md) Step 1)
