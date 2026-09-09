@@ -6,7 +6,7 @@ usb-serial-android = "3.8.1"
 targetSdk = "36"
 compileSdk = "37"
 minSdk = "26"
-agp = "9.4.0"
+agp = "9.3.0"
 
 # Dependencies
 kotlin = "2.4.20"
