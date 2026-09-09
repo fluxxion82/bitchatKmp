@@ -54,8 +54,13 @@ class AndroidAdvertisingService(
                 AndroidGattServerService.SERVICE_UUID
             }
 
+            // The name stays out of the advertising PDU. A legacy advert is 31 bytes: the flags
+            // structure Android adds for a connectable advert takes 3 and the 128-bit service UUID
+            // takes 18, leaving 10 -- room for an 8-character name. This adapter is called
+            // "Pixel 4 XL", so including it overflowed and startAdvertising failed outright with
+            // ADVERTISE_FAILED_DATA_TOO_LARGE ("Advertising failed: Data too large" in logcat).
+            // The scan response below carries the name instead, in its own 31 bytes.
             val data = AdvertiseData.Builder()
-                .setIncludeDeviceName(true)
                 .setIncludeTxPowerLevel(false)
                 .addServiceUuid(ParcelUuid(uuid))
                 .build()
