@@ -1,6 +1,6 @@
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
-    alias(libs.plugins.android.library)
+    alias(libs.plugins.android.kotlin.multiplatform.library)
     alias(libs.plugins.jetbrains.compose)
     alias(libs.plugins.compose.compiler)
 }
@@ -14,7 +14,11 @@ val embeddedEnabled = providers.gradleProperty("embedded.enabled")
 kotlin {
     applyDefaultHierarchyTemplate()
     jvm("desktop")
-    androidTarget()
+    androidLibrary {
+        namespace = "com.bitchat.mediautils"
+        compileSdk = libs.versions.compileSdk.get().toInt()
+        minSdk = libs.versions.minSdk.get().toInt()
+    }
     if (embeddedEnabled) {
         linuxArm64()
     }
@@ -62,33 +66,6 @@ kotlin {
             }
         }
     }
-}
-
-android {
-    namespace = "com.bitchat.mediautils"
-    compileSdk = 36
-    sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")
-    defaultConfig {
-        minSdk = 26
-    }
-    buildTypes {
-        getByName("release") {
-            isMinifyEnabled = false
-        }
-    }
-    sourceSets {
-        named("main") {
-            manifest.srcFile("src/androidMain/AndroidManifest.xml")
-            res.srcDirs("src/androidMain/res", "src/commonMain/composeResources")
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-}
-dependencies {
-    debugImplementation(libs.androidx.ui.tooling)
 }
 
 tasks.register("testClasses")

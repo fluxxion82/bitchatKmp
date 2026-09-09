@@ -25,7 +25,7 @@ pluginManagement {
 
     // Provide the Compose Multiplatform plugin version here (catalog entry is versionless)
     // so that embedded builds can use the fork version while standard builds use 1.12.0.
-    val composeVersion = if (embeddedEnabled) composeForkVersion else "1.11.1"
+    val composeVersion = if (embeddedEnabled) composeForkVersion else "1.12.0"
     plugins {
         id("org.jetbrains.compose") version composeVersion
     }

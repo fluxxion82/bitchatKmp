@@ -1,4 +1,3 @@
-import com.android.build.api.dsl.androidLibrary
 import org.jetbrains.kotlin.konan.target.KonanTarget
 
 plugins {
@@ -113,7 +112,7 @@ kotlin {
 
     androidLibrary {
         namespace = "com.bitchat.crypto"
-        compileSdk = 36
+        compileSdk = libs.versions.compileSdk.get().toInt()
         minSdk = 21
     }
 

@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.konan.target.KonanTarget
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.android.library)
+    alias(libs.plugins.android.kotlin.multiplatform.library)
 }
 
 val embeddedEnabled = providers.gradleProperty("embedded.enabled")
@@ -14,7 +14,11 @@ val embeddedEnabled = providers.gradleProperty("embedded.enabled")
 kotlin {
     applyDefaultHierarchyTemplate()
 
-    androidTarget()
+    androidLibrary {
+        namespace = "com.bitchat.tor"
+        compileSdk = libs.versions.compileSdk.get().toInt()
+        minSdk = libs.versions.minSdk.get().toInt()
+    }
 
     jvm()
     listOf(
@@ -198,19 +202,6 @@ tasks.named<Test>("jvmTest") {
     systemProperty("compose.application.resources.dir", missingLibDir.get().asFile.absolutePath)
 }
 
-android {
-    namespace = "com.bitchat.tor"
-    compileSdk = libs.versions.compileSdk.get().toInt()
-    sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")
-    sourceSets["main"].jniLibs.srcDirs("jniLibs")
-    defaultConfig {
-        minSdk = libs.versions.minSdk.get().toInt()
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-}
 
 // Task to check if native Arti libraries exist
 val checkArtiLibraries by tasks.registering {

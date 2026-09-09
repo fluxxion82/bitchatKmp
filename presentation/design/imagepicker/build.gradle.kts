@@ -1,6 +1,6 @@
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
-    alias(libs.plugins.android.library)
+    alias(libs.plugins.android.kotlin.multiplatform.library)
     alias(libs.plugins.jetbrains.compose)
     alias(libs.plugins.compose.compiler)
 }
@@ -16,7 +16,16 @@ val embeddedComposeVersion = providers.gradleProperty("embedded.composeForkVersi
 
 kotlin {
     applyDefaultHierarchyTemplate()
-    androidTarget()
+    androidLibrary {
+        namespace = "com.bitchat.design.imagepicker"
+        compileSdk = libs.versions.compileSdk.get().toInt()
+        minSdk = libs.versions.minSdk.get().toInt()
+        // ImageViewerFileProvider reads R.xml.file_paths, and the multiplatform Android
+        // plugin does not generate an R class unless resources are turned on.
+        androidResources {
+            enable = true
+        }
+    }
     jvm()
     if (embeddedEnabled) {
         linuxArm64()
@@ -91,38 +100,6 @@ kotlin {
     }
 }
 
-android {
-    namespace = "com.bitchat.design.imagepicker"
-    compileSdk = libs.versions.compileSdk.get().toInt()
-    sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")
-    defaultConfig {
-        minSdk = libs.versions.minSdk.get().toInt()
-    }
-    buildTypes {
-        getByName("release") {
-            isMinifyEnabled = false
-        }
-    }
-    sourceSets {
-        named("main") {
-            manifest.srcFile("src/androidMain/AndroidManifest.xml")
-            res.srcDirs(
-                "src/androidMain/res",
-                "src/commonMain/composeResources/drawable",
-                "src/commonMain/composeResources/values",
-                "src/commonMain/composeResources/font",
-            )
-            assets.srcDir("src/commonMain/composeResources/files")
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-    buildFeatures {
-        compose = true
-    }
-}
 
 compose.resources {
     publicResClass = true

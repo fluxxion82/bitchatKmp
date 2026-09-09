@@ -1,7 +1,7 @@
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.android.library)
+    alias(libs.plugins.android.kotlin.multiplatform.library)
 }
 
 version = "0.0.1"
@@ -70,7 +70,12 @@ kotlin {
     }
 
     jvm("desktop")
-    androidTarget()
+    androidLibrary {
+        namespace = "com.bitchat.ble"
+        compileSdk = libs.versions.compileSdk.get().toInt()
+        minSdk = libs.versions.minSdk.get().toInt()
+        withHostTestBuilder {}.configure {}
+    }
     sourceSets {
         val commonMain by getting {
             dependencies {
@@ -118,7 +123,7 @@ kotlin {
                 implementation(libs.kotlinx.coroutines.test)
             }
         }
-        val androidUnitTest by getting {
+        val androidHostTest by getting {
             dependencies {
                 implementation(libs.kotlin.test)
                 implementation(libs.kotlin.test.junit)
@@ -183,20 +188,3 @@ val bleSpike by tasks.registering(JavaExec::class) {
     providers.gradleProperty("bleTrace").orNull?.let { systemProperty("ble.trace", it) }
 }
 
-android {
-    compileSdk = libs.versions.compileSdk.get().toInt()
-    sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")
-    defaultConfig {
-        minSdk = libs.versions.minSdk.get().toInt()
-    }
-    buildTypes {
-        getByName("release") {
-            isMinifyEnabled = false
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-    namespace = "com.bitchat.ble"
-}
