@@ -359,6 +359,13 @@ class LinuxGattServerService(private val bus: BlueZBus) : GattServerService {
     private val framesDelivered = AtomicLong()
     private val inboundDropped = AtomicLong()
     private val startNotifyCalls = AtomicLong()
+    /**
+     * Whether any central currently holds a subscription, from `StartNotify`/`StopNotify`.
+     *
+     * BlueZ raises those once per characteristic -- on the first subscriber and after the last one
+     * leaves -- so a flag is the right shape, not a count.
+     */
+    private val subscriberPresent = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
      * Reassembled frames and link events on their way to the delegate.
@@ -501,11 +508,14 @@ class LinuxGattServerService(private val bus: BlueZBus) : GattServerService {
      */
     suspend fun notifySubscribers(data: ByteArray): Boolean {
         val count = clients.size()
-        if (count == 0) {
-            log.warn("broadcast of {}B refused: no central holds a live link", data.size)
-            return false
-        }
-        return emit("$count client(s)", data)
+        if (count > 0) return emit("$count client(s)", data)
+
+        // No registered client, but somebody has subscribed and simply not written yet. The
+        // emission is device-agnostic, so it reaches them regardless -- see [canReachSubscriber].
+        if (subscriberPresent.get()) return emit("an unidentified subscriber", data)
+
+        log.warn("broadcast of {}B refused: no central holds a live link", data.size)
+        return false
     }
 
     /** Which centrals hold a link to this server right now. */
@@ -911,6 +921,7 @@ class LinuxGattServerService(private val bus: BlueZBus) : GattServerService {
 
     private fun onStartNotify() {
         startNotifyCalls.incrementAndGet()
+        subscriberPresent.set(true)
         log.info(
             "StartNotify -- at least one central is subscribed (BlueZ does not say which; {} registered)",
             clients.size()
@@ -918,8 +929,24 @@ class LinuxGattServerService(private val bus: BlueZBus) : GattServerService {
     }
 
     private fun onStopNotify() {
+        subscriberPresent.set(false)
         log.info("StopNotify -- the last subscriber went away")
     }
+
+    /**
+     * True when a notification emitted now would reach somebody.
+     *
+     * Two independent facts can each make that so, and the registry only knows one of them. A
+     * central that has written is in [clients]; a central that has only subscribed is not, because
+     * `StartNotify` carries no device identity. Emitting still reaches the latter -- the signal goes
+     * to the characteristic's own object path, which names no device.
+     *
+     * Gating delivery on the registry alone therefore deadlocked a real peer: the Orange Pi
+     * subscribed, waited for our announce before writing, and we refused to send one because we had
+     * not seen a write. It gave up after a few seconds, twice, visible as a `StartNotify` and a
+     * `StopNotify` with no write between them.
+     */
+    fun canReachSubscriber(): Boolean = clients.size() > 0 || subscriberPresent.get()
 
     private fun onLinkDown(address: String, cause: String) {
         if (!clients.onDisconnected(address)) return

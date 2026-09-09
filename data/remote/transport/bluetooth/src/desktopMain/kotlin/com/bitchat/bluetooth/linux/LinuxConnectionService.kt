@@ -318,7 +318,12 @@ class LinuxConnectionService(
         val outbound = gattClient.readyAddresses()
         val inbound = clients.size()
 
-        if (inbound == 0 && outbound.isEmpty()) {
+        // Not `inbound == 0`: a central that subscribed without writing yet is reachable but not
+        // registered, and refusing to announce to it is what left the Orange Pi waiting for a
+        // packet we would not send. The server owns that distinction.
+        val reachableInbound = inbound > 0 || gattServer.canReachSubscriber()
+
+        if (!reachableInbound && outbound.isEmpty()) {
             broadcastsDropped.incrementAndGet()
             log.warn("broadcast of {}B dropped: this node holds no link to anybody", packetData.size)
             return false
@@ -331,8 +336,8 @@ class LinuxConnectionService(
             outbound.size
         )
 
-        val notified = inbound > 0 && gattServer.notifySubscribers(packetData)
-        if (inbound > 0 && !notified) {
+        val notified = reachableInbound && gattServer.notifySubscribers(packetData)
+        if (reachableInbound && !notified) {
             log.warn(
                 "the peripheral-role notification of {}B failed although {} link(s) are registered here",
                 packetData.size,
