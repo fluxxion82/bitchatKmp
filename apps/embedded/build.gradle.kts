@@ -14,7 +14,7 @@ val skikoVersion = providers.gradleProperty("embedded.skikoVersion")
     .orElse("0.9.47")
     .get()
 val koinVersion = providers.gradleProperty("embedded.koinForkVersion")
-    .orElse("4.1.2")
+    .orElse("4.2.2")
     .get()
 
 // Pin the linuxArm64 Skiko artifact and the forked Compose for linuxArm64.

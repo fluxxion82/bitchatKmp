@@ -18,7 +18,7 @@ val composeSnapshotVersion = providers.gradleProperty("embedded.composeForkVersi
     .orElse("9999.0.0-SNAPSHOT")
     .get()
 val embeddedKoinVersion = providers.gradleProperty("embedded.koinForkVersion")
-    .orElse("4.1.2")
+    .orElse("4.2.2")
     .get()
 
 subprojects {

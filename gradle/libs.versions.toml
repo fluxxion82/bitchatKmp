@@ -9,7 +9,7 @@ minSdk = "26"
 agp = "8.12.3"
 
 # Dependencies
-kotlin = "2.2.10"
+kotlin = "2.4.20"
 
 coroutines = "1.11.0"
 kotlinx-datetime = "0.7.1"
@@ -18,7 +18,7 @@ atomicfu = "0.33.0"
 
 ktor = "3.3.3"
 
-koin = "4.1.1"
+koin = "4.2.2"
 
 activityCompose = "1.12.2"
 assertjCore = "3.27.6"
@@ -43,7 +43,7 @@ coreKtx = "1.17.0"
 androidx-annotation = "1.9.1"
 lifecycleRuntimeKtx = "2.10.0"
 uiTooling = "1.10.1"
-coil = "3.3.0"
+coil = "3.5.0"
 
 accompanist = "0.37.3"
 camerax = "1.5.2"
@@ -119,7 +119,7 @@ multiplatform-settings-serialization = { module = "com.russhwolf:multiplatform-s
 multiplatform-settings-observable = { module = "com.russhwolf:multiplatform-settings-make-observable", version.ref = "multiplatformSettings" }
 multiplatform-settings-coroutines = { module = "com.russhwolf:multiplatform-settings-coroutines", version.ref = "multiplatformSettings" }
 navigation-compose = { module = "org.jetbrains.androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
-navigation-material-compose = { module = "org.jetbrains.compose.material:material-navigation", version = "1.10.0" }
+navigation-material-compose = { module = "org.jetbrains.compose.material:material-navigation", version = "1.11.1" }
 
 accompanist-permissions = { group = "com.google.accompanist", name = "accompanist-permissions", version.ref = "accompanist" }
 camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }

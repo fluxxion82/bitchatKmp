@@ -12,14 +12,14 @@ This document is the single reference for what needs to be cloned, built, and pu
 |---|---------|-----------|--------|---------|---------|--------------|
 | 1 | Compose Multiplatform | [fluxxion82/compose-multiplatform](https://github.com/fluxxion82/compose-multiplatform) | `release/1.10` | `9999.0.0-SNAPSHOT` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
 | 2 | Compose Multiplatform Core | [fluxxion82/compose-multiplatform-core](https://github.com/fluxxion82/compose-multiplatform-core) | `linux-1.10.0` | `9999.0.0-SNAPSHOT` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
-| 3 | Koin | [fluxxion82/koin](https://github.com/fluxxion82/koin) | `sa_linux` | `4.1.2` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
+| 3 | Koin | [fluxxion82/koin](https://github.com/fluxxion82/koin) | `sa_linux_4.2.2` | `4.2.2` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
 | 4 | MeshCore | [fluxxion82/MeshCore](https://github.com/fluxxion82/MeshCore) | `orangepi-zero3-sx1276` | N/A (native binary) | Built on-device | `/usr/local/bin/meshcored` |
 | 5 | Meshtastic Firmware | [fluxxion82/firmware](https://github.com/fluxxion82/firmware) | `orangepi-rfm95w` | 2.7.x (native binary) | Built on-device | `/usr/bin/meshtasticd` |
 | 6 | gattlib | [fluxxion82/gattlib](https://github.com/fluxxion82/gattlib) | `bitchat-null-guards` | N/A (native static lib) | `scripts/build-native-linux-arm64.sh` step 5 | `native/gattlib/build/linux-arm64/install/lib/libgattlib.a` |
 
 ## Build Configuration
 
-All three layers below are active only when the embedded profile is on (`embedded.enabled` defaults to `false` in `gradle.properties`; pass `-Pembedded.enabled=true` or set it in `~/.gradle/gradle.properties`). A plain build resolves Compose 1.10.0 and Koin 4.1.1 from Maven Central and never touches `~/.m2`. Skiko comes from Maven Central either way.
+All three layers below are active only when the embedded profile is on (`embedded.enabled` defaults to `false` in `gradle.properties`; pass `-Pembedded.enabled=true` or set it in `~/.gradle/gradle.properties`). A plain build resolves Compose 1.11.1 and Koin 4.2.2 from Maven Central and never touches `~/.m2`. Skiko comes from Maven Central either way.
 
 bitchatKmp wires in the forked artifacts through three layers of Gradle configuration:
 
@@ -41,7 +41,7 @@ The root `build.gradle.kts` uses `resolutionStrategy.eachDependency` (inside `if
 - `org.jetbrains.androidx.lifecycle`
 - `org.jetbrains.androidx.savedstate`
 
-and `embedded.koinForkVersion` (`4.1.2`) for every `io.insert-koin` artifact. The fork versions are declared in `gradle.properties` (`embedded.composeForkVersion`, `embedded.koinForkVersion`), alongside the non-fork `embedded.skikoVersion`.
+and `embedded.koinForkVersion` (`4.2.2`) for every `io.insert-koin` artifact. The fork versions are declared in `gradle.properties` (`embedded.composeForkVersion`, `embedded.koinForkVersion`), alongside the non-fork `embedded.skikoVersion`.
 
 This ensures every module in the project resolves to the forked Compose and Koin, not upstream releases.
 
@@ -50,7 +50,7 @@ This ensures every module in the project resolves to the forked Compose and Koin
 The embedded module declares explicit `-linuxarm64` artifacts because Kotlin/Native can't resolve multiplatform metadata modules for unsupported targets:
 - Skiko: `org.jetbrains.skiko:skiko-linuxarm64:0.9.47` (upstream, Maven Central; `embedded.skikoVersion`)
 - Compose UI/Foundation/Material3: `*-linuxarm64:9999.0.0-SNAPSHOT`
-- Koin: `koin-core-linuxarm64:4.1.2`, `koin-compose-linuxarm64:4.1.2`, `koin-compose-viewmodel-linuxarm64:4.1.2`
+- Koin: `koin-core-linuxarm64:4.2.2`, `koin-compose-linuxarm64:4.2.2`, `koin-compose-viewmodel-linuxarm64:4.2.2`
 - Lifecycle/Savedstate: `*-linuxarm64:9999.0.0-SNAPSHOT`
 
 The `presentation/screens/build.gradle.kts:136` also declares `components-resources-linuxArm64` explicitly (embedded builds only).
@@ -133,7 +133,7 @@ This publishes all Compose UI, lifecycle, and savedstate artifacts to `~/.m2/`.
 
 **Why:** Upstream Koin has no `linuxArm64` target. The fork adds it while disabling JS/Wasm targets and aligning the Kotlin version.
 
-**Repo & Branch:** [fluxxion82/koin](https://github.com/fluxxion82/koin) `sa_linux` (1 commit ahead of upstream `InsertKoinIO/koin`)
+**Repo & Branch:** [fluxxion82/koin](https://github.com/fluxxion82/koin) `sa_linux_4.2.2` (the `sa_linux` linuxArm64 commit cherry-picked onto upstream tag `4.2.2`, plus two fix-ups). `sa_linux` is kept as the 4.1.2 line.
 
 **Changes:**
 - Added `linuxArm64()` target
@@ -148,7 +148,7 @@ cd forks/koin/projects   # the Gradle root is projects/, not the repo root
 ./gradlew publishToMavenLocal
 ```
 
-**Artifacts produced:** `koin-core-linuxarm64:4.1.2`, `koin-compose-linuxarm64:4.1.2`, `koin-compose-viewmodel-linuxarm64:4.1.2`
+**Artifacts produced:** `koin-core-linuxarm64:4.2.2`, `koin-compose-linuxarm64:4.2.2`, `koin-compose-viewmodel-linuxarm64:4.2.2`, `koin-core-viewmodel-linuxarm64:4.2.2`. Publish those four module paths rather than the whole build: modules outside them (navigation3, koin-fu-viewmodel) still carry upstream/fork drift. The fork pins Kotlin 2.4.20 because 2.3.20 rejects `macosX64()`, which `apps/desktop` needs for its Intel-Mac BLE dylib.
 
 ## Skiko: no longer forked
 
@@ -317,7 +317,7 @@ Follow these steps in order on a new development machine to build the embedded t
 cd bitchat/forks
 git clone -b linux-1.10.0 https://github.com/fluxxion82/compose-multiplatform-core.git
 git clone -b release/1.10 https://github.com/fluxxion82/compose-multiplatform.git
-git clone -b sa_linux https://github.com/fluxxion82/koin.git
+git clone -b sa_linux_4.2.2 https://github.com/fluxxion82/koin.git
 ```
 
 Skiko is not on this list any more — it comes from Maven Central (see

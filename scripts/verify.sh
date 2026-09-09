@@ -4,7 +4,7 @@
 #   scripts/verify.sh            # quick: domain tests + desktop compile
 #   scripts/verify.sh desktop    # quick + packageDmg
 #   scripts/verify.sh android    # :apps:droid:assembleDebug
-#   scripts/verify.sh ios        # :iosdi debug frameworks for iosSimulatorArm64 and iosArm64 (iosX64 slice is not exercised)
+#   scripts/verify.sh ios        # :iosdi debug frameworks for iosSimulatorArm64 and iosArm64 (the only iOS targets)
 #   scripts/verify.sh embedded   # -Pembedded.enabled=true linuxArm64 link + compose resources
 #   scripts/verify.sh full       # all of the above (desktop packaging included)
 #

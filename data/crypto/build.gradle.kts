@@ -18,7 +18,6 @@ kotlin {
 
     // Apple targets with cinterops for libsodium and secp256k1
     val iosTargets = listOf(
-        iosX64(),
         iosArm64(),
         iosSimulatorArm64()
     )

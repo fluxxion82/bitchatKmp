@@ -58,7 +58,6 @@ kotlin {
         minSdk = libs.versions.minSdk.get().toInt()
     }
     listOf(
-        iosX64(),
         iosArm64(),
         iosSimulatorArm64()
     ).forEach {
