@@ -1,14 +1,28 @@
 package com.bitchat.lora.meshcore
 
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.alloc
+import kotlinx.cinterop.convert
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
 import kotlinx.cinterop.refTo
+import kotlinx.cinterop.reinterpret
+import kotlinx.cinterop.sizeOf
 import kotlinx.cinterop.toKString
+import platform.posix.AF_INET
 import platform.posix.F_OK
+import platform.posix.SOCK_STREAM
 import platform.posix.access
+import platform.posix.close
+import platform.posix.connect
 import platform.posix.fgets
 import platform.posix.geteuid
+import platform.posix.htonl
+import platform.posix.htons
 import platform.posix.pclose
 import platform.posix.popen
+import platform.posix.sockaddr_in
+import platform.posix.socket
 import platform.posix.usleep
 
 /**
@@ -46,8 +60,20 @@ object MeshCoreService {
         stopMeshtasticd()
 
         if (isRunning()) {
-            println("meshcored already running")
-            return true
+            if (isListening()) {
+                println("meshcored already running")
+                return true
+            }
+            // Alive but serving nothing: almost always a failed radio init, which halts the daemon
+            // before it binds. Restarting is worth one attempt -- the radio may have been busy the
+            // first time -- but if it comes back still deaf, say so instead of handing the caller a
+            // daemon it will spend fifteen seconds failing to reach.
+            println(
+                "meshcored is running but not listening on ${MeshCoreConstants.DEFAULT_PORT}; " +
+                    "restarting it once"
+            )
+            executeCommand("$SUDO_NON_INTERACTIVE pkill -x $SERVICE_NAME")
+            usleep(500_000u)
         }
 
         println("Starting meshcored...")
@@ -67,9 +93,19 @@ object MeshCoreService {
         // Wait for startup
         usleep(2_000_000u) // 2 seconds for radio init
 
-        return if (isRunning()) {
+        return if (isRunning() && isListening()) {
             println("meshcored started successfully")
             true
+        } else if (isRunning()) {
+            // The specific failure worth naming: the daemon is up and deaf. radio_init() has no
+            // logging of its own, so this line is the only signal anyone gets. Check that the
+            // spidev and pin numbers in /etc/meshcored/meshcored.ini match how the radio is wired.
+            println(
+                "meshcored is running but never opened ${MeshCoreConstants.DEFAULT_PORT}: its radio " +
+                    "init failed, so it halted before binding. Check spidev and the lora pins in " +
+                    "/etc/meshcored/meshcored.ini against the wiring."
+            )
+            false
         } else {
             val status = if (hasService) {
                 runSystemctl("status $SERVICE_NAME --no-pager -l").output.trim()
@@ -133,6 +169,32 @@ object MeshCoreService {
         // Also check if process is running directly (e.g., started manually)
         val processResult = executeCommand("pgrep -x meshcored")
         return processResult.success && processResult.output.trim().isNotEmpty()
+    }
+
+    /**
+     * Whether the daemon is actually serving the companion protocol.
+     *
+     * A live process is not the same thing as a working daemon. `companion_radio/main.cpp` halts on
+     * a failed radio init -- `if (!radio_init()) { halt(); }`, and `halt()` is a bare `while (1)` --
+     * which happens *before* `serial_interface.begin(TCP_PORT)`. The process then sits there
+     * spinning: systemd calls it active, `pgrep` finds it, and it holds no sockets at all. Measured
+     * on the device with the radio misconfigured: pid alive, `ss -lnt` empty for 5000, zero entries
+     * in `/proc/<pid>/fd`, and one line in the journal for the whole boot.
+     *
+     * So readiness is a connect to the port, not a look at the process table.
+     */
+    fun isListening(): Boolean = memScoped {
+        val fd = socket(AF_INET, SOCK_STREAM, 0)
+        if (fd < 0) return@memScoped false
+
+        val addr = alloc<sockaddr_in>()
+        addr.sin_family = AF_INET.convert()
+        addr.sin_port = htons(MeshCoreConstants.DEFAULT_PORT.toUShort())
+        addr.sin_addr.s_addr = htonl(0x7F000001u)  // 127.0.0.1
+
+        val connected = connect(fd, addr.ptr.reinterpret(), sizeOf<sockaddr_in>().convert()) == 0
+        close(fd)
+        connected
     }
 
     /**
