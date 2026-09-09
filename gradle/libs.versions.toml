@@ -58,6 +58,11 @@ tink = "1.20.0"
 javafx = "21.0.2"
 wire = "5.3.1"
 
+# Linux BLE: BlueZ over D-Bus on the desktop JVM
+dbusJava = "5.2.0"
+slf4j = "2.0.19"
+logback = "1.6.3"
+
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
 androidx-lifecycle-viewmodel-ktx = { module = "androidx.lifecycle:lifecycle-viewmodel-ktx", version.ref = "lifecycleViewmodelKtx" }
@@ -159,6 +164,12 @@ usb-serial-android = { module = "com.github.mik3y:usb-serial-for-android", versi
 
 # Wire for protobuf (Meshtastic)
 wire-runtime = { module = "com.squareup.wire:wire-runtime", version.ref = "wire" }
+
+# BlueZ over D-Bus (desktop JVM Linux BLE) + the SLF4J backend dbus-java logs through
+dbus-java-core = { module = "com.github.hypfvieh:dbus-java-core", version.ref = "dbusJava" }
+dbus-java-transport-native-unixsocket = { module = "com.github.hypfvieh:dbus-java-transport-native-unixsocket", version.ref = "dbusJava" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

@@ -99,6 +99,15 @@ kotlin {
         val desktopMain by getting {
             dependencies {
                 implementation(libs.jna)
+
+                // BlueZ over D-Bus: the org.bluez API is reached through the system bus, which
+                // dbus-java speaks over an AF_UNIX socket. Only the SLF4J facade belongs here --
+                // a library that ships a binding forces one on every consumer and races whatever
+                // the app configured. The backend lives in :apps:desktop, and the spike gets its
+                // own through the bleSpikeRuntime configuration below.
+                implementation(libs.dbus.java.core)
+                implementation(libs.dbus.java.transport.native.unixsocket)
+                implementation(libs.slf4j.api)
             }
         }
         // JVM home for the tests of the pure logic in commonMain: the handshake deadline and the
@@ -143,6 +152,36 @@ kotlin {
             dependsOn(desktopMacMain)
         }
     }
+}
+
+// Runs the BlueZ D-Bus spike straight off the desktop compilation, without building a jar or a
+// distribution. `--args` is JavaExec's own option, so arguments pass through unchanged:
+//   ./gradlew :data:remote:transport:bluetooth:bleSpike --args="scan 10"
+val desktopMainCompilation = kotlin.targets.getByName("desktop").compilations.getByName("main")
+
+// The spike needs an SLF4J backend, but the library must not ship one. This configuration exists
+// only for the task's classpath, so logback stays out of the published desktop variant.
+val bleSpikeRuntime: Configuration by configurations.creating
+
+dependencies {
+    bleSpikeRuntime(libs.logback.classic)
+}
+
+val bleSpike by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Runs the BlueZ D-Bus spike against the live system bus."
+    // allOutputs and runtimeDependencyFiles are both task-dependency-carrying file collections,
+    // so this wires compileKotlinDesktop and desktopProcessResources in without a named dependsOn.
+    classpath = files(
+        desktopMainCompilation.output.allOutputs,
+        desktopMainCompilation.runtimeDependencyFiles,
+        bleSpikeRuntime
+    )
+    mainClass.set("com.bitchat.bluetooth.linux.spike.BlueZSpikeKt")
+    // Kept outside any source set so it is never packaged into a consumer's classpath.
+    systemProperty("logback.configurationFile", layout.projectDirectory.file("spike/logback.xml").asFile.absolutePath)
+    // JavaExec forks its own JVM and does not inherit -D from the Gradle command line.
+    providers.gradleProperty("bleTrace").orNull?.let { systemProperty("ble.trace", it) }
 }
 
 android {

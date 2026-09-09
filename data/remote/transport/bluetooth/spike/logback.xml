@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Backend for the SLF4J calls dbus-java makes, and for the spike's own output.
+
+  The `org.freedesktop.dbus` logger is pinned separately from the root because dbus-java logs every
+  marshalled message at DEBUG/TRACE. That is exactly what this spike is for when something goes
+  wrong on the wire, and exactly what drowns the PASS/FAIL lines when nothing does, so it is off
+  unless asked for. `ble.dbus.level` is set by BlueZSpike.main from `-Dble.trace=true` before the
+  first LoggerFactory call, which is what makes the substitution below resolve to TRACE.
+-->
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %-20logger{0} %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="org.freedesktop.dbus" level="${ble.dbus.level:-WARN}"/>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>
