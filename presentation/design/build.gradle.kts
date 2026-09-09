@@ -21,6 +21,13 @@ kotlin {
         namespace = "com.bitchat.design"
         compileSdk = libs.versions.compileSdk.get().toInt()
         minSdk = libs.versions.minSdk.get().toInt()
+        // Compose Resources are copied into the Android asset pipeline, which the
+        // multiplatform Android plugin leaves off by default. Without this the .cvr
+        // files never reach the APK and every stringResource() call throws
+        // MissingResourceException at runtime.
+        androidResources {
+            enable = true
+        }
     }
     if (embeddedEnabled) {
         linuxArm64()
