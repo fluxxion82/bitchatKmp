@@ -174,8 +174,8 @@ class BlueZGattServerService(
      */
     internal var onDeviceLinkGone: ((String) -> Unit)? = null
 
-    /** True when the central side still holds a link that a device-gone signal could prune. */
-    internal var hasOutboundLinks: (() -> Boolean)? = null
+    /** Set by [BlueZConnectionService] so a peer BlueZ already holds can still be adopted. */
+    internal var onDeviceConnected: ((String) -> Unit)? = null
 
     // Connected clients tracked by device address
     private val connectedClients = GattClientRegistry()
@@ -1347,6 +1347,18 @@ class BlueZGattServerService(
      * dialled out on is invisible to [connectedClients], and gattlib's disconnect callback does not
      * always fire for one, which used to leave it in the registry forever.
      */
+    /**
+     * BlueZ says it now holds a link to [deviceAddress].
+     *
+     * BlueZ only announces a device the first time it appears, so a peer it was already connected
+     * to when we started is never offered by the scanner and stays invisible to the mesh. Measured
+     * on the Pi: BlueZ held two phones while the app counted one, and the unseen one got none of
+     * our traffic.
+     */
+    internal fun onDeviceAppeared(deviceAddress: String) {
+        onDeviceConnected?.invoke(deviceAddress)
+    }
+
     internal fun onDeviceGone(deviceAddress: String) {
         onClientDisconnected(deviceAddress)
         onDeviceLinkGone?.invoke(deviceAddress)
@@ -1467,12 +1479,11 @@ private fun dbusMessageFilter(
  */
 @OptIn(ExperimentalForeignApi::class)
 private fun observeDeviceSignal(message: CPointer<DBusMessage>, server: BlueZGattServerService) {
-    // The Device1 match also carries every RSSI update BlueZ emits while scanning. With nothing
-    // registered on either side there is nothing any of them could prune, which is the common case.
-    // The outbound side has to be consulted too: a Pi that only dialled out holds no server client,
-    // and returning here on that alone dropped the one signal that could have reaped its link.
-    if (!server.hasConnectedClients() && server.hasOutboundLinks?.invoke() != true) return
-
+    // No cheap "is anything registered" shortcut here any more. It used to return before parsing
+    // whenever no server client was registered, which is exactly the state a device BlueZ has
+    // connected but we have not adopted leaves us in -- so the one signal that could have told us
+    // about that peer was the one being dropped. readDeviceConnectedChange answers null for an RSSI
+    // update after walking a short dict, which is cheap enough to run on every signal.
     val iface = dbus_message_get_interface(message)?.toKString() ?: return
     val member = dbus_message_get_member(message)?.toKString() ?: return
 
@@ -1480,7 +1491,11 @@ private fun observeDeviceSignal(message: CPointer<DBusMessage>, server: BlueZGat
         iface == "org.freedesktop.DBus.Properties" && member == "PropertiesChanged" -> {
             val path = dbus_message_get_path(message)?.toKString() ?: return
             val address = BlueZObjectPath.deviceAddress(path) ?: return
-            if (readDeviceDisconnected(message)) server.onDeviceGone(address)
+            when (readDeviceConnectedChange(message)) {
+                false -> server.onDeviceGone(address)
+                true -> server.onDeviceAppeared(address)
+                null -> Unit
+            }
         }
 
         iface == "org.freedesktop.DBus.ObjectManager" && member == "InterfacesRemoved" -> {
@@ -1492,21 +1507,23 @@ private fun observeDeviceSignal(message: CPointer<DBusMessage>, server: BlueZGat
 }
 
 /**
- * True when this `PropertiesChanged` is `org.bluez.Device1` reporting `Connected = false`.
+ * The `Connected` value carried by an `org.bluez.Device1` `PropertiesChanged`, or null when the
+ * signal does not mention `Connected` at all -- which is most of them, because this match also
+ * carries every RSSI update BlueZ emits while scanning.
  * Signature: `s` interface name, `a{sv}` changed properties, `as` invalidated properties.
  */
 @OptIn(ExperimentalForeignApi::class)
-private fun readDeviceDisconnected(message: CPointer<DBusMessage>): Boolean = memScoped {
+private fun readDeviceConnectedChange(message: CPointer<DBusMessage>): Boolean? = memScoped {
     val iter = alloc<DBusMessageIter>()
-    if (dbus_message_iter_init(message, iter.ptr) == 0u) return@memScoped false
+    if (dbus_message_iter_init(message, iter.ptr) == 0u) return@memScoped null
 
-    if (dbus_message_iter_get_arg_type(iter.ptr) != DBUS_TYPE_STRING.toInt()) return@memScoped false
+    if (dbus_message_iter_get_arg_type(iter.ptr) != DBUS_TYPE_STRING.toInt()) return@memScoped null
     val ifacePtr = alloc<CPointerVar<ByteVar>>()
     dbus_message_iter_get_basic(iter.ptr, ifacePtr.ptr)
-    if (ifacePtr.value?.toKString() != "org.bluez.Device1") return@memScoped false
+    if (ifacePtr.value?.toKString() != "org.bluez.Device1") return@memScoped null
 
     dbus_message_iter_next(iter.ptr)
-    if (dbus_message_iter_get_arg_type(iter.ptr) != DBUS_TYPE_ARRAY.toInt()) return@memScoped false
+    if (dbus_message_iter_get_arg_type(iter.ptr) != DBUS_TYPE_ARRAY.toInt()) return@memScoped null
 
     val changedIter = alloc<DBusMessageIter>()
     dbus_message_iter_recurse(iter.ptr, changedIter.ptr)
@@ -1525,14 +1542,14 @@ private fun readDeviceDisconnected(message: CPointer<DBusMessage>): Boolean = me
                     if (dbus_message_iter_get_arg_type(variantIter.ptr) == DBUS_TYPE_BOOLEAN.toInt()) {
                         val connected = alloc<UIntVar>()
                         dbus_message_iter_get_basic(variantIter.ptr, connected.ptr)
-                        return@memScoped connected.value == 0u
+                        return@memScoped connected.value != 0u
                     }
                 }
             }
         }
         dbus_message_iter_next(changedIter.ptr)
     }
-    false
+    null
 }
 
 /**

@@ -327,6 +327,25 @@ class BlueZConnectionService(
      * it clears the registry entry, marks the connection dead so no later gattlib call walks freed
      * memory, and fires onConnectionLost, which releases the policy slot.
      */
+    /**
+     * Offer a peer BlueZ has connected but the mesh has never seen.
+     *
+     * The scanner is not a complete picture: BlueZ announces a device once, when it first appears,
+     * so anything it was already connected to is never offered and stays invisible. This routes
+     * such a peer through the same policy decision as a fresh sighting, and does nothing when we
+     * already hold the link.
+     *
+     * Peers that are not ours are handled where they already were: service discovery drops a device
+     * whose GATT tree carries no [BlueZManager.SERVICE_UUID], so the cost of a wrong guess is one
+     * abandoned dial with the policy's backoff behind it, not a retry storm.
+     */
+    internal suspend fun adoptConnectedPeer(deviceAddress: String) {
+        if (gattClient.holdsConnection(deviceAddress)) return
+        if (connectionMutex.withLock { serverConnections.contains(deviceAddress) }) return
+        logInfo(TAG, "BlueZ already holds ${deviceAddress.take(8)}; offering it to the mesh")
+        onDeviceDiscovered(deviceAddress, null)
+    }
+
     internal fun reapOutboundLink(deviceAddress: String) {
         if (!gattClient.holdsConnection(deviceAddress)) return
         logInfo(TAG, "BlueZ dropped ${deviceAddress.take(8)}; reaping the outbound link")
@@ -457,7 +476,11 @@ class BlueZConnectionService(
         // firing, and the link then stayed in the registry forever. The journal showed the effect
         // directly -- BlueZ reporting one connected device while every broadcast claimed two, so
         // half of each one went to a peer that was no longer there and still logged success.
-        gattServer.hasOutboundLinks = { gattClient.heldAddresses().isNotEmpty() }
+        gattServer.onDeviceConnected = { address ->
+            coroutineScopeFacade.applicationScope.launch {
+                adoptConnectedPeer(address)
+            }
+        }
         gattServer.onDeviceLinkGone = { address ->
             coroutineScopeFacade.applicationScope.launch {
                 reapOutboundLink(address)
