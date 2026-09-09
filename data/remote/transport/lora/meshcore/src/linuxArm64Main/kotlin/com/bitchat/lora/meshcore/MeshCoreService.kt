@@ -44,6 +44,15 @@ object MeshCoreService {
     private const val SUDO_NON_INTERACTIVE = "sudo -n"
 
     /**
+     * Whether this process has already restarted a wedged daemon.
+     *
+     * The recovery is worth one attempt, not one attempt per call: [start] runs on every protocol
+     * switch, and a daemon that cannot initialise its radio will never come back, so retrying each
+     * time just kills and relaunches it forever.
+     */
+    private var recoveryAttempted = false
+
+    /**
      * Start the meshcore service.
      *
      * Stops meshtasticd first since they share the same SPI radio.
@@ -68,6 +77,14 @@ object MeshCoreService {
             // before it binds. Restarting is worth one attempt -- the radio may have been busy the
             // first time -- but if it comes back still deaf, say so instead of handing the caller a
             // daemon it will spend fifteen seconds failing to reach.
+            if (recoveryAttempted) {
+                println(
+                    "meshcored is up but still not listening on ${MeshCoreConstants.DEFAULT_PORT}; " +
+                        "already tried restarting it once this run, not looping"
+                )
+                return false
+            }
+            recoveryAttempted = true
             println(
                 "meshcored is running but not listening on ${MeshCoreConstants.DEFAULT_PORT}; " +
                     "restarting it once"
@@ -100,9 +117,16 @@ object MeshCoreService {
             // The specific failure worth naming: the daemon is up and deaf. radio_init() has no
             // logging of its own, so this line is the only signal anyone gets. Check that the
             // spidev and pin numbers in /etc/meshcored/meshcored.ini match how the radio is wired.
+            // Deliberately not asserting a cause. Connection refused says the port is not open;
+            // it does not say why. A failed radio init halting the daemon before it binds is the
+            // likeliest reason (companion_radio/main.cpp halts on !radio_init(), before
+            // serial_interface.begin(TCP_PORT)), but a failed bind or listen looks identical from
+            // here. LinuxSX1276::std_init does print "ERROR: radio init failed: <status>" through
+            // Serial, so that output is where the real answer is.
             println(
-                "meshcored is running but never opened ${MeshCoreConstants.DEFAULT_PORT}: its radio " +
-                    "init failed, so it halted before binding. Check spidev and the lora pins in " +
+                "meshcored is running but never opened ${MeshCoreConstants.DEFAULT_PORT}. Its radio " +
+                    "init or its TCP setup failed; check the daemon's Serial output for " +
+                    "\"radio init failed\", and the spidev and lora pins in " +
                     "/etc/meshcored/meshcored.ini against the wiring."
             )
             false
@@ -184,6 +208,10 @@ object MeshCoreService {
      * So readiness is a connect to the port, not a look at the process table.
      */
     fun isListening(): Boolean = memScoped {
+        // DESTRUCTIVE IF A CLIENT IS ATTACHED. LinuxTcpInterface.cpp accepts one client at a time
+        // and closes the previous one on a new accept ("Disconnect existing client"), so probing
+        // while our transport holds a session would drop that session. Only call this before the
+        // transport connects, or after it has closed -- never as a periodic health check.
         val fd = socket(AF_INET, SOCK_STREAM, 0)
         if (fd < 0) return@memScoped false
 
