@@ -137,6 +137,10 @@ class MessageHandler(
         // going backwards. In any mesh of three that silently and permanently kills direct
         // messages, and a forged packet does the same on purpose.
         if (!securityManager.isAddressedToUs(packet)) {
+            // Logged because a dropped relay and a lost message are otherwise indistinguishable in
+            // the journal, which already cost one debugging session.
+            logDebug("MessageHandler", "Not ours to decrypt: encrypted payload from $peerID " +
+                "addressed to ${packet.recipientID?.toHexString() ?: "nobody"}")
             return
         }
 

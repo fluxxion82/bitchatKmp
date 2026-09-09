@@ -101,6 +101,44 @@ They are a symptom, not the cause: suppressing advertising entirely removed them
 failed 0 for 4 (section 6). But they are a cheap, unambiguous detector of the bad state, and detecting
 the transition is the thing we have never managed to do.
 
+## 2.1 Wi-Fi/Bluetooth coexistence, the leading explanation
+
+The Pi's radio is a Unisoc WCN combo part, and the kernel loads its Wi-Fi calibration from
+`/lib/firmware/wifi_2355b001_1ant.ini` — **one antenna**, shared between Wi-Fi and Bluetooth. That is
+visible at boot:
+
+```text
+WCN: start_marlin [MARLIN_BLUETOOTH]
+wifi ini path = /lib/firmware/wifi_2355b001_1ant.ini
+sprdwl:chip_model:0x2355, chip_ver:0x0
+```
+
+Evidence gathered so far, in both directions:
+
+- **Bluetooth suffers while Wi-Fi is busy.** The degradation was measured during hours of heavy ssh
+  use of this box — journal streaming, deploys, `btmon` captures. Outbound connects reached
+  `Connection Failed to be Established (0x3e)` against a peer sitting at -52 dBm, actively advertising
+  (section 5.1 of `../docs/reviews/2026-09-08-pi-outbound-degradation.md`). A strong, present peer that
+  the link layer cannot reach is a classic coexistence signature.
+- **Wi-Fi suffers while Bluetooth is busy.** 2026-09-08 evening, during active mesh messaging, ICMP to
+  the Pi ran `min 9.6 ms / avg 600.7 ms / max 1398.8 ms` over three packets, with the box otherwise
+  healthy and up. Earlier the same evening it left the network entirely for several minutes while
+  Bluetooth advertising failures were firing every ten seconds, then returned without a reboot.
+- The 0x2036/0x2039 advertising failures of section 2 fit the same picture: the kernel pauses and
+  resumes advertising around each connection, and a contended radio is where that goes wrong.
+
+**This is a hypothesis with converging evidence, not a finding.** It has not been tested, and four
+earlier explanations for this behaviour were confidently wrong (section 6).
+
+**The test needs no code.** Put the Pi on Ethernet, or leave Wi-Fi idle for a stretch, and measure
+outbound with `scripts/ble-outbound-report.sh` over the same window length. If outbound stops
+degrading with Wi-Fi quiet, coexistence is confirmed and the remedies are ordinary ones: wire the box,
+move it away from the AP, or accept the ceiling. If it degrades anyway, coexistence is out and the
+remaining candidates are the connection parameters and the firmware itself.
+
+A caution for whoever runs it: administering this device over its own Wi-Fi is part of the experiment.
+Every journal fetch and every deploy is load on the radio being measured.
+
 ## 3. What we do not know
 
 - What degrades. It survives an app restart, so it is in the kernel, the controller or bluetoothd, not
@@ -287,6 +325,22 @@ The fix tears the attempt's D-Bus resources down where it fails, ignores a signa
 attempt already abandoned (the handler disconnect alone is not enough, because a signal already being
 dispatched can be waiting on the mutex while the teardown runs), and NULLs `dbus_objects` after freeing
 it. Zero SEGV since, across both the degraded and healthy states.
+
+### Handshake churn from self-echoed packets — done 2026-09-08
+
+The mesh relays packets back onto the link they arrived on, so a peer forwards our own packet
+straight back. `BluetoothMeshService` bound that packet's sender to the arriving address before the
+self check ran, pointing the peer's address at our own ID; the peer's next packet then looked like a
+new link and `onPeerLinkRefreshed` tore down whatever handshake was in flight — including responder
+handshakes, which cannot be restarted and whose peers were simply stranded. The result was five
+handshakes in fourteen seconds and a user's first direct message being lost every time.
+
+Measured on the device before and after: self-echoed packets bound as peer traffic 130 to 0,
+renegotiations 2 to 0, handshake restarts to 0, decrypt failures to 0.
+
+Found by adversarial review (Fable, Codex gpt-6-astra), which also corrected the reading of the
+journal that led here — three of those five "session established" lines were the same live session
+being re-reported.
 
 ### `BITCHAT_BLE_NO_ADVERTISE` — done 2026-09-08
 
