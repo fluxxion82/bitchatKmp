@@ -4,6 +4,7 @@ import com.bitchat.bluetooth.manager.CentralLinkPolicy
 import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logInfo
 import com.bitchat.domain.base.CoroutineScopeFacade
+import platform.posix.getenv
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -244,6 +245,19 @@ class BlueZConnectionService(
      * churn: overlapping attempts cancelling each other, and links that lasted seconds.
      */
     suspend fun onDeviceDiscovered(deviceAddress: String, deviceName: String?) {
+        // Setting BITCHAT_BLE_NO_DIAL runs this node peripheral-only: it keeps advertising and
+        // keeps serving centrals that dial us, but never dials out itself. It is the mirror of
+        // BITCHAT_BLE_NO_ADVERTISE in BlueZAdvertisingService, and exists so the desktop's central
+        // role can be exercised against a peer that will not race it by dialling first.
+        //
+        // The address is still remembered, so clearing the variable and restarting picks up
+        // everything already discovered rather than waiting for BlueZ to announce it again.
+        if (dialSuppressed()) {
+            connectionMutex.withLock { knownPeers.add(deviceAddress) }
+            logDebug(TAG, "BITCHAT_BLE_NO_DIAL set: not dialling ${deviceAddress.take(8)}")
+            return
+        }
+
         val decision = connectionMutex.withLock {
             knownPeers.add(deviceAddress)
             linkPolicy.onDiscovered(
@@ -520,6 +534,10 @@ class BlueZConnectionService(
 /**
  * Get current time in milliseconds.
  */
+/** True when BITCHAT_BLE_NO_DIAL is set, i.e. this node is running peripheral-only. */
+@OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+private fun dialSuppressed(): Boolean = getenv("BITCHAT_BLE_NO_DIAL") != null
+
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 private fun currentTimeMillis(): Long {
     // Using POSIX time() returns seconds since epoch, multiply by 1000 for milliseconds
