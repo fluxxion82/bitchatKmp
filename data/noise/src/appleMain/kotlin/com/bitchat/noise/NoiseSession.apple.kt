@@ -594,17 +594,19 @@ actual class NoiseSession actual constructor(
             // Allocate buffer for ciphertext (includes MAC)
             val ciphertextBuffer = ByteArray(ciphertextLength)
 
+            // noise-c encrypts in place and appends its 16-byte MAC, so the buffer it is given
+            // must have room for both. Pointing it at the plaintext array while advertising
+            // plaintext-plus-tag capacity had it write the tag past the end of that array, and
+            // then read the same 16 bytes back out again -- an out-of-bounds write and read on
+            // every outbound encrypted message. The ciphertext array was allocated and pinned
+            // for this and simply never used, so the plaintext is copied into it and encrypted
+            // there.
+            data.copyInto(ciphertextBuffer)
+
             // Create NoiseBuffer for the plaintext and ciphertext
             memScoped {
                 val noiseBuffer = alloc<NoiseBuffer>()
 
-                // noise-c encrypts in place and appends its 16-byte MAC, so the buffer it is given
-                // must have room for both. Pointing it at the plaintext array while advertising
-                // plaintext-plus-tag capacity had it write the tag past the end of that array, and
-                // then read the same 16 bytes back out again -- an out-of-bounds write and read on
-                // every outbound encrypted message. The ciphertext array was allocated and pinned
-                // for this and simply never used, so the plaintext is copied into it and encrypted
-                // there.
                 ciphertextBuffer.usePinned { ciphertextPinned ->
                     run {
                         noiseBuffer.data = ciphertextPinned.addressOf(0).reinterpret()
@@ -630,6 +632,7 @@ actual class NoiseSession actual constructor(
                             println("[NoiseSession-Native] Unexpected ciphertext length $encryptedSize, wanted $ciphertextLength")
                             throw SessionError.EncryptionFailed
                         }
+                    }
                 }
             }
 
