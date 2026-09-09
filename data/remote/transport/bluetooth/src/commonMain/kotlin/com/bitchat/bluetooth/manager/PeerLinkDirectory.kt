@@ -22,6 +22,17 @@ class PeerLinkDirectory {
 
     private val peerToDevices = mutableMapOf<String, MutableSet<String>>()
     private val deviceToPeer = mutableMapOf<String, String>()
+    private val lastSeen = mutableMapOf<String, Long>()
+
+    companion object {
+        /**
+         * How recently an address must have carried a packet to count as a live link.
+         *
+         * Rotation and relaying look identical from the peer ID alone, so liveness is what separates
+         * them: a rotated-away address goes silent immediately, while a relay keeps delivering.
+         */
+        const val LIVE_LINK_WINDOW_MS = 30_000L
+    }
 
     /**
      * @property isNewLink true when [address] was not already bound to this peer, i.e. this is a
@@ -34,12 +45,18 @@ class PeerLinkDirectory {
     )
 
     /**
-     * Record that [peerID] is reachable at [address].
+     * Record that [peerID] is reachable at [address], as of [now].
      *
      * An address already bound to a different peer is re-pointed: BlueZ hands out an address to one
      * device at a time, so the previous owner has moved on.
+     *
+     * Only addresses that have gone quiet are reported as superseded. A packet names the peer that
+     * ORIGINATED it, not the neighbour that handed it over, so a relayed packet makes its originator
+     * look as though it moved onto the relay's address. It has not, and both links are live --
+     * releasing on that basis tore down the peer's real link, which the mesh then rebuilt and tore
+     * down again.
      */
-    fun bind(peerID: String, address: String): Binding {
+    fun bind(peerID: String, address: String, now: Long): Binding {
         val previousOwner = deviceToPeer[address]
         val isNewLink = previousOwner != peerID
 
@@ -51,8 +68,14 @@ class PeerLinkDirectory {
         }
 
         deviceToPeer[address] = peerID
+        lastSeen[address] = now
         val devices = peerToDevices.getOrPut(peerID) { mutableSetOf() }
-        val superseded = if (isNewLink) devices.filter { it != address } else emptyList()
+        val superseded = if (isNewLink) {
+            // An address with no recorded sighting has never carried a packet, so it counts as quiet.
+            devices.filter { it != address && now - (lastSeen[it] ?: (now - LIVE_LINK_WINDOW_MS - 1)) > LIVE_LINK_WINDOW_MS }
+        } else {
+            emptyList()
+        }
         devices.add(address)
 
         return Binding(isNewLink = isNewLink, superseded = superseded)
@@ -63,6 +86,7 @@ class PeerLinkDirectory {
      * address it is now using.
      */
     fun release(address: String) {
+        lastSeen.remove(address)
         val peerID = deviceToPeer.remove(address) ?: return
         val devices = peerToDevices[peerID] ?: return
         devices.remove(address)
@@ -80,5 +104,6 @@ class PeerLinkDirectory {
     fun clear() {
         peerToDevices.clear()
         deviceToPeer.clear()
+        lastSeen.clear()
     }
 }

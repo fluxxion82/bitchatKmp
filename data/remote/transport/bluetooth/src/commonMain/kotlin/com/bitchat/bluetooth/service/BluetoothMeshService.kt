@@ -652,7 +652,8 @@ class BluetoothMeshService(
         deviceAddress: String
     ): PeerLinkDirectory.Binding {
         val binding = devicePeerLock.withLock {
-            peerLinks.bind(peerID, deviceAddress).also { peerLinkSnapshot = peerLinks.snapshot() }
+            peerLinks.bind(peerID, deviceAddress, Clock.System.now().toEpochMilliseconds())
+                .also { peerLinkSnapshot = peerLinks.snapshot() }
         }
         if (binding.isNewLink) {
             logDebug(

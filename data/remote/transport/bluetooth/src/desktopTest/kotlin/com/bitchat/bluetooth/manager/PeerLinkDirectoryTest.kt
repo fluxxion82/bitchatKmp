@@ -22,10 +22,44 @@ class PeerLinkDirectoryTest {
     private val third = "74:6D:62:4B:4E:57"
 
     @Test
+    fun anAddressStillCarryingTrafficIsNotSuperseded() {
+        // A relayed packet carries its ORIGINATOR's peer ID but arrives on the RELAY's address, so
+        // the originator looks like it moved. It has not: both links are live. Superseding here
+        // tore down the peer's real link, and the mesh then rebuilt and tore it down again -- the
+        // Pixel 4 XL journal shows peer 9343bbdb "moving" 54 times between two addresses, and the
+        // Pi (one fixed public address, incapable of moving) doing it 11 times.
+        val directory = PeerLinkDirectory()
+        directory.bind(phone, first, now = 0L)
+
+        // The peer keeps using `first` while a relayed copy of its packet arrives on `second`.
+        directory.bind(phone, first, now = 20_000L)
+        val binding = directory.bind(phone, second, now = 21_000L)
+
+        assertTrue(binding.isNewLink)
+        assertTrue(
+            binding.superseded.isEmpty(),
+            "an address seen 1s ago is a live link, not one the peer moved off"
+        )
+    }
+
+    @Test
+    fun anAddressGoneQuietIsSuperseded() {
+        // Genuine RPA rotation: the old address stops carrying anything the moment the phone
+        // rotates, so once it has been quiet past the window it is released as before.
+        val directory = PeerLinkDirectory()
+        directory.bind(phone, first, now = 0L)
+
+        val binding = directory.bind(phone, second, now = 0L + PeerLinkDirectory.LIVE_LINK_WINDOW_MS + 1)
+
+        assertTrue(binding.isNewLink)
+        assertEquals(listOf(first), binding.superseded)
+    }
+
+    @Test
     fun aFirstSightingIsANewLinkAndSupersedesNothing() {
         val directory = PeerLinkDirectory()
 
-        val binding = directory.bind(phone, first)
+        val binding = directory.bind(phone, first, now = 60000L)
 
         assertTrue(binding.isNewLink)
         assertTrue(binding.superseded.isEmpty())
@@ -35,9 +69,9 @@ class PeerLinkDirectoryTest {
     @Test
     fun seeingTheSamePeerOnTheSameAddressAgainIsNotANewLink() {
         val directory = PeerLinkDirectory()
-        directory.bind(phone, first)
+        directory.bind(phone, first, now = 120000L)
 
-        val binding = directory.bind(phone, first)
+        val binding = directory.bind(phone, first, now = 180000L)
 
         assertTrue(!binding.isNewLink)
         assertTrue(binding.superseded.isEmpty())
@@ -46,10 +80,10 @@ class PeerLinkDirectoryTest {
     @Test
     fun aRotatedAddressSupersedesTheOnesThePeerLeftBehind() {
         val directory = PeerLinkDirectory()
-        directory.bind(phone, first)
-        directory.bind(phone, second)
+        directory.bind(phone, first, now = 240000L)
+        directory.bind(phone, second, now = 300000L)
 
-        val binding = directory.bind(phone, third)
+        val binding = directory.bind(phone, third, now = 360000L)
 
         assertTrue(binding.isNewLink)
         assertEquals(setOf(first, second), binding.superseded.toSet())
@@ -62,8 +96,8 @@ class PeerLinkDirectoryTest {
     @Test
     fun releasingAnAddressLeavesThePeerReachableOnTheOthers() {
         val directory = PeerLinkDirectory()
-        directory.bind(phone, first)
-        directory.bind(phone, second)
+        directory.bind(phone, first, now = 420000L)
+        directory.bind(phone, second, now = 480000L)
 
         directory.release(first)
 
@@ -75,7 +109,7 @@ class PeerLinkDirectoryTest {
     @Test
     fun releasingThePeersLastAddressForgetsThePeer() {
         val directory = PeerLinkDirectory()
-        directory.bind(phone, first)
+        directory.bind(phone, first, now = 540000L)
 
         directory.release(first)
 
@@ -86,11 +120,11 @@ class PeerLinkDirectoryTest {
     @Test
     fun anAddressHandedToADifferentPeerIsRePointed() {
         val directory = PeerLinkDirectory()
-        directory.bind(phone, first)
+        directory.bind(phone, first, now = 600000L)
 
         // BlueZ hands out an address to one device at a time, so a resolvable private address that
         // now carries another peer's packets has been recycled.
-        val binding = directory.bind(otherPeer, first)
+        val binding = directory.bind(otherPeer, first, now = 660000L)
 
         assertTrue(binding.isNewLink)
         assertEquals(otherPeer, directory.peerFor(first))
@@ -100,9 +134,9 @@ class PeerLinkDirectoryTest {
     @Test
     fun theSnapshotSeesEveryBoundAddress() {
         val directory = PeerLinkDirectory()
-        directory.bind(phone, first)
-        directory.bind(phone, second)
-        directory.bind(otherPeer, third)
+        directory.bind(phone, first, now = 720000L)
+        directory.bind(phone, second, now = 780000L)
+        directory.bind(otherPeer, third, now = 840000L)
 
         assertEquals(
             mapOf(first to phone, second to phone, third to otherPeer),
@@ -119,8 +153,8 @@ class PeerLinkDirectoryTest {
     @Test
     fun clearForgetsEverything() {
         val directory = PeerLinkDirectory()
-        directory.bind(phone, first)
-        directory.bind(otherPeer, third)
+        directory.bind(phone, first, now = 900000L)
+        directory.bind(otherPeer, third, now = 960000L)
 
         directory.clear()
 
