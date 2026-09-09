@@ -258,6 +258,19 @@ class BluetoothMeshService(
                 sendNoiseHandshakePacket(peerID, responsePacket)
             }
 
+            override fun onSessionUnusable(peerID: String) {
+                // The session says it is established and cannot read what the peer sends, so it is
+                // not the session the peer is using. Discard it and open a fresh handshake;
+                // initiateNoiseHandshake refuses while one is established, so the removal has to
+                // come first. SessionFailureTracker rate limits this, so a peer that can forge a
+                // packet cannot use it to demand handshakes.
+                serviceScope.launch {
+                    logInfo("BluetoothMeshService", "Rebuilding the unusable Noise session with $peerID")
+                    noiseEncryption.removeSession(peerID)
+                    initiateNoiseHandshake(peerID)
+                }
+            }
+
             override fun onSessionEstablished(peerID: String) {
                 logInfo("BluetoothMeshService", "Noise session established with $peerID")
                 serviceScope.launch {

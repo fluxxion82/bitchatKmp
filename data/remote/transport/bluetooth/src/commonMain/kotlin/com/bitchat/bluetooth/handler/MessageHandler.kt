@@ -4,6 +4,7 @@ import com.bitchat.api.dto.mapper.toBitchatFilePacket
 import com.bitchat.bluetooth.facade.CryptoSigningFacade
 import com.bitchat.bluetooth.manager.PeerManager
 import com.bitchat.bluetooth.manager.SecurityManager
+import com.bitchat.bluetooth.manager.SessionFailureTracker
 import com.bitchat.bluetooth.protocol.BitchatPacket
 import com.bitchat.bluetooth.protocol.IdentityAnnouncement
 import com.bitchat.bluetooth.protocol.MessageType
@@ -12,6 +13,7 @@ import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
 import com.bitchat.crypto.Cryptography
+import kotlin.time.Clock
 import com.bitchat.domain.chat.model.BitchatFilePacket
 import com.bitchat.noise.model.NoisePayload
 import com.bitchat.noise.model.NoisePayloadType
@@ -26,6 +28,9 @@ class MessageHandler(
     var delegate: MessageHandlerDelegate? = null
 
     private val pendingEncryptedMessages = mutableMapOf<String, MutableList<ByteArray>>()
+
+    // A session can report itself established and be unusable; this is what notices.
+    private val sessionFailures = SessionFailureTracker()
 
     suspend fun handlePacket(packet: BitchatPacket, peerID: String) {
         val messageType = MessageType.fromValue(packet.type) ?: return
@@ -207,12 +212,30 @@ class MessageHandler(
                     }
                 }
             }
+            sessionFailures.onDecryptSucceeded(peerID)
         } else if (requeueOnFailure) {
             println("⏳ Failed to decrypt from $peerID, queueing for retry")
             queueEncryptedMessage(peerID, payload)
+            condemnSessionIfHopeless(peerID)
         } else {
             println("❌ Failed to decrypt from $peerID, not requeueing")
+            condemnSessionIfHopeless(peerID)
         }
+    }
+
+    /**
+     * A run of failures means the session is wrong, not the packets. Nothing used to notice: the
+     * facade returned null, the payload was queued, and direct messages from that peer stopped for
+     * good while the session still reported itself established.
+     */
+    private fun condemnSessionIfHopeless(peerID: String) {
+        if (!sessionFailures.onDecryptFailed(peerID, Clock.System.now().toEpochMilliseconds())) return
+
+        println("🔁 ${SessionFailureTracker.FAILURES_BEFORE_RECOVERY} consecutive decryption " +
+            "failures from $peerID; the session cannot be the right one, rebuilding it")
+        // Anything queued was encrypted under the session being discarded, so it can never decrypt.
+        pendingEncryptedMessages.remove(peerID)
+        delegate?.onSessionUnusable(peerID)
     }
 
     private fun queueEncryptedMessage(peerID: String, payload: ByteArray) {
@@ -246,6 +269,12 @@ interface MessageHandlerDelegate {
     fun onHandshakeReceived(peerID: String)
     fun onHandshakeResponse(peerID: String, responsePacket: ByteArray)
     fun onSessionEstablished(peerID: String)
+
+    /**
+     * The session with [peerID] reports itself established but cannot decrypt what that peer sends.
+     * Implementations should discard it and start a fresh handshake.
+     */
+    fun onSessionUnusable(peerID: String)
     fun onPeerLeft(peerID: String)
     fun onFragmentReceived(peerID: String)
     fun onFileReceived(peerID: String, filePacket: BitchatFilePacket, isBroadcast: Boolean)
