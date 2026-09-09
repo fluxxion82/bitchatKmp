@@ -5,6 +5,7 @@ import com.bitchat.bluetooth.facade.CryptoSigningFacade
 import com.bitchat.bluetooth.facade.NoiseEncryptionFacade
 import com.bitchat.bluetooth.handler.MessageHandler
 import com.bitchat.bluetooth.handler.MessageHandlerDelegate
+import com.bitchat.bluetooth.manager.HandshakeRefreshPolicy
 import com.bitchat.bluetooth.manager.FragmentManager
 import com.bitchat.bluetooth.manager.HandshakeSupervisor
 import com.bitchat.bluetooth.manager.PeerLinkDirectory
@@ -89,6 +90,8 @@ class BluetoothMeshService(
     private val handshakeSupervisor = HandshakeSupervisor()
     private val handshakeMutex = Mutex()
 
+    private val handshakeRefreshPolicy = HandshakeRefreshPolicy()
+
     // Peers this node owes a handshake to but could not send one for, because no link could carry
     // it. They are retried when a link to them comes up rather than on a timer. Guarded by
     // handshakeMutex.
@@ -168,6 +171,17 @@ class BluetoothMeshService(
                 }
 
                 val peerID = packet.senderID.toHexString()
+
+                // Our own packets come back to us: the mesh relays what it receives, including onto
+                // the link it arrived on, so a peer forwards our packet straight back. Binding that
+                // to the sending address pointed the peer's address at our own ID, and the peer's
+                // next packet then looked like a brand new link -- which tore down whatever
+                // handshake was in flight. Nothing downstream could undo it, because the binding had
+                // already happened by the time the self check ran.
+                if (peerID == myPeerID) {
+                    return@launch
+                }
+
                 val binding = recordPeerDeviceMapping(peerID, deviceAddress)
                 if (binding.isNewLink) {
                     releaseSupersededLinks(peerID, binding.superseded)
@@ -357,43 +371,34 @@ class BluetoothMeshService(
                 handshakeSupervisor.reset(peerID)
                 peerID in handshakesOwed
             }
+            val startedAt = handshakeMutex.withLock { handshakeStartedAt[peerID] }
 
-            if (noiseEncryption.hasEstablishedSession(peerID)) return@launch
+            when (handshakeRefreshPolicy.decide(
+                established = noiseEncryption.hasEstablishedSession(peerID),
+                handshaking = noiseEncryption.isHandshaking(peerID),
+                ourHandshakeStartedAt = startedAt,
+                now = now,
+                owed = owed
+            )) {
+                HandshakeRefreshPolicy.Decision.LEAVE -> Unit
 
-            if (!noiseEncryption.isHandshaking(peerID)) {
-                // Nothing in flight. A handshake we could not send for want of a link is owed and
-                // this is the moment to pay it; anything else is a peer we have no reason to talk
-                // to yet.
-                if (owed) {
+                HandshakeRefreshPolicy.Decision.INITIATE -> {
                     logInfo(
                         "BluetoothMeshService",
                         "Peer $peerID is reachable again; sending the handshake it is owed"
                     )
                     initiateNoiseHandshake(peerID)
                 }
-                return@launch
-            }
 
-            // One physical link produces two link-up signals in quick succession -- the inbound
-            // packet that binds the address, then the outbound connection becoming ready, 315ms
-            // apart in the device journal. Restarting on the second one throws away a handshake
-            // that has only just gone out over a link that is fine.
-            val startedAt = handshakeMutex.withLock { handshakeStartedAt[peerID] }
-            if (startedAt != null && now - startedAt < HANDSHAKE_RESTART_GRACE_MS) {
-                logDebug(
-                    "BluetoothMeshService",
-                    "Peer $peerID reappeared ${now - startedAt}ms after its handshake went out; " +
-                        "letting it stand"
-                )
-                return@launch
+                HandshakeRefreshPolicy.Decision.RESTART -> {
+                    logInfo(
+                        "BluetoothMeshService",
+                        "Peer $peerID reappeared with our handshake in flight; restarting it on the new link"
+                    )
+                    noiseEncryption.removeSession(peerID)
+                    initiateNoiseHandshake(peerID)
+                }
             }
-
-            logInfo(
-                "BluetoothMeshService",
-                "Peer $peerID reappeared with a handshake in flight; restarting it on the new link"
-            )
-            noiseEncryption.removeSession(peerID)
-            initiateNoiseHandshake(peerID)
         }
     }
 
@@ -1000,16 +1005,6 @@ class BluetoothMeshService(
     }
 
     companion object {
-        /**
-         * How long a freshly sent handshake is protected from being restarted by a link-up signal.
-         *
-         * One physical link announces itself twice: the first packet over it binds the peer to the
-         * address, and the outbound connection then reports itself ready. The device journal shows
-         * the two 315ms apart, each restarting the handshake and discarding the one the other had
-         * just sent, so the peer's reply had no session left to arrive into. Two seconds covers
-         * that gap without holding on to a handshake whose link genuinely died.
-         */
-        private const val HANDSHAKE_RESTART_GRACE_MS = 2_000L
     }
 }
 
