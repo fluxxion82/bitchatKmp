@@ -190,6 +190,24 @@ class LinuxConnectionService(
          * for ever, and with it every other peer in range.
          */
         startAttemptReaper()
+        startHealthLog()
+    }
+
+    /**
+     * One line per role, every 30s, whether or not anything is happening.
+     *
+     * The counters already existed but were only printed at teardown, which is useless for the
+     * failure we actually have: a transport that works for a while and then quietly stops. What
+     * matters is where the numbers stop moving -- writes flat with frames rising is reassembly,
+     * frames rising with deliveries flat is the mesh hand-off, broadcasts dropped while links are
+     * held is notification. A silent log tells us nothing; a boring one tells us which half is
+     * still alive.
+     */
+    private fun startHealthLog() = scope.launch {
+        while (true) {
+            delay(HEALTH_INTERVAL_MS)
+            log.info("health {} | {} | {}", statusLine(), gattServer.statusLine(), gattClient.statusLine())
+        }
     }
 
     // -----------------------------------------------------------------------------------------
@@ -730,6 +748,9 @@ class LinuxConnectionService(
     private companion object {
         /** See [raiseLinkUp]. Long enough to lose a dispatcher race, short enough to ignore. */
         const val CONNECTION_READY_DELAY_MS: Long = 250L
+
+        /** How often [startHealthLog] prints. Frequent enough to bracket a failure, rare enough to read. */
+        const val HEALTH_INTERVAL_MS: Long = 30_000L
 
         /**
          * How many failures in a row before a device record is cleared. See [onAttemptFailed].
