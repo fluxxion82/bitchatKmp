@@ -91,7 +91,6 @@ kotlin {
                 implementation(compose.components.uiToolingPreview)
                 implementation(compose.components.resources)
                 // Webview for desktop (map picker)
-                implementation("io.github.kevinnzou:compose-webview-multiplatform:2.0.3")
                 // Coil for desktop
                 implementation(libs.coil)
                 implementation(libs.coil.compose)

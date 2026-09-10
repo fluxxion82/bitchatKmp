@@ -66,18 +66,6 @@ compose.desktop {
     application {
         mainClass = "com.bitchat.desktop.AppKt"
 
-        // KCEF (Chromium) required flags
-        jvmArgs += listOf(
-            "--add-opens", "java.desktop/sun.awt=ALL-UNNAMED",
-            "--add-opens", "java.desktop/java.awt.peer=ALL-UNNAMED"
-        )
-        if (currentOs.isMacOsX) {
-            jvmArgs += listOf(
-                "--add-opens", "java.desktop/sun.lwawt=ALL-UNNAMED",
-                "--add-opens", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
-            )
-        }
-
         nativeDistributions {
             // jpackage only emits host-OS formats, so Deb/Rpm must be built on Linux
             // (and Rpm additionally needs the `rpm-build` package installed).

@@ -15,7 +15,6 @@ val buildConfigModule = module {
     }
 
 //    single {
-//        KcefAppInitializer(coroutineScopeFacade = get())
 //    } bind AppInitializer::class
 }
 
