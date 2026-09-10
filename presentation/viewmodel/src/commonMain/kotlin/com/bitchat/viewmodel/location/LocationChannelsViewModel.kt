@@ -10,6 +10,7 @@ import com.bitchat.domain.location.EndGeohashSampling
 import com.bitchat.domain.location.GetAvailableChannels
 import com.bitchat.domain.location.GetBookmarkNames
 import com.bitchat.domain.location.GetBookmarkedChannels
+import com.bitchat.domain.location.GetLastFixInfo
 import com.bitchat.domain.location.GetLocationNames
 import com.bitchat.domain.location.GetLocationServicesEnabled
 import com.bitchat.domain.location.GetParticipantCounts
@@ -20,11 +21,14 @@ import com.bitchat.domain.location.ToggleLocationServices
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.GeohashChannel
 import com.bitchat.domain.location.model.GeohashChannelLevel
+import com.bitchat.domain.location.model.LocationFixInfo
+import com.bitchat.domain.location.model.LocationUnavailableException
 import com.bitchat.domain.user.GetUserState
 import com.bitchat.domain.user.SaveUserStateAction
 import com.bitchat.domain.user.model.UserStateAction
 import com.bitchat.viewvo.location.LocationChannelsEffect
 import com.bitchat.viewvo.location.LocationChannelsState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -50,6 +54,7 @@ class LocationChannelsViewModel(
     private val getTeleportState: GetTeleportState,
     private val getLocationServicesEnabled: GetLocationServicesEnabled,
     private val getLocationNames: GetLocationNames,
+    private val getLastFixInfo: GetLastFixInfo,
     private val resolveLocationName: ResolveLocationName,
     private val getUserState: GetUserState,
 ) : ViewModel() {
@@ -70,46 +75,110 @@ class LocationChannelsViewModel(
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
 
-            try {
-                val channels = getAvailableChannels()
-                val counts = getParticipantCounts()
-                val bookmarks = getBookmarkedChannels()
-                val bookmarkNames = getBookmarkNames()
-                val selectedChannel = when (val state = getUserState()) {
+            /*
+             * Location is acquired separately from everything else on this sheet.
+             *
+             * It used to be the first call in one big try block, so a machine with no fix threw
+             * before bookmarks, the selected channel and the location-services preference had been
+             * read. Bookmarks vanished, and because the preference kept its default of false the
+             * sheet hid the very section that explains the failure -- on a cold launch the user saw
+             * an empty sheet with no reason given, which is precisely the case the explanation was
+             * written for.
+             */
+            val locationServicesEnabled = orDefault(true) { getLocationServicesEnabled() }
+            val bookmarks = orDefault(emptyList()) { getBookmarkedChannels() }
+            val bookmarkNames = orDefault(emptyMap()) { getBookmarkNames() }
+            val isTeleported = orDefault(false) { getTeleportState() }
+            val locationNames = orDefault(emptyMap()) { getLocationNames() }
+            val selectedChannel = orDefault(Channel.Mesh) {
+                when (val state = getUserState()) {
                     is UserState.Active -> {
                         val active = state.activeState
-                        if (active is ActiveState.Chat) {
-                            active.channel
-                        } else Channel.Mesh
+                        if (active is ActiveState.Chat) active.channel else Channel.Mesh
                     }
 
                     else -> Channel.Mesh
                 }
-                val isTeleported = getTeleportState()
-                val locationServicesEnabled = getLocationServicesEnabled()
-                val locationNames = getLocationNames()
-
-                _state.update {
-                    it.copy(
-                        availableChannels = channels,
-                        participantCounts = counts.geohashCounts,
-                        meshParticipantCount = counts.meshCount,
-                        bookmarkedGeohashes = bookmarks,
-                        bookmarkNames = bookmarkNames,
-                        selectedChannel = selectedChannel,
-                        isTeleported = isTeleported,
-                        locationServicesEnabled = locationServicesEnabled,
-                        locationNames = locationNames,
-                        isLoading = false
-                    )
-                }
-
-                resolveLocationNamesInBackground(channels, locationNames)
-            } catch (e: Exception) {
-                _state.update { it.copy(isLoading = false) }
             }
+
+            _state.update {
+                it.copy(
+                    bookmarkedGeohashes = bookmarks,
+                    bookmarkNames = bookmarkNames,
+                    selectedChannel = selectedChannel,
+                    isTeleported = isTeleported,
+                    locationServicesEnabled = locationServicesEnabled,
+                    locationNames = locationNames
+                )
+            }
+
+            loadChannels(locationNames, initial = true)
         }
     }
+
+    /**
+     * The location-dependent half of the sheet. Shared by the initial load and the five-second
+     * refresh so both report an unavailable fix the same way.
+     */
+    private suspend fun loadChannels(locationNames: Map<GeohashChannelLevel, String>, initial: Boolean) {
+        try {
+            val channels = getAvailableChannels(Unit)
+            val counts = getParticipantCounts(Unit)
+            val freshNames = if (initial) locationNames else getLocationNames(Unit)
+            val fixInfo = orDefault(null) { getLastFixInfo(Unit) }
+
+            _state.update {
+                it.copy(
+                    availableChannels = channels,
+                    participantCounts = counts.geohashCounts,
+                    meshParticipantCount = counts.meshCount,
+                    locationNames = freshNames,
+                    isLoading = false,
+                    isRefreshing = false,
+                    locationUnavailableReason = null,
+                    locationApproximate = fixInfo?.source == LocationFixInfo.Source.IP_ADDRESS,
+                    locationStale = fixInfo != null && isStale(fixInfo)
+                )
+            }
+
+            resolveLocationNamesInBackground(channels, freshNames)
+        } catch (e: LocationUnavailableException) {
+            /*
+             * A finished state, not a pause -- without this the sheet spun for ever. Stale channels
+             * are cleared: leaving the previous list up would present channels derived from a fix
+             * the app has just said it cannot obtain.
+             */
+            _state.update {
+                it.copy(
+                    isLoading = false,
+                    isRefreshing = false,
+                    availableChannels = emptyList(),
+                    locationUnavailableReason = e.reason.message,
+                    locationApproximate = false,
+                    locationStale = false
+                )
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(isLoading = false, isRefreshing = false) }
+        }
+    }
+
+    private fun isStale(info: LocationFixInfo): Boolean = info.ageMillis > STALE_AFTER_MS
+
+    /**
+     * Runs [block], falling back to [default] if it fails.
+     *
+     * Cancellation is rethrown rather than absorbed: swallowing it would keep this coroutine
+     * running after its scope had been torn down.
+     */
+    private suspend fun <T> orDefault(default: T, block: suspend () -> T): T =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            default
+        }
 
     private fun startLiveRefresh() {
         refreshJob?.cancel()
@@ -126,26 +195,9 @@ class LocationChannelsViewModel(
 
     private suspend fun refreshData() {
         _state.update { it.copy(isRefreshing = true) }
-
-        try {
-            val channels = getAvailableChannels(Unit)
-            val counts = getParticipantCounts(Unit)
-            val locationNames = getLocationNames(Unit)
-
-            _state.update {
-                it.copy(
-                    availableChannels = channels,
-                    participantCounts = counts.geohashCounts,
-                    meshParticipantCount = counts.meshCount,
-                    locationNames = locationNames,
-                    isRefreshing = false
-                )
-            }
-
-            resolveLocationNamesInBackground(channels, locationNames)
-        } catch (e: Exception) {
-            _state.update { it.copy(isRefreshing = false) }
-        }
+        // Was a bare catch (Exception) that set neither the reason nor cleared the channels, so an
+        // unavailable fix on the poll was silently swallowed every five seconds.
+        loadChannels(_state.value.locationNames, initial = false)
     }
 
     fun startGeohashSampling(geohashes: List<String>) {
@@ -327,6 +379,15 @@ class LocationChannelsViewModel(
             .replace("#", "")
             .filter { it in allowed }
             .take(12)
+    }
+
+    private companion object {
+        /**
+         * Beyond this a fix is labelled rather than shown as current. An hour is long enough that a
+         * normal session never trips it, and short enough that a coordinate persisted before a
+         * flight does not present as the user's present neighbourhood.
+         */
+        const val STALE_AFTER_MS = 60 * 60 * 1000L
     }
 
     private fun geohashLevel(geohash: String): GeohashChannelLevel {

@@ -9,6 +9,7 @@ import com.bitchat.domain.location.EndGeohashSampling
 import com.bitchat.domain.location.GetAvailableChannels
 import com.bitchat.domain.location.GetBookmarkNames
 import com.bitchat.domain.location.GetBookmarkedChannels
+import com.bitchat.domain.location.GetLastFixInfo
 import com.bitchat.domain.location.GetLocationNames
 import com.bitchat.domain.location.GetLocationServicesEnabled
 import com.bitchat.domain.location.GetParticipantCounts
@@ -17,7 +18,10 @@ import com.bitchat.domain.location.ResolveLocationName
 import com.bitchat.domain.location.ToggleBookmark
 import com.bitchat.domain.location.ToggleLocationServices
 import com.bitchat.domain.location.model.Channel
+import com.bitchat.domain.location.model.GeohashChannel
 import com.bitchat.domain.location.model.GeohashChannelLevel
+import com.bitchat.domain.location.model.LocationFixInfo
+import com.bitchat.domain.location.model.LocationUnavailableException
 import com.bitchat.domain.location.model.ParticipantCounts
 import com.bitchat.domain.user.GetUserState
 import com.bitchat.domain.user.SaveUserStateAction
@@ -56,8 +60,14 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
     private val getLocationNames = mockk<GetLocationNames>(relaxed = true)
     private val resolveLocationName = mockk<ResolveLocationName>(relaxed = true)
     private val getUserState = mockk<GetUserState>(relaxed = true)
+    private val getLastFixInfo = mockk<GetLastFixInfo>(relaxed = true)
 
-    private fun buildViewModel(): LocationChannelsViewModel {
+    /**
+     * [configure] runs after the defaults below and before construction, because the view model
+     * loads in its init block -- stubbing after it is built is too late, and stubbing before this
+     * function is called is overwritten by the defaults.
+     */
+    private fun buildViewModel(configure: () -> Unit = {}): LocationChannelsViewModel {
         coEvery { getAvailableChannels(Unit) } returns emptyList()
         coEvery { getParticipantCounts(Unit) } returns ParticipantCounts()
         coEvery { getBookmarkedChannels(Unit) } returns emptyList()
@@ -67,6 +77,9 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
         coEvery { getLocationNames(Unit) } returns emptyMap()
         coEvery { resolveLocationName(any()) } returns null
         coEvery { getUserState(Unit) } returns UserState.Active(ActiveState.Chat(Channel.Mesh))
+        coEvery { getLastFixInfo(Unit) } returns null
+
+        configure()
 
         return LocationChannelsViewModel(
             saveUserStateAction = saveUserStateAction,
@@ -81,9 +94,100 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
             getTeleportState = getTeleportState,
             getLocationServicesEnabled = getLocationServicesEnabled,
             getLocationNames = getLocationNames,
+            getLastFixInfo = getLastFixInfo,
             resolveLocationName = resolveLocationName,
             getUserState = getUserState,
         )
+    }
+
+    @Test
+    fun locationFailureStillLoadsBookmarksAndThePreference() = runTest {
+        /*
+         * Regression: location used to be the first call in one try block, so a machine with no fix
+         * threw before bookmarks and the location-services preference had been read. The preference
+         * kept its default of false, and the sheet hides the section containing the explanation when
+         * it is false -- so a cold launch with no fix showed an empty sheet giving no reason at all.
+         */
+        val viewModel = buildViewModel {
+            coEvery { getBookmarkedChannels(Unit) } returns listOf("9q8yy")
+            coEvery { getBookmarkNames(Unit) } returns mapOf("9q8yy" to "home")
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getAvailableChannels(Unit) } throws
+                LocationUnavailableException(LocationUnavailableException.Reason.NO_SOURCE)
+        }
+        instantExecutorRule.scheduler.runCurrent()
+
+        val state = viewModel.state.value
+        assertEquals(listOf("9q8yy"), state.bookmarkedGeohashes)
+        assertEquals(mapOf("9q8yy" to "home"), state.bookmarkNames)
+        assertTrue(state.locationServicesEnabled, "the preference must be read even when no fix exists")
+        assertEquals(
+            LocationUnavailableException.Reason.NO_SOURCE.message,
+            state.locationUnavailableReason
+        )
+        assertTrue(!state.isLoading, "an unavailable fix is a finished state, not a spinner")
+
+        viewModel.clearForTest()
+    }
+
+    @Test
+    fun anUnavailableFixClearsChannelsFromAnEarlierSuccess() = runTest {
+        // Leaving the old list up would present channels derived from a fix the app has just said
+        // it cannot obtain.
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getAvailableChannels(Unit) } returns
+                listOf(GeohashChannel(GeohashChannelLevel.CITY, "9q8yy"))
+        }
+        instantExecutorRule.scheduler.runCurrent()
+        assertEquals(1, viewModel.state.value.availableChannels.size)
+
+        coEvery { getAvailableChannels(Unit) } throws
+            LocationUnavailableException(LocationUnavailableException.Reason.LOOKUP_FAILED)
+        instantExecutorRule.scheduler.advanceTimeBy(6_000)
+        instantExecutorRule.scheduler.runCurrent()
+
+        val state = viewModel.state.value
+        assertTrue(state.availableChannels.isEmpty(), "stale channels survived an unavailable fix")
+        assertEquals(
+            LocationUnavailableException.Reason.LOOKUP_FAILED.message,
+            state.locationUnavailableReason
+        )
+
+        viewModel.clearForTest()
+    }
+
+    @Test
+    fun anIpDerivedFixIsFlaggedApproximate() = runTest {
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getAvailableChannels(Unit) } returns
+                listOf(GeohashChannel(GeohashChannelLevel.CITY, "9q8yy"))
+            coEvery { getLastFixInfo(Unit) } returns
+                LocationFixInfo(LocationFixInfo.Source.IP_ADDRESS, ageMillis = 1_000)
+        }
+        instantExecutorRule.scheduler.runCurrent()
+
+        assertTrue(viewModel.state.value.locationApproximate)
+        assertTrue(!viewModel.state.value.locationStale)
+
+        viewModel.clearForTest()
+    }
+
+    @Test
+    fun anOldFixIsFlaggedStale() = runTest {
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getAvailableChannels(Unit) } returns
+                listOf(GeohashChannel(GeohashChannelLevel.CITY, "9q8yy"))
+            coEvery { getLastFixInfo(Unit) } returns
+                LocationFixInfo(LocationFixInfo.Source.DEVICE, ageMillis = 3 * 60 * 60 * 1000L)
+        }
+        instantExecutorRule.scheduler.runCurrent()
+
+        assertTrue(viewModel.state.value.locationStale)
+
+        viewModel.clearForTest()
     }
 
     @Test

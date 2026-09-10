@@ -1,25 +1,22 @@
 package com.bitchat.local.service
 
 import com.bitchat.domain.location.model.GeoPoint
+import com.bitchat.domain.location.model.LocationUnavailableException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 
 /**
  * Linux stub implementation of LocationService.
  *
- * Location services are not available on headless Linux devices.
- * For embedded devices that need location, consider:
- * - GPS hardware via serial/GPSD
- * - Manual location configuration
- * - IP-based geolocation
+ * Location services are not available on headless Linux devices. This reported a hardcoded San
+ * Francisco coordinate instead of admitting that, which would have put an embedded node into a
+ * geohash channel for a city it is nowhere near. For a device that genuinely needs a fix,
+ * consider GPS hardware over serial/GPSD, or a manually configured coordinate.
  */
 class LinuxLocationService : LocationService {
-    private val defaultLocation = GeoPoint(lat = 37.7749, lon = -122.4194)
 
     override suspend fun getCurrentLocation(): GeoPoint {
-        // Return a default/invalid location
-        // Applications should check hasLocationPermission() first
-        return defaultLocation
+        throw LocationUnavailableException(LocationUnavailableException.Reason.NO_SOURCE)
     }
 
     override fun locationUpdates(): Flow<GeoPoint> {

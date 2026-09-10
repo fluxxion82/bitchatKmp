@@ -6,6 +6,8 @@ import com.bitchat.domain.location.eventbus.LocationEventBus
 import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.location.model.GeoPoint
 import com.bitchat.domain.location.model.GeohashChannel
+import com.bitchat.domain.location.model.LocationFixInfo
+import com.bitchat.domain.location.model.LocationUnavailableException
 import com.bitchat.domain.location.model.GeohashChannelLevel
 import com.bitchat.domain.location.model.Note
 import com.bitchat.domain.location.model.PermissionState
@@ -163,6 +165,18 @@ class LocationRepo(
                     geohash = geohash
                 )
             }
+        } catch (e: LocationUnavailableException) {
+            /*
+             * Expected, not exceptional, and deliberately rethrown rather than flattened to an
+             * empty list. An empty list is indistinguishable from "still looking", which is why the
+             * channel sheet span for ever on a machine with no location source. The one caller
+             * turns this into a finished, explained state.
+             *
+             * No stack trace: the sheet polls every five seconds, so printing one produced a trace
+             * every five seconds for as long as there was no fix.
+             */
+            logNostrDebug("LocationRepo", "no location fix: ${e.reason.message}")
+            throw e
         } catch (e: Exception) {
             e.printStackTrace()
             emptyList()
@@ -369,6 +383,10 @@ class LocationRepo(
         geohashPreferences.getLocationServicesEnabled()
     }
 
+    override suspend fun getLastFixInfo(): LocationFixInfo? = withContext(coroutinesContextFacade.io) {
+        locationService.lastFixInfo()
+    }
+
     override suspend fun getPermissionState(): PermissionState = withContext(coroutinesContextFacade.io) {
         if (locationService.hasLocationPermission()) {
             PermissionState.AUTHORIZED
@@ -457,5 +475,12 @@ class LocationRepo(
         bookmarkPrefs.clearAllBookmarks()
         geohashPreferences.saveLocationServicesEnabled(false)
         participantTracker.setCurrentGeohash(null)
+
+        /*
+         * The service keeps its own cache, in memory and on disk, so clearing repository state left
+         * the user's last coordinates recoverable after an operation that says it deletes
+         * everything. Desktop persists them; other platforms default this to a no-op.
+         */
+        locationService.clearCachedLocation()
     }
 }

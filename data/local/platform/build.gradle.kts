@@ -86,6 +86,7 @@ kotlin {
             dependencies {
                 implementation(libs.kotlin.test)
                 implementation(libs.kotlin.test.junit)
+                implementation(libs.kotlinx.coroutines.test)
                 // The secure-storage tests stub SecretStore directly.
                 implementation(libs.credential.storage.jvm)
             }

@@ -44,12 +44,16 @@ class ObserveHasNotes(
         return when (selectedChannel) {
             is Channel.Location -> locationRepository.hasNotes(selectedChannel.geohash)
             is Channel.Mesh -> {
-                // for mesh channel, check if user has physical location
-                // and if that location has notes
-                val availableChannels = locationRepository.getAvailableGeohashChannels()
-                availableChannels.firstOrNull()?.let { channel ->
-                    locationRepository.hasNotes(channel.geohash)
-                } ?: false
+                /*
+                 * Deliberately does not take a location fix.
+                 *
+                 * This asked for the nearest geohash channel and then called hasNotes on it, but
+                 * hasNotes is hardcoded false until notes storage exists, so the answer was always
+                 * false. The collector is installed by MainViewModel, so every cold launch took a
+                 * location fix purely to discard the result. Restore the fix when hasNotes does
+                 * something.
+                 */
+                false
             }
 
             is Channel.MeshDM,

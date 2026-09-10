@@ -200,6 +200,28 @@ fun LocationChannelContent(
                 val nearbyChannels = state.availableChannels.filter {
                     it.level != GeohashChannelLevel.BUILDING
                 }
+                /*
+                 * Say how good the fix is, when it is not good.
+                 *
+                 * These channels are computed down to BLOCK precision from whatever coordinate the
+                 * platform hands over. An IP-derived fix is city-level at best, and a stored one
+                 * can predate a journey, so without this a previous city presents as the user's
+                 * present neighbourhood with nothing on screen to question it.
+                 */
+                if (nearbyChannels.isNotEmpty() && (state.locationStale || state.locationApproximate)) {
+                    item(key = "fix_quality") {
+                        Text(
+                            text = when {
+                                state.locationStale -> "last known location, may be out of date"
+                                else -> "approximate location, from your network"
+                            },
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 2.dp),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                }
                 items(nearbyChannels, key = { "nearby-${it.geohash}" }) { channel ->
                     val participantCount = state.participantCounts[channel.geohash] ?: 0
                     NearbyChannelRow(
@@ -214,17 +236,42 @@ fun LocationChannelContent(
                     )
                 }
                 if (nearbyChannels.isEmpty() && permissionState == PermissionState.AUTHORIZED) {
-                    item(key = "finding_nearby") {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp))
-                            Text(
-                                text = stringResource(Res.string.finding_nearby_channels),
-                                fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
+                    val unavailable = state.locationUnavailableReason
+                    if (unavailable != null) {
+                        // A finished answer, so no spinner. Desktop reports permission as granted
+                        // whether or not it has any location source at all, so "authorized with an
+                        // empty list" cannot be read as "still looking".
+                        item(key = "location_unavailable") {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = unavailable,
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                // Points at the geohash field and map picker further down the
+                                // sheet. Without this the message is a dead end: it says there is
+                                // no fix but not that the user can simply supply one.
+                                Text(
+                                    text = "enter a geohash below or pick a spot on the globe",
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
+                    } else {
+                        item(key = "finding_nearby") {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                                Text(
+                                    text = stringResource(Res.string.finding_nearby_channels),
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
                         }
                     }
                 }

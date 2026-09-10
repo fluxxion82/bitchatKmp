@@ -1,98 +1,217 @@
 package com.bitchat.local.service
 
 import com.bitchat.domain.location.model.GeoPoint
+import com.bitchat.domain.location.model.LocationFixInfo
+import com.bitchat.domain.location.model.LocationUnavailableException
 import com.bitchat.local.bridge.NativeLocationBridge
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.withContext
-import java.net.HttpURLConnection
-import java.net.URL
+import com.russhwolf.settings.Settings
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicLong
 
-class JvmLocationService : LocationService {
-    private val defaultLocation = GeoPoint(lat = 37.7749, lon = -122.4194)
+/**
+ * Desktop location: the operating system where there is one, otherwise a coarse guess from the
+ * public IP address, otherwise the last fix we managed to get.
+ *
+ * An empty channel list is a dead end for the user -- there is nothing to join and nothing to do
+ * about it -- so an approximate answer they can correct by hand beats no answer. What this must not
+ * do is invent one: the reading always comes from a real lookup or a real earlier lookup, and when
+ * there is none the caller is told so rather than handed a hardcoded city.
+ */
+class JvmLocationService(
+    settingsFactory: Settings.Factory,
+    private val ipLookup: suspend () -> GeoPoint? = { IpGeolocation.lookup() },
+) : LocationService {
+
+    private val settings = settingsFactory.create(PREFS_NAME)
+    private val lookupLock = Mutex()
+
     private val nativeEnabled = System.getProperty("location.native")?.lowercase() == "macos"
     private val nativeAvailable = if (nativeEnabled) {
         println("JvmLocationService: native mode enabled, initializing...")
         NativeLocationBridge.init()
     } else {
-        println("JvmLocationService: native mode disabled, using IP fallback")
+        println("JvmLocationService: no native location source, using IP geolocation")
         false
     }
+
+    /**
+     * Seam for the Tor work. An IP lookup has to bypass the proxy to mean anything (see
+     * [IpGeolocation]), so once Tor is enforced this is the switch that turns it off rather than
+     * letting it punch a hole in the user's anonymity.
+     */
+    private val ipLookupEnabled = System.getProperty("location.iplookup")?.lowercase() != "false"
+
+    @Volatile
+    private var cachedFix: GeoPoint? = null
+
+    @Volatile
+    private var observedAtMs: Long = 0
+
+    @Volatile
+    private var fixSource: LocationFixInfo.Source? = null
+
+    @Volatile
+    private var cachedAtMs: Long = 0
+
+    @Volatile
+    private var lastAttemptMs: Long = 0
+
+    /**
+     * Bumped whenever the cache is cleared. A lookup captures it before going to the network and
+     * discards its answer if it changed, so a request already in flight when the user wipes their
+     * data cannot write the coordinate back afterwards.
+     */
+    private val generation = AtomicLong()
 
     override suspend fun getCurrentLocation(): GeoPoint {
         if (nativeAvailable) {
             NativeLocationBridge.getCurrentLocation()?.let { (lat, lon) ->
-                println("JvmLocationService: got native location ($lat, $lon)")
-                return GeoPoint(lat, lon)
+                println("JvmLocationService: got native location")
+                val fix = GeoPoint(lat, lon)
+                remember(fix, LocationFixInfo.Source.DEVICE)
+                return fix
             }
-            println("JvmLocationService: native location failed, falling back to IP")
+            println("JvmLocationService: native location lookup failed")
         }
 
-        val ipLocation = getIpBasedLocation()
-        if (ipLocation != null) {
-            println("JvmLocationService: got IP-based location (${ipLocation.lat}, ${ipLocation.lon})")
-            return ipLocation
+        /*
+         * The channel sheet refreshes every five seconds and each refresh asks for a fix, so
+         * without this the app made twelve requests a minute to a third-party endpoint for a
+         * reading that changes by nothing. That is what the previous implementation did.
+         */
+        cachedFix?.let { fix ->
+            if (now() - cachedAtMs < FRESH_FOR_MS) return fix
         }
 
-        // Last resort: return default location
-        println("JvmLocationService: all methods failed, returning default")
-        return defaultLocation
+        if (ipLookupEnabled) {
+            lookupLock.withLock {
+                // Another caller may have refreshed it while this one waited for the lock.
+                cachedFix?.let { fix ->
+                    if (now() - cachedAtMs < FRESH_FOR_MS) return fix
+                }
+                // Offline, this would otherwise retry three providers every five seconds.
+                if (now() - lastAttemptMs >= RETRY_AFTER_MS) {
+                    lastAttemptMs = now()
+                    val startedAt = generation.get()
+                    ipLookup()?.let { fix ->
+                        if (generation.get() != startedAt) {
+                            println("JvmLocationService: discarding fix, cache cleared while looking up")
+                            return@withLock
+                        }
+                        remember(fix, LocationFixInfo.Source.IP_ADDRESS)
+                        return fix
+                    }
+                }
+            }
+        }
+
+        /*
+         * Stale, but a real place the user was, which beats an empty list. Survives restarts so a
+         * cold launch with no network still has channels to show.
+         */
+        (cachedFix ?: readStoredFix())?.let { fix ->
+            println("JvmLocationService: no fresh fix, using last known")
+            return fix
+        }
+
+        throw LocationUnavailableException(
+            if (nativeAvailable || ipLookupEnabled) {
+                LocationUnavailableException.Reason.LOOKUP_FAILED
+            } else {
+                LocationUnavailableException.Reason.NO_SOURCE
+            }
+        )
     }
 
-    override fun locationUpdates(): Flow<GeoPoint> = flow {
+    override fun locationUpdates() = kotlinx.coroutines.flow.flow {
         emit(getCurrentLocation())
     }
 
+    /*
+     * Reported as granted because on this platform nothing is withholding permission, and offering
+     * "open settings" would send the user somewhere that cannot help. Whether a fix is actually
+     * obtainable is answered by getCurrentLocation() instead, which is the distinction the location
+     * sheet renders.
+     */
     override suspend fun hasLocationPermission(): Boolean {
-        return if (nativeAvailable) {
-            NativeLocationBridge.hasPermission()
-        } else {
-            // IP geolocation doesn't require permission
-            true
-        }
+        return if (nativeAvailable) NativeLocationBridge.hasPermission() else true
     }
 
     override suspend fun requestLocationPermission() {
         if (nativeAvailable) {
             NativeLocationBridge.requestPermission()
         }
-        // IP fallback doesn't need permission
+    }
+
+    override suspend fun lastFixInfo(): LocationFixInfo? {
+        if (cachedFix == null) readStoredFix()
+        val source = fixSource ?: return null
+        return LocationFixInfo(source, ageMillis = (now() - observedAtMs).coerceAtLeast(0))
     }
 
     /**
-     * Get approximate location from IP address using ip-api.com.
-     * Returns city-level accuracy (typically within a few km).
+     * Forgets the fix in memory and on disk.
+     *
+     * [generation] is bumped first so a lookup already in flight cannot call [remember] afterwards
+     * and quietly recreate the record that was just deleted.
      */
-    private suspend fun getIpBasedLocation(): GeoPoint? = withContext(Dispatchers.IO) {
-        try {
-            val url = URL("http://ip-api.com/json/?fields=lat,lon,status")
-            val connection = url.openConnection() as HttpURLConnection
-            connection.connectTimeout = 5000
-            connection.readTimeout = 5000
-            connection.requestMethod = "GET"
-
-            if (connection.responseCode == 200) {
-                val response = connection.inputStream.bufferedReader().readText()
-                // Simple JSON parsing (avoid adding dependencies)
-                if (response.contains("\"status\":\"success\"")) {
-                    val lat = extractJsonDouble(response, "lat")
-                    val lon = extractJsonDouble(response, "lon")
-                    if (lat != null && lon != null) {
-                        return@withContext GeoPoint(lat, lon)
-                    }
-                }
-            }
-            null
-        } catch (e: Exception) {
-            println("JvmLocationService: IP geolocation failed: ${e.message}")
-            null
-        }
+    override suspend fun clearCachedLocation() {
+        // Deliberately does not take lookupLock: a lookup holds it across the network call, so
+        // waiting would block clear-all-data for as long as three providers take to time out.
+        generation.incrementAndGet()
+        cachedFix = null
+        fixSource = null
+        observedAtMs = 0
+        cachedAtMs = 0
+        lastAttemptMs = 0
+        settings.remove(KEY_LAT)
+        settings.remove(KEY_LON)
+        settings.remove(KEY_OBSERVED_AT)
+        settings.remove(KEY_SOURCE)
+        println("JvmLocationService: cached location cleared")
     }
 
-    private fun extractJsonDouble(json: String, key: String): Double? {
-        // Match "key":number (handles both "lat":37.7 and "lat": 37.7)
-        val regex = """"$key"\s*:\s*(-?\d+\.?\d*)""".toRegex()
-        return regex.find(json)?.groupValues?.get(1)?.toDoubleOrNull()
+    private fun remember(fix: GeoPoint, source: LocationFixInfo.Source, atMs: Long = now()) {
+        cachedFix = fix
+        fixSource = source
+        observedAtMs = atMs
+        cachedAtMs = atMs
+        settings.putDouble(KEY_LAT, fix.lat)
+        settings.putDouble(KEY_LON, fix.lon)
+        settings.putLong(KEY_OBSERVED_AT, atMs)
+        settings.putString(KEY_SOURCE, source.name)
+    }
+
+    private fun readStoredFix(): GeoPoint? {
+        val lat = settings.getDoubleOrNull(KEY_LAT) ?: return null
+        val lon = settings.getDoubleOrNull(KEY_LON) ?: return null
+        val source = settings.getStringOrNull(KEY_SOURCE)
+            ?.let { name -> LocationFixInfo.Source.entries.firstOrNull { it.name == name } }
+            ?: LocationFixInfo.Source.IP_ADDRESS
+        /*
+         * cachedAtMs is deliberately NOT set here. It gates the 15-minute freshness window, and a
+         * fix restored from disk must not count as fresh -- otherwise a restart inside the window
+         * would serve a coordinate from a previous session without ever asking again.
+         */
+        fixSource = source
+        observedAtMs = settings.getLongOrNull(KEY_OBSERVED_AT) ?: 0L
+        return GeoPoint(lat, lon).also { cachedFix = it }
+    }
+
+    private fun now() = System.currentTimeMillis()
+
+    private companion object {
+        const val PREFS_NAME = "location_prefs"
+        const val KEY_LAT = "last_fix_lat"
+        const val KEY_LON = "last_fix_lon"
+        const val KEY_OBSERVED_AT = "last_fix_observed_at"
+        const val KEY_SOURCE = "last_fix_source"
+
+        /** An IP-derived fix is city-level, so re-asking sooner than this cannot tell us anything. */
+        const val FRESH_FOR_MS = 15 * 60 * 1000L
+
+        /** Backs off after a failed lookup so an offline machine is not retrying constantly. */
+        const val RETRY_AFTER_MS = 60 * 1000L
     }
 }
