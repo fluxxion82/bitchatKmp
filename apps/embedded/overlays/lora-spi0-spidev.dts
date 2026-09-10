@@ -1,22 +1,45 @@
 /dts-v1/;
 /plugin/;
 
-/* Expose the header SPI (controller 5010000, kernel "spi0", header pins 19/21/23/24 =
- * PC2/PC0/PC1/PC3) as a spidev node so the RFM95W on those pins can be reached.
+/* Make the header SPI usable by the RFM95W on an Orange Pi Zero 3.
  *
- * The base DTB declares a jedec,spi-nor "flash@0" on this chip select, so the NOR driver
- * claims it and no /dev/spidev0.x is ever created. The LoRa daemons were pointed at
- * /dev/spidev1.1 instead, which is the OTHER controller (5011000, the PH-bank pins the
- * touchscreen used) -- a bus the radio is not wired to.
+ * Two separate faults in the stock setup:
+ *
+ * 1. The board DTB's spi0 pin group omits PC1:
+ *        spi0-pins { pins = "PC0", "PC2", "PC4"; function = "spi0"; };
+ *    PC1 is header pin 23, the SPI clock. The live pinmux confirmed it:
+ *        pin 65 (PC1): UNCLAIMED
+ *    With no clock muxed to the controller nothing shifts, so MISO idles high and every
+ *    register read returns 0xFF -- indistinguishable from a dead or unwired module.
+ *
+ * 2. The same node declares a jedec,spi-nor flash@0 on the chip select, so the NOR driver
+ *    claims it and no /dev/spidev0.x is ever created. The LoRa daemons were pointed at
+ *    /dev/spidev1.1 instead, which is the other controller (5011000, the PH pins the
+ *    resistive touchscreen used) -- a bus the radio is not wired to.
+ *
+ * Header pins: 19 MOSI (PC2), 21 MISO (PC0), 23 SCK (PC1), 24 CS (PC3).
  */
 / {
     compatible = "allwinner,sun50i-h618";
 
     fragment@0 {
+        target-path = "/soc/pinctrl@300b000";
+        __overlay__ {
+            lora_spi0_pins: lora-spi0-pins {
+                pins = "PC0", "PC1", "PC2", "PC3", "PC4";
+                function = "spi0";
+            };
+        };
+    };
+
+    fragment@1 {
         target-path = "/soc/spi@5010000";
         __overlay__ {
             #address-cells = <1>;
             #size-cells = <0>;
+            pinctrl-names = "default";
+            pinctrl-0 = <&lora_spi0_pins>;
+            status = "okay";
 
             flash@0 {
                 status = "disabled";

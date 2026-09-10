@@ -51,6 +51,8 @@ kotlin {
                 implementation(project(":data:mediautils"))
 
                 implementation(libs.kotlinx.coroutines.core)
+                // Parsing the bundled Natural Earth geojson for the globe picker.
+                implementation(libs.kotlinx.serialization)
 
                 val composeBom = project.dependencies.platform(libs.compose.bom)
                 implementation(composeBom)
