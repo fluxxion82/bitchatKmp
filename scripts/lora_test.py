@@ -585,8 +585,14 @@ def main():
     )
     parser.add_argument(
         "--spi-device",
-        default="/dev/spidev1.1",
-        help="SPI device path (default: /dev/spidev1.1 for Orange Pi Zero 3)"
+        default="/dev/spidev0.0",
+        # The radio is on the header SPI: pins 19/21/23/24 = PC2/PC0/PC1/PC3, which the kernel
+        # calls spi0 (controller 5010000). Confirmed from the live pinmux:
+        #   pin 67 (PC3): device 5010000.spi function spi0 group PC3
+        # spidev1.1 is the OTHER controller (5011000, the PH-bank pins the touchscreen used).
+        # This default was 1.1, so the test kept passing transfers on a bus the radio is not
+        # wired to and reporting "module not responding".
+        help="SPI device path (default: /dev/spidev0.0, the header SPI the RFM95W is wired to)"
     )
     parser.add_argument(
         "--reset-pin",

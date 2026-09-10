@@ -2,6 +2,27 @@
 
 Scripts for testing RFM95W LoRa module on Orange Pi Zero 3.
 
+## Which SPI bus the radio is on
+
+The RFM95W is wired to header pins 19/21/23/24 = PC2/PC0/PC1/PC3. The kernel calls that
+controller **spi0** (`5010000.spi`), confirmed from the live pinmux:
+
+```
+pin 67 (PC3): device 5010000.spi function spi0 group PC3
+```
+
+so the radio is reached through **`/dev/spidev0.0`**.
+
+`/dev/spidev1.x` is a different controller (`5011000.spi`, the PH-bank pins) that the resistive
+touchscreen used. Pointing the daemons or this script at `spidev1.1` makes every transfer succeed
+on a bus the radio is not wired to, and reports `Chip version: 0x00` -- which reads like dead
+hardware and is not.
+
+Two things are needed for `/dev/spidev0.0` to exist at all: the base DTB declares a
+`jedec,spi-nor` `flash@0` on that chip select, so the NOR driver claims it and no spidev node is
+created. `apps/embedded/overlays/lora-spi0-spidev.dts` disables that node and adds a spidev one;
+install it as a user overlay and set `user_overlays=lora-spi0-spidev` in `/boot/armbianEnv.txt`.
+
 ## Quick Start
 
 ### 1. Copy scripts to Orange Pi
