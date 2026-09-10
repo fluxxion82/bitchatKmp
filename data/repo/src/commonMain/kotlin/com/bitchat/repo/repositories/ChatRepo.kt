@@ -1906,7 +1906,18 @@ class ChatRepo(
                     .filter { it.running && it.bootstrapPercent >= 100 && it.state == com.bitchat.domain.tor.model.TorState.RUNNING }
                     .debounce(1000) // ADDED: Debounce for 1 second as additional defense layer
                     .collect {
-                        println("🚀 ChatRepo: Tor is now ready, establishing relay connections for active channels")
+                        println("🚀 ChatRepo: Tor is now ready, establishing relay connections")
+                        /*
+                         * Defaults first, and explicitly.
+                         *
+                         * establishConnectionsForActiveChannels returns immediately when no
+                         * geohash channel is active, so on a cold start with Tor enabled this
+                         * reconnected nothing at all: the subscriptions had already given up
+                         * while Tor was still bootstrapping, and the event that was supposed to
+                         * revive them skipped the default relays entirely. The app then sat with
+                         * Tor running and no relay connected.
+                         */
+                        nostrRelay.ensureDefaultRelaysConnected()
                         establishConnectionsForActiveChannels()
                     }
             }
