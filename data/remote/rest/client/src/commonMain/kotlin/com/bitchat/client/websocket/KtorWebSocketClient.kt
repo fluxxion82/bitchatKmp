@@ -28,17 +28,33 @@ internal class KtorWebSocketClient(
         var session: WebSocketSession? = null
     )
 
+    /**
+     * [resetBudget] distinguishes a caller asking for a connection from the internal retry loop
+     * asking again.
+     *
+     * The budget resets only on success, so once ten attempts were spent the connection stayed
+     * dead for the life of the process: a later call would try once and then decline to reschedule.
+     * That is survivable when failures are transient, and not survivable when the cause was a
+     * policy the user has since changed -- switching Tor off produced no event that could revive
+     * the relay. An explicit call is a fresh start; the retry loop passes false so its ceiling
+     * still means something.
+     */
     fun connect(
         url: String,
         listener: WebSocketListener,
         maxReconnectAttempts: Int = 10,
         initialBackoffMs: Long = 1000L,
         maxBackoffMs: Long = 60000L,
-        backoffMultiplier: Double = 2.0
+        backoffMultiplier: Double = 2.0,
+        resetBudget: Boolean = true,
     ) {
         println("KtorWebSocketClient: connect() marker v2025-12-31b for $url")
         val connection = activeConnections.getOrPut(url) {
             WebSocketConnection(url)
+        }
+        if (resetBudget && connection.reconnectAttempts > 0) {
+            println("KtorWebSocketClient: resetting retry budget for $url")
+            connection.reconnectAttempts = 0
         }
 
         // ADDED: Early return if already successfully connected
@@ -177,7 +193,9 @@ internal class KtorWebSocketClient(
                     maxReconnectAttempts = maxReconnectAttempts,
                     initialBackoffMs = initialBackoffMs,
                     maxBackoffMs = maxBackoffMs,
-                    backoffMultiplier = backoffMultiplier
+                    backoffMultiplier = backoffMultiplier,
+                    // The retry loop must not refill its own budget.
+                    resetBudget = false,
                 )
             }
         }
@@ -240,11 +258,16 @@ internal class KtorWebSocketClient(
         connection.reconnectJob?.cancel()
 
         try {
-            httpClient.webSocket(url) {
-                close(CloseReason(1000, "Normal closure"))
-            }
+            /*
+             * Close the session we hold. This used to dial a brand new WebSocket purely so it
+             * could close it -- which achieved nothing, and under Tor enforcement is itself an
+             * outbound connection attempt made while disconnecting.
+             */
+            connection.session?.close(CloseReason(CloseReason.Codes.NORMAL, "Normal closure"))
         } catch (e: Exception) {
-            // Already closed or connection failed
+            // Already closed, or the session never opened.
+        } finally {
+            connection.session = null
         }
     }
 

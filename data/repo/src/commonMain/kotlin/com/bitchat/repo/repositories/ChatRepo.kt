@@ -64,6 +64,8 @@ import com.bitchat.lora.LoRaProtocolManager
 import com.bitchat.lora.LoRaProtocolType
 import com.bitchat.lora.radio.LoRaConfig
 import com.bitchat.repo.tor.awaitTorReady
+import com.bitchat.domain.tor.RequestedTorIntent
+import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.tor.TorManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.FlowPreview
@@ -73,6 +75,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
@@ -112,6 +115,7 @@ class ChatRepo(
     private val userEventBus: com.bitchat.domain.user.eventbus.UserEventBus,
     private val connectEventBus: com.bitchat.domain.connectivity.eventbus.ConnectionEventBus,
     private val torManager: TorManager? = null,
+    private val requestedTorIntent: RequestedTorIntent? = null,
     private val lora: LoRaProtocol? = null,
 ) : ChatRepository, BluetoothMeshDelegate {
     private val outbox = mutableMapOf<String, MutableList<Triple<String, String, String>>>()
@@ -195,6 +199,7 @@ class ChatRepo(
         }
 
         observeTorReadyAndEstablishConnections()
+        observeTorTurnedOffAndRestoreRelays()
         subscribeToDirectMessages()
 
         // Listen for incoming LoRa packets
@@ -1882,6 +1887,32 @@ class ChatRepo(
                         establishConnectionsForActiveChannels()
                     }
             }
+        }
+    }
+
+    /**
+     * Restores relay connectivity when the user switches Tor off.
+     *
+     * The existing recovery waits for Tor to reach RUNNING, which is useless as an escape: on a
+     * host with no Arti library that event never arrives, so relays killed by enforcement stayed
+     * dead and switching the policy off changed nothing until the app was restarted. Turning Tor
+     * off is the user's way out, so it has to be the thing that revives them.
+     *
+     * Default relays are reconnected explicitly, because [establishConnectionsForActiveChannels]
+     * returns immediately when no geohash channel is active and would leave them down.
+     */
+    private fun observeTorTurnedOffAndRestoreRelays() {
+        val intent = requestedTorIntent ?: return
+        coroutineScopeFacade.nostrScope.launch {
+            intent.updates
+                // No distinctUntilChanged: a StateFlow already conflates equal values.
+                .drop(1)
+                .filter { it == TorMode.OFF }
+                .collect {
+                    println("🚀 ChatRepo: Tor switched off, restoring relay connections")
+                    nostrRelay.ensureDefaultRelaysConnected()
+                    establishConnectionsForActiveChannels()
+                }
         }
     }
 

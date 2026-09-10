@@ -63,6 +63,7 @@ val commonRepoModule = module {
             userEventBus = get(),
             connectEventBus = get(),
             torManager = getOrNull(),
+            requestedTorIntent = getOrNull(),
             lora = getOrNull(),
         )
     }
