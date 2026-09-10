@@ -219,10 +219,20 @@ actual class TorManager internal constructor(
             println("$TAG: Stopping Tor...")
             _statusFlow.update { it.copy(state = TorState.STOPPING) }
 
-            callNative { native.stop() }.onFailure { e ->
-                System.err.println("$TAG: Failed to stop: ${e.message}")
-                stopFailure = "Failed to stop Tor: ${e.message}"
-            }
+            callNative { native.stop() }
+                .onSuccess { code ->
+                    // The return value used to be discarded, so a native stop that failed -- a
+                    // listener that would not release its port, for instance -- was still
+                    // published as a clean stop, and the next start raced a socket still in use.
+                    if (code != NATIVE_OK) {
+                        System.err.println("$TAG: native stop returned $code")
+                        stopFailure = "Tor did not stop cleanly (code $code)"
+                    }
+                }
+                .onFailure { e ->
+                    System.err.println("$TAG: Failed to stop: ${e.message}")
+                    stopFailure = "Failed to stop Tor: ${e.message}"
+                }
         }
 
         _statusFlow.update {

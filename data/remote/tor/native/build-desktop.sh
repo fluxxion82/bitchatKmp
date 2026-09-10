@@ -65,11 +65,11 @@ Usage: build-desktop.sh [--clean] [--allow-clone] [--install]
   --install       Copy the built library into native/libs/desktop.
 
                   WITHOUT THIS the library is left in the build directory and the
-                  application will not load it. That is deliberate: the desktop build
-                  stages every .so from native/libs/desktop into the app, and this
-                  wrapper still sets panic = "abort" with no catch_unwind at its
-                  exports, so a panic anywhere in Arti takes the whole JVM down --
-                  Bluetooth, mesh and all. Do not install until that is addressed.
+                  application will not load it. The desktop build stages every .so from
+                  native/libs/desktop into the app, so installing makes it live on the
+                  next run. Panics now unwind and are caught at each JNI export, but
+                  the library has never been exercised against a real Tor network from
+                  this app -- install when you are ready to test that, not by habit.
 
 Environment:
   BITCHAT_ARTI_BUILD_ROOT   Build directory (default ~/.cache/bitchat-arti)
@@ -254,9 +254,11 @@ install_if_requested() {
   if [ "$INSTALL_LIB" != true ]; then
     echo ""
     print_info "NOT installed. The app will not load it from here."
-    print_info "This wrapper still sets panic = \"abort\" and does not catch unwinds at its JNI"
-    print_info "boundary, so a panic inside Arti would abort the JVM and take Bluetooth with it."
-    print_info "Once that is addressed, re-run with --install (or copy it to $LIBS_DIR)."
+    print_info "Panics unwind and are caught at every JNI export, so a panic inside Arti now"
+    print_info "returns an error rather than aborting the JVM. That narrows the blast radius; it"
+    print_info "does not make the JVM immortal -- allocation failure, stack overflow and an"
+    print_info "explicit abort still escape it."
+    print_info "Re-run with --install when you want it live (or copy it to $LIBS_DIR)."
     return
   fi
 
