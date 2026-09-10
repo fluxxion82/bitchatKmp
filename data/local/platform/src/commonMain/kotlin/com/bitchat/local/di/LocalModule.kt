@@ -12,6 +12,8 @@ import com.bitchat.local.prefs.ChannelPreferences
 import com.bitchat.local.prefs.GeohashPreferences
 import com.bitchat.local.prefs.LoRaPreferences
 import com.bitchat.local.prefs.SecureIdentityPreferences
+import com.bitchat.domain.tor.MutableRequestedTorIntent
+import com.bitchat.domain.tor.RequestedTorIntent
 import com.bitchat.local.prefs.TorPreferences
 import com.bitchat.local.prefs.UserPreferences
 import com.bitchat.local.prefs.impl.LocalAppPreferences
@@ -24,6 +26,7 @@ import com.bitchat.local.prefs.impl.LocalLoRaPreferences
 import com.bitchat.local.prefs.impl.LocalNostrPreferences
 import com.bitchat.local.prefs.impl.LocalSecureIdentityPreferences
 import com.bitchat.local.prefs.impl.LocalTorPreferences
+import com.bitchat.local.tor.LocalRequestedTorIntent
 import com.bitchat.local.prefs.impl.LocalUserPreferences
 import com.bitchat.local.repository.LocalConnectivityRepository
 import com.bitchat.local.transport.SecureTransportIdentityProvider
@@ -55,6 +58,15 @@ val commonLocal = module {
     single<ChannelPreferences> { LocalChannelPreferences(settingsFactory = get()) }
     single<BookmarkPreferences> { LocalBookmarkPreferences(settingsFactory = get()) }
     single<TorPreferences> { LocalTorPreferences(settingsFactory = get()) }
+
+    /*
+     * Eager: routing has to be able to read the requested intent synchronously, and application
+     * initializers run concurrently, so a value restored lazily would be read before it existed.
+     */
+    single<MutableRequestedTorIntent>(createdAtStart = true) {
+        LocalRequestedTorIntent(torPreferences = get())
+    }
+    single<RequestedTorIntent> { get<MutableRequestedTorIntent>() }
     single<BackgroundPreferences> { LocalBackgroundPreferences(settingsFactory = get()) }
     single<BlockListPreferences> { LocalBlockListPreferences(encryptedPreferenceFactory = get()) }
     single<LoRaPreferences> { LocalLoRaPreferences(settingsFactory = get()) }
