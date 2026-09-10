@@ -9,6 +9,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import com.bitchat.bluetooth.di.bluetoothModule
 import com.bitchat.client.di.clientModule
+import com.bitchat.desktop.net.desktopNetworkModule
 import com.bitchat.design.BitchatTheme
 import com.bitchat.desktop.ble.NativeBleLoader
 import com.bitchat.desktop.di.buildConfigModule
@@ -81,6 +82,8 @@ class App : KoinComponent {
                 commonLocal,
                 localModule,
                 clientModule,
+                // After clientModule: its clients resolve this engine optionally.
+                desktopNetworkModule,
                 commonRepoModule,
                 repoModule,
                 viewModelModule,
