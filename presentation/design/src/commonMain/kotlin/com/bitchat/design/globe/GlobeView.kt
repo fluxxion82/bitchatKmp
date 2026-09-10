@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.util.VelocityTracker
@@ -250,6 +251,34 @@ fun GlobeView(
             .onSizeChanged { size: IntSize ->
                 val minDim = min(size.width, size.height).toFloat()
                 state.setViewport(minDim * 0.44f, minDim)
+            }
+            /*
+             * Scroll-wheel zoom, which on desktop is the only way back out.
+             *
+             * The gesture handler below starts at awaitFirstDown, and a wheel produces no down, so
+             * it never sees a scroll at all. That left pinch as the only continuous zoom -- which a
+             * mouse cannot perform -- and the "−" button beside "precision N" reads as a precision
+             * control rather than a way to zoom out. Zooming in was therefore a one-way trip.
+             *
+             * Kept separate from the drag handler so the two cannot interfere: this consumes only
+             * scroll events, and a drag still needs a pointer down.
+             */
+            .pointerInput(state) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.type != PointerEventType.Scroll) continue
+                        val scrolled = event.changes.fold(0f) { acc, c -> acc + c.scrollDelta.y }
+                        if (scrolled == 0f) continue
+
+                        state.cancelAnimations()
+                        // Negative delta is a wheel push forward, which conventionally zooms in.
+                        // Exponential so each notch is a constant ratio rather than a constant
+                        // amount, which is what "zoom" means over a 1..120000 range.
+                        state.zoomBy(GlobeMath.zoomFactorForScroll(scrolled))
+                        event.changes.forEach { it.consume() }
+                    }
+                }
             }
             .pointerInput(state) {
                 // Upstream compared SystemClock.uptimeMillis() values. There is no multiplatform

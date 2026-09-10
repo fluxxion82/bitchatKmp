@@ -145,7 +145,7 @@ fun GlobePicker(
             tonalElevation = 3.dp
         ) {
             Text(
-                text = "Drag to rotate, pinch to zoom, tap to drop a pin",
+                text = "Drag to rotate, scroll or pinch to zoom, tap to drop a pin",
                 fontSize = 12.sp,
                 textAlign = TextAlign.Center,
                 color = colorScheme.onSurface,

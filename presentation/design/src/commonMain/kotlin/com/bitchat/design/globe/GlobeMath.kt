@@ -125,6 +125,16 @@ object GlobeMath {
         return (targetRadius / baseRadiusPx).toFloat().coerceIn(MIN_ZOOM, MAX_ZOOM)
     }
 
+    /**
+     * Zoom multiplier for one scroll gesture.
+     *
+     * Exponential so each notch is a constant *ratio*: over a 1..120000 range a constant addend
+     * would be imperceptible when zoomed out and violent when zoomed in. Negative deltas are a
+     * wheel pushed forward, which conventionally zooms in, so the sign is inverted here.
+     */
+    fun zoomFactorForScroll(scrollDelta: Float, sensitivity: Float = 0.18f): Float =
+        exp(-scrollDelta * sensitivity)
+
     const val MIN_ZOOM = 1f
     const val MAX_ZOOM = 120000f
     const val MAX_PRECISION = 12
