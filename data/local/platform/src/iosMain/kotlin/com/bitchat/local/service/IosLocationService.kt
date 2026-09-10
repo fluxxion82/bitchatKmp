@@ -1,6 +1,7 @@
 package com.bitchat.local.service
 
 import com.bitchat.domain.location.model.GeoPoint
+import com.bitchat.domain.location.model.LocationUnavailableException
 import kotlinx.cinterop.CValue
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.useContents
@@ -66,7 +67,9 @@ class IosLocationService : LocationService {
                                 resumed = true
                                 manager.stopUpdatingLocation()
                                 cont.resumeWithException(
-                                    RuntimeException("Location permission ${authStatusString(status)}")
+                                    LocationUnavailableException(
+                                        LocationUnavailableException.Reason.PERMISSION_DENIED
+                                    )
                                 )
                             }
                         }
@@ -106,7 +109,14 @@ class IosLocationService : LocationService {
                     resumed = true
                     manager.stopUpdatingLocation()
 
-                    cont.resumeWithException(RuntimeException(didFailWithError.localizedDescription))
+                    // The CoreLocation message is kept as the cause so it stays in the log; the
+                    // reason is what reaches the user.
+                    cont.resumeWithException(
+                        LocationUnavailableException(
+                            LocationUnavailableException.Reason.LOOKUP_FAILED,
+                            RuntimeException(didFailWithError.localizedDescription)
+                        )
+                    )
                 }
             }
 

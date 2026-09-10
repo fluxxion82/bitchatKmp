@@ -11,6 +11,7 @@ import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.bitchat.domain.location.model.GeoPoint
+import com.bitchat.domain.location.model.LocationUnavailableException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -41,7 +42,18 @@ class AndroidLocationService(
 
         Log.d(TAG, "No cached location available, requesting fresh location asynchronously")
         requestFreshLocationAsync()
-        throw IllegalStateException("No location fix yet")
+
+        // Typed so the layers above can tell an expected absence from a fault. An untyped throw
+        // here reached LocationRepo's generic catch, which answered with an empty list, and the
+        // channel sheet cannot distinguish that from "still looking" -- so it spun for ever and
+        // logged a stack trace on every five-second poll.
+        throw LocationUnavailableException(
+            if (hasLocationPermission()) {
+                LocationUnavailableException.Reason.LOOKUP_FAILED
+            } else {
+                LocationUnavailableException.Reason.PERMISSION_DENIED
+            }
+        )
     }
 
     @SuppressLint("MissingPermission")
