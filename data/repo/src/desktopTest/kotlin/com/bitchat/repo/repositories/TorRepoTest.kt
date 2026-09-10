@@ -8,7 +8,7 @@ import com.bitchat.domain.tor.model.TorEvent
 import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.domain.tor.model.TorState
 import com.bitchat.domain.tor.model.TorStatus
-import com.bitchat.local.prefs.TorPreferences
+import com.bitchat.domain.tor.MutableRequestedTorIntent
 import com.bitchat.tor.TorManager
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -17,6 +17,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -52,11 +53,11 @@ class TorRepoTest {
 
     private fun repo(
         manager: TorManager,
-        preferences: TorPreferences = mockk(relaxed = true),
+        intent: MutableRequestedTorIntent = InMemoryIntent(),
         engineSupportsTorProxy: Boolean = true,
     ) = TorRepo(
         torManager = manager,
-        torPreferences = preferences,
+        requestedIntent = intent,
         coroutinesContextFacade = contextFacade,
         coroutineScopeFacade = scopeFacade,
         torEventBus = eventBus,
@@ -80,18 +81,19 @@ class TorRepoTest {
      * a relaxed mock, "the preference still says ON" cannot be told apart from "nothing was ever
      * stored".
      */
-    private class InMemoryTorPreferences(initial: TorMode = TorMode.OFF) : TorPreferences {
-        var stored: TorMode = initial
-            private set
+    private class InMemoryIntent(initial: TorMode = TorMode.OFF) : MutableRequestedTorIntent {
+        private val flow = MutableStateFlow(initial)
         var writes: Int = 0
             private set
 
-        override fun setTorMode(mode: TorMode) {
-            stored = mode
+        val stored: TorMode get() = flow.value
+        override val current: TorMode get() = flow.value
+        override val updates: StateFlow<TorMode> get() = flow
+
+        override fun set(mode: TorMode) {
+            flow.value = mode
             writes++
         }
-
-        override fun getTorMode(): TorMode = stored
     }
 
     private fun manager(
@@ -146,20 +148,20 @@ class TorRepoTest {
 
     @Test
     fun `a failed start reports OFF without erasing the stored ON`() = runTest {
-        val preferences = InMemoryTorPreferences(TorMode.ON)
+        val intent = InMemoryIntent(TorMode.ON)
         val torManager = manager(
             TorStatus(state = TorState.ERROR, errorMessage = "no native library"),
             available = false,
         )
         coEvery { torManager.start() } returns Unit
-        val torRepo = repo(torManager, preferences)
+        val torRepo = repo(torManager, intent)
 
         torRepo.enable()
 
         // Writing OFF here would mean that repairing the install, or just restarting after a
         // transient failure, leaves Tor silently disabled with nothing to explain it.
-        assertEquals(0, preferences.writes, "a failed start must not rewrite the user's intent")
-        assertEquals(TorMode.ON, preferences.stored)
+        assertEquals(0, intent.writes, "a failed start must not rewrite the user's intent")
+        assertEquals(TorMode.ON, intent.stored)
         assertEquals(TorMode.ON, torRepo.getStoredTorMode(), "the user's intent must survive")
         // ...but the switch still has to drop back: Tor is not on.
         assertEquals(TorMode.OFF, torRepo.getTorMode())
@@ -168,15 +170,15 @@ class TorRepoTest {
 
     @Test
     fun `the next launch retries the stored ON after a failed start`() = runTest {
-        val preferences = InMemoryTorPreferences(TorMode.ON)
+        val intent = InMemoryIntent(TorMode.ON)
         val broken = manager(TorStatus(state = TorState.ERROR), available = false)
         coEvery { broken.start() } returns Unit
-        repo(broken, preferences).enable()
+        repo(broken, intent).enable()
 
         // A new process, same preferences, a repaired installation. This is what TorAppInitializer
         // reads, and it has to still say ON.
         val healthy = healthyManager()
-        val afterRestart = repo(healthy, preferences)
+        val afterRestart = repo(healthy, intent)
 
         assertEquals(TorMode.ON, afterRestart.getStoredTorMode())
         afterRestart.enable()
@@ -185,30 +187,61 @@ class TorRepoTest {
     }
 
     @Test
-    fun `enable persists ON once tor actually starts`() = runTest {
-        val preferences = InMemoryTorPreferences(TorMode.OFF)
+    fun `a successful start does not write the intent`() = runTest {
+        /*
+         * enable() used to persist ON on success, which made intent a result rather than a
+         * request. The use case publishes it before the native call now; a start completing must
+         * never write it, or a bootstrap that outlives the user switching off would restore ON.
+         */
+        val intent = InMemoryIntent(TorMode.ON)
         val torManager = manager(TorStatus(state = TorState.STARTING))
         coEvery { torManager.start() } returns Unit
 
-        val torRepo = repo(torManager, preferences)
+        val torRepo = repo(torManager, intent)
         torRepo.enable()
 
-        assertEquals(TorMode.ON, preferences.stored, "a start that worked is worth remembering")
-        assertEquals(TorMode.ON, torRepo.getStoredTorMode())
+        assertEquals(0, intent.writes, "start completion must not write intent")
         assertEquals(TorMode.ON, torRepo.getTorMode())
     }
 
     @Test
+    fun `a start that finishes after the user switched off stops tor again`() = runTest {
+        /*
+         * The zombie. Removing the ON write alone fixes the preference but leaves Arti bootstrapped
+         * and RUNNING with the intent off - isProxyReady() true and relay lines claiming traffic
+         * goes through Tor. start() blocks for the length of a bootstrap, which is ample time.
+         */
+        val intent = InMemoryIntent(TorMode.ON)
+        val torManager = manager(TorStatus(state = TorState.STARTING))
+        coEvery { torManager.start() } answers { intent.set(TorMode.OFF) }
+
+        repo(torManager, intent).enable()
+
+        coVerify(exactly = 1) { torManager.stop() }
+    }
+
+    @Test
+    fun `a start that finishes while the user still wants tor is left running`() = runTest {
+        val intent = InMemoryIntent(TorMode.ON)
+        val torManager = manager(TorStatus(state = TorState.STARTING))
+        coEvery { torManager.start() } returns Unit
+
+        repo(torManager, intent).enable()
+
+        coVerify(exactly = 0) { torManager.stop() }
+    }
+
+    @Test
     fun `switching tor off clears the stored intent`() = runTest {
-        val preferences = InMemoryTorPreferences(TorMode.ON)
+        val intent = InMemoryIntent(TorMode.ON)
         val torManager = healthyManager()
 
-        val torRepo = repo(torManager, preferences)
+        val torRepo = repo(torManager, intent)
         torRepo.disable()
 
-        // The user said off, so the intent really does change here - unlike a failed start.
-        assertEquals(TorMode.OFF, preferences.stored)
-        assertEquals(TorMode.OFF, torRepo.getStoredTorMode())
+        // Intent is written by DisableTor before this runs, so that turning off takes effect at
+        // once rather than whenever a stop that may block finally returns.
+        assertEquals(0, intent.writes, "the native stop must not write intent either")
         coVerify(exactly = 1) { torManager.stop() }
     }
 
@@ -267,38 +300,39 @@ class TorRepoTest {
 
     @Test
     fun `a stored ON reads as OFF without being rewritten when the engine cannot proxy`() = runTest {
-        val preferences = InMemoryTorPreferences(TorMode.ON)
-        val torRepo = repo(healthyManager(), preferences, engineSupportsTorProxy = false)
+        val intent = InMemoryIntent(TorMode.ON)
+        val torRepo = repo(healthyManager(), intent, engineSupportsTorProxy = false)
 
         assertEquals(TorMode.OFF, torRepo.getTorMode(), "a switch shown as on would read as protection")
         // Still the user's intent, kept for the day this profile runs a build that can proxy.
         assertEquals(TorMode.ON, torRepo.getStoredTorMode())
-        assertEquals(0, preferences.writes)
+        assertEquals(0, intent.writes)
     }
 
     @Test
     fun `enable neither starts tor nor touches the preference when the engine cannot proxy`() = runTest {
-        val preferences = InMemoryTorPreferences(TorMode.ON)
+        val intent = InMemoryIntent(TorMode.ON)
         val torManager = healthyManager()
 
-        repo(torManager, preferences, engineSupportsTorProxy = false).enable()
+        repo(torManager, intent, engineSupportsTorProxy = false).enable()
 
         coVerify(exactly = 0) { torManager.start() }
         // Rewriting it would surprise the user the day they run a build that can proxy.
-        assertEquals(0, preferences.writes)
-        assertEquals(TorMode.ON, preferences.stored)
+        assertEquals(0, intent.writes)
+        assertEquals(TorMode.ON, intent.stored)
     }
 
     @Test
-    fun `enable still starts and persists on a jvm host whose engine proxies`() = runTest {
-        val preferences = InMemoryTorPreferences(TorMode.OFF)
+    fun `enable still starts on a jvm host whose engine proxies`() = runTest {
+        // Intent is already ON here because the use case publishes it before calling enable().
+        val intent = InMemoryIntent(TorMode.ON)
         val torManager = healthyManager()
 
-        val torRepo = repo(torManager, preferences, engineSupportsTorProxy = true)
+        val torRepo = repo(torManager, intent, engineSupportsTorProxy = true)
         torRepo.enable()
 
         coVerify(exactly = 1) { torManager.start() }
-        assertEquals(TorMode.ON, preferences.stored)
+        assertEquals(0, intent.writes, "starting must not write intent")
         assertEquals(TorAvailability.AVAILABLE, torRepo.torAvailability())
         assertEquals(TorMode.ON, torRepo.getTorMode())
         assertTrue(torRepo.isProxyReady())

@@ -10,7 +10,7 @@ import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.domain.tor.model.TorState
 import com.bitchat.domain.tor.model.TorStatus
 import com.bitchat.domain.tor.repository.TorRepository
-import com.bitchat.local.prefs.TorPreferences
+import com.bitchat.domain.tor.MutableRequestedTorIntent
 import com.bitchat.tor.TorManager
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -28,7 +28,7 @@ import kotlin.concurrent.Volatile
  */
 class TorRepo(
     private val torManager: TorManager,
-    private val torPreferences: TorPreferences,
+    private val requestedIntent: MutableRequestedTorIntent,
     private val coroutinesContextFacade: CoroutinesContextFacade,
     private val coroutineScopeFacade: CoroutineScopeFacade,
     private val torEventBus: TorEventBus,
@@ -41,7 +41,7 @@ class TorRepo(
      * True when this process tried to honour a stored ON and Tor did not come up.
      *
      * Stored intent and effective state are deliberately different things. The intent is the
-     * user's, lives in [torPreferences] and is only ever rewritten by the user: a failed start
+     * user's, lives in [requestedIntent] and is only ever rewritten by the user: a failed start
      * that overwrote it with OFF would mean that repairing the installation, or restarting after
      * a transient failure, left Tor silently disabled with nothing to explain why. The effective
      * state is what this process can actually deliver, and it is what the settings switch and the
@@ -95,9 +95,22 @@ class TorRepo(
                 torManager.statusFlow.value.state != TorState.ERROR
         if (started) {
             startFailed = false
-            // Written only now that Tor is actually up, so a persisted ON always means "this
-            // worked" and the next launch is right to start it again.
-            torPreferences.setTorMode(TorMode.ON)
+            /*
+             * The intent is deliberately NOT written here.
+             *
+             * start() blocks for as long as bootstrapping takes, and the user can switch Tor off
+             * while it does. Writing ON on completion overwrote that newer choice, leaving the
+             * preference on and the switch back at on after the user had turned it off.
+             *
+             * Instead the request is reconciled against what the user now wants. Without this,
+             * removing the write alone would leave Arti bootstrapped and RUNNING with the intent
+             * off - isProxyReady() true and relay lines claiming traffic went through Tor.
+             */
+            if (requestedIntent.current != TorMode.ON) {
+                println("TorRepo: Tor came up but the user has since switched it off - stopping")
+                torManager.stop()
+                torEventBus.update(TorEvent.ModeChanged)
+            }
         } else {
             // The stored intent is left exactly as it was: erasing it here would turn one failed
             // start - a missing library, a busy port - into Tor being off for good, silently.
@@ -110,9 +123,10 @@ class TorRepo(
     }
 
     override suspend fun disable() = withContext(coroutinesContextFacade.io) {
+        // Intent is written by the caller before this runs, for the same reason enable() no longer
+        // writes it: a slow stop completing after a newer switch-on must not undo it.
         torManager.stop()
         startFailed = false
-        torPreferences.setTorMode(TorMode.OFF)
     }
 
     override suspend fun getTorStatus(): TorStatus = withContext(coroutinesContextFacade.io) {
@@ -141,19 +155,19 @@ class TorRepo(
             // Tor was asked for and did not come up. The card explains why; the switch must not
             // claim otherwise.
             startFailed -> TorMode.OFF
-            else -> torPreferences.getTorMode()
+            else -> requestedIntent.current
         }
     }
 
     /** The stored intent, exactly as the user left it. [TorAppInitializer] starts from this. */
     override suspend fun getStoredTorMode(): TorMode = withContext(coroutinesContextFacade.io) {
-        torPreferences.getTorMode()
+        requestedIntent.current
     }
 
     override suspend fun setTorMode(mode: TorMode) = withContext(coroutinesContextFacade.io) {
         // An explicit choice by the user replaces whatever the last start attempt concluded.
         startFailed = false
-        torPreferences.setTorMode(mode)
+        requestedIntent.set(mode)
     }
 
     fun recordExternalLogLine(line: String) {
@@ -164,7 +178,8 @@ class TorRepo(
     }
 
     override suspend fun clearData() = withContext(coroutinesContextFacade.io) {
+        // An explicit reset, which is the one non-user writer the intent accepts.
+        requestedIntent.set(TorMode.OFF)
         disable()
-        torPreferences.setTorMode(TorMode.OFF)
     }
 }

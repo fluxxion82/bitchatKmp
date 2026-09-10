@@ -4,6 +4,7 @@ import com.bitchat.domain.lora.model.LoRaProtocolType
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.domain.tor.model.TorAvailability
+import com.bitchat.domain.tor.model.TorMode
 
 data class SettingsState(
     val appVersion: String = "1.0.0",
@@ -11,7 +12,6 @@ data class SettingsState(
     val showBackgroundModeSetting: Boolean = false,
     val backgroundModeEnabled: Boolean = false,
     val proofOfWorkEnabled: Boolean = false,
-    val torNetworkEnabled: Boolean = false,
     val powDifficulty: Int = 16,
     /**
      * Why the Tor switch is usable or not. Starts unavailable and stays that way until the
@@ -19,6 +19,13 @@ data class SettingsState(
      * optimistic assumption that Tor works here.
      */
     val torAvailability: TorAvailability = TorAvailability.NATIVE_LIBRARY_MISSING,
+    /**
+     * What the user asked for, not what Tor managed to do. Single source for the switch: it used
+     * to be a stored flag written from three places -- the initial load, the mode observer and an
+     * optimistic update in the toggle handler -- which could race and leave the switch showing the
+     * opposite of the user's choice with no further emission to correct it.
+     */
+    val requestedTorMode: TorMode = TorMode.OFF,
     val torRunning: Boolean = false,
     val torBootstrapPercent: Int = 0,
     val torLastLogLine: String = "",
@@ -34,6 +41,13 @@ data class SettingsState(
 ) {
     /** Convenience for the many places that only care whether the switch is live. */
     val torAvailable: Boolean get() = torAvailability.isAvailable
+
+    /**
+     * Derived, never assigned. Qualified by availability so a stored ON is not displayed as
+     * protection on a platform whose HTTP engine cannot route through a proxy at all.
+     */
+    val torNetworkEnabled: Boolean
+        get() = requestedTorMode == TorMode.ON && torAvailability != TorAvailability.NO_PROXY_SUPPORT
 }
 
 enum class ThemePreference {

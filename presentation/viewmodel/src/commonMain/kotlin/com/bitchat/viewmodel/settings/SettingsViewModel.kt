@@ -25,7 +25,7 @@ import com.bitchat.domain.nostr.model.PowSettings
 import com.bitchat.domain.tor.DisableTor
 import com.bitchat.domain.tor.EnableTor
 import com.bitchat.domain.tor.GetTorAvailability
-import com.bitchat.domain.tor.GetTorMode
+import com.bitchat.domain.tor.ObserveRequestedTorMode
 import com.bitchat.domain.tor.GetTorStatus
 import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.viewvo.settings.SettingsState
@@ -45,7 +45,7 @@ class SettingsViewModel(
     private val setPowSettings: SetPowSettings,
     private val getPowSettings: GetPowSettings,
     private val getTorStatus: GetTorStatus,
-    private val getTorMode: GetTorMode,
+    private val observeRequestedTorMode: ObserveRequestedTorMode,
     private val enableTor: EnableTor,
     private val disableTor: DisableTor,
     private val getTorAvailability: GetTorAvailability,
@@ -66,7 +66,7 @@ class SettingsViewModel(
     init {
         loadInitialState()
         observeTorStatus()
-        observeTorMode()
+        bindTorSwitchToIntent()
         observeBackgroundMode()
     }
 
@@ -76,8 +76,6 @@ class SettingsViewModel(
             val themePreference = theme.toThemePreference()
 
             val powSettings = getPowSettings().firstOrNull() ?: PowSettings()
-
-            val torMode = getTorMode().firstOrNull() ?: TorMode.OFF
 
             val backgroundMode = getBackgroundMode().firstOrNull() ?: BackgroundMode.OFF
 
@@ -95,7 +93,6 @@ class SettingsViewModel(
                     proofOfWorkEnabled = powSettings.enabled,
                     powDifficulty = powSettings.difficulty,
                     backgroundModeEnabled = backgroundMode == BackgroundMode.ON,
-                    torNetworkEnabled = torMode == TorMode.ON,
                     torAvailability = torAvailability,
                     loraAvailable = getLoRaSettings != null,
                     loraEnabled = loraSettings?.enabled ?: true,
@@ -123,14 +120,18 @@ class SettingsViewModel(
         }
     }
 
-    private fun observeTorMode() {
+    /**
+     * The single writer of the switch's state.
+     *
+     * Follows requested intent, not the effective mode: the effective mode reports OFF whenever
+     * protection is not real, so a failed start rendered the switch unchecked while it was also
+     * disabled -- leaving no way at all to express OFF. The flow is a StateFlow, so collecting it
+     * delivers the current value immediately and the initial load no longer needs to set this.
+     */
+    private fun bindTorSwitchToIntent() {
         viewModelScope.launch {
-            getTorMode().collect { torMode ->
-                _state.update {
-                    it.copy(
-                        torNetworkEnabled = torMode == TorMode.ON
-                    )
-                }
+            observeRequestedTorMode().collect { mode ->
+                _state.update { it.copy(requestedTorMode = mode) }
             }
         }
     }
@@ -173,15 +174,22 @@ class SettingsViewModel(
     }
 
     fun onTorNetworkToggled(enabled: Boolean) {
-        if (_state.value.torAvailable) {
-            _state.update { it.copy(torNetworkEnabled = enabled) }
+        /*
+         * Turning Tor OFF is always allowed; only turning it ON requires that Tor can actually run
+         * here. The old guard tested availability for both directions, so on a host with no native
+         * library the stored intent was ON, the switch was disabled, and this early-returned --
+         * there was no path in the application that could set it back to off.
+         *
+         * No optimistic state write either: the intent owner publishes, and the collector above is
+         * the only thing that moves the switch.
+         */
+        if (enabled && !_state.value.torAvailable) return
 
-            viewModelScope.launch {
-                if (enabled) {
-                    enableTor()
-                } else {
-                    disableTor()
-                }
+        viewModelScope.launch {
+            if (enabled) {
+                enableTor()
+            } else {
+                disableTor()
             }
         }
     }

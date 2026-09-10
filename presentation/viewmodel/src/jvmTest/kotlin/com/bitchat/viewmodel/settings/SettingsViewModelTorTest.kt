@@ -21,7 +21,7 @@ import com.bitchat.domain.nostr.model.PowSettings
 import com.bitchat.domain.tor.DisableTor
 import com.bitchat.domain.tor.EnableTor
 import com.bitchat.domain.tor.GetTorAvailability
-import com.bitchat.domain.tor.GetTorMode
+import com.bitchat.domain.tor.ObserveRequestedTorMode
 import com.bitchat.domain.tor.GetTorStatus
 import com.bitchat.domain.tor.model.TorAvailability
 import com.bitchat.domain.tor.model.TorMode
@@ -29,12 +29,14 @@ import com.bitchat.domain.tor.model.TorState
 import com.bitchat.domain.tor.model.TorStatus
 import com.bitchat.viewmodel.BaseViewModelTest
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -50,8 +52,10 @@ class SettingsViewModelTorTest : BaseViewModelTest() {
                 "Build it with data/remote/tor/native/build-desktop.sh, or leave Tor off."
 
     private val getTorStatus = mockk<GetTorStatus>()
-    private val getTorMode = mockk<GetTorMode>()
+    private val observeRequestedTorMode = mockk<ObserveRequestedTorMode>()
     private val getTorAvailability = mockk<GetTorAvailability>()
+    private val enableTor = mockk<EnableTor>(relaxed = true)
+    private val disableTor = mockk<DisableTor>(relaxed = true)
 
     private suspend fun buildViewModel(
         torAvailability: TorAvailability,
@@ -59,7 +63,7 @@ class SettingsViewModelTorTest : BaseViewModelTest() {
         torStatus: TorStatus,
     ): SettingsViewModel {
         coEvery { getTorAvailability(Unit) } returns torAvailability
-        coEvery { getTorMode(Unit) } returns flowOf(torMode)
+        coEvery { observeRequestedTorMode(Unit) } returns MutableStateFlow(torMode)
         coEvery { getTorStatus(Unit) } returns flowOf(torStatus)
 
         val getAppTheme = mockk<GetAppTheme>()
@@ -77,9 +81,9 @@ class SettingsViewModelTorTest : BaseViewModelTest() {
             setPowSettings = mockk<SetPowSettings>(relaxed = true),
             getPowSettings = getPowSettings,
             getTorStatus = getTorStatus,
-            getTorMode = getTorMode,
-            enableTor = mockk<EnableTor>(relaxed = true),
-            disableTor = mockk<DisableTor>(relaxed = true),
+            observeRequestedTorMode = observeRequestedTorMode,
+            enableTor = enableTor,
+            disableTor = disableTor,
             getTorAvailability = getTorAvailability,
             getBackgroundMode = getBackgroundMode,
             enableBackgroundMode = mockk<EnableBackgroundMode>(relaxed = true),
@@ -178,7 +182,11 @@ class SettingsViewModelTorTest : BaseViewModelTest() {
         )
 
         viewModel.state.test {
-            val settled = awaitStateWith { it.torAvailable && it.torRunning }
+            // Availability and requested intent now arrive from two different collectors, so the
+            // settled state has to wait for both rather than for availability alone.
+            val settled = awaitStateWith {
+                it.torAvailable && it.torRunning && it.requestedTorMode == TorMode.ON
+            }
 
             assertTrue(settled.torNetworkEnabled)
             assertEquals(null, settled.torErrorMessage)
@@ -248,5 +256,70 @@ class SettingsViewModelTorTest : BaseViewModelTest() {
             if (predicate(state)) return state
         }
         error("state never satisfied the predicate")
+    }
+
+    @Test
+    fun `the switch can be turned off on a host where tor cannot run`() = runTest {
+        /*
+         * The trap. With no native library the stored intent was ON, the switch was disabled, and
+         * the toggle handler tested availability for both directions -- so this call early-returned
+         * and there was no path in the whole application that could set the mode back to off.
+         */
+        val viewModel = buildViewModel(
+            torAvailability = TorAvailability.NATIVE_LIBRARY_MISSING,
+            torMode = TorMode.ON,
+            torStatus = TorStatus(state = TorState.ERROR, errorMessage = unavailableDetail),
+        )
+        instantExecutorRule.scheduler.runCurrent()
+
+        viewModel.onTorNetworkToggled(false)
+        instantExecutorRule.scheduler.runCurrent()
+
+        coVerify(exactly = 1) { disableTor(Unit) }
+    }
+
+    @Test
+    fun `turning it on is still refused where tor cannot run`() = runTest {
+        val viewModel = buildViewModel(
+            torAvailability = TorAvailability.NATIVE_LIBRARY_MISSING,
+            torMode = TorMode.OFF,
+            torStatus = TorStatus(state = TorState.ERROR, errorMessage = unavailableDetail),
+        )
+        instantExecutorRule.scheduler.runCurrent()
+
+        viewModel.onTorNetworkToggled(true)
+        instantExecutorRule.scheduler.runCurrent()
+
+        coVerify(exactly = 0) { enableTor(Unit) }
+    }
+
+    @Test
+    fun `the switch follows requested intent, not whether tor managed to start`() = runTest {
+        // Bound to the effective mode, a failed start rendered this unchecked while it was also
+        // disabled, so the user could neither see nor express their own choice.
+        val viewModel = buildViewModel(
+            torAvailability = TorAvailability.NATIVE_LIBRARY_MISSING,
+            torMode = TorMode.ON,
+            torStatus = TorStatus(state = TorState.ERROR, errorMessage = unavailableDetail),
+        )
+        instantExecutorRule.scheduler.runCurrent()
+
+        assertTrue(viewModel.state.value.torNetworkEnabled)
+        assertEquals(TorMode.ON, viewModel.state.value.requestedTorMode)
+    }
+
+    @Test
+    fun `a stored ON is not displayed as on where the engine cannot proxy at all`() = runTest {
+        // Different from a missing library: here Tor could bootstrap and still protect nothing, so
+        // showing the switch on would read as protection that does not exist.
+        val viewModel = buildViewModel(
+            torAvailability = TorAvailability.NO_PROXY_SUPPORT,
+            torMode = TorMode.ON,
+            torStatus = TorStatus(),
+        )
+        instantExecutorRule.scheduler.runCurrent()
+
+        assertFalse(viewModel.state.value.torNetworkEnabled)
+        assertEquals(TorMode.ON, viewModel.state.value.requestedTorMode, "the intent still stands")
     }
 }

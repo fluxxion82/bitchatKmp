@@ -95,7 +95,10 @@ fun SettingsTogglesCard(
                     subtitle = stringResource(Res.string.about_tor_route),
                     checked = torNetworkEnabled,
                     onCheckedChange = onTorNetworkToggled,
-                    enabled = torAvailability.isAvailable,
+                    // Turning it off must stay possible even where Tor cannot run: a host with no
+                    // native library previously showed this switch on and disabled, with nothing
+                    // in the app able to turn it back off.
+                    enabled = torAvailability.isAvailable || torNetworkEnabled,
                     statusIndicator = if (torNetworkEnabled) {
                         {
                             val statusColor = when {

@@ -139,7 +139,7 @@ val commonRepoModule = module {
     single {
         TorRepo(
             torManager = get(),
-            torPreferences = get(),
+            requestedIntent = get(),
             coroutinesContextFacade = get(),
             coroutineScopeFacade = get(),
             torEventBus = get(),
