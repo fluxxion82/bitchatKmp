@@ -3,6 +3,8 @@ package com.bitchat.local.service
 import com.bitchat.domain.location.model.GeoPoint
 import com.bitchat.domain.location.model.LocationFixInfo
 import com.bitchat.domain.location.model.LocationUnavailableException
+import com.bitchat.domain.tor.RequestedTorIntent
+import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.local.bridge.NativeLocationBridge
 import com.russhwolf.settings.Settings
 import kotlinx.coroutines.sync.Mutex
@@ -20,7 +22,8 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class JvmLocationService(
     settingsFactory: Settings.Factory,
-    private val ipLookup: suspend () -> GeoPoint? = { IpGeolocation.lookup() },
+    private val requestedTorIntent: RequestedTorIntent,
+    private val ipLookup: suspend (admit: () -> Boolean) -> GeoPoint? = IpGeolocation::lookup,
 ) : LocationService {
 
     private val settings = settingsFactory.create(PREFS_NAME)
@@ -31,16 +34,26 @@ class JvmLocationService(
         println("JvmLocationService: native mode enabled, initializing...")
         NativeLocationBridge.init()
     } else {
-        println("JvmLocationService: no native location source, using IP geolocation")
+        println("JvmLocationService: no native location source, may use IP geolocation")
         false
     }
 
     /**
-     * Seam for the Tor work. An IP lookup has to bypass the proxy to mean anything (see
-     * [IpGeolocation]), so once Tor is enforced this is the switch that turns it off rather than
-     * letting it punch a hole in the user's anonymity.
+     * Whether an IP lookup may run at all.
+     *
+     * Keyed on what the user asked for, not on whether Tor managed to start. An IP lookup must
+     * bypass the proxy to mean anything -- through Tor it would report the exit node's city -- so
+     * it is inherently a request that discloses the user's address, and a user who has asked for
+     * Tor has asked for exactly that not to happen. The effective mode is the wrong signal here:
+     * it reads OFF whenever Tor failed to start, which is precisely when the user's stated wish
+     * still stands and this must stay closed.
+     *
+     * This was previously a system property that nothing in the tree ever set, so the gate was
+     * permanently open.
      */
-    private val ipLookupEnabled = System.getProperty("location.iplookup")?.lowercase() != "false"
+    private fun ipLookupAdmitted(): Boolean =
+        requestedTorIntent.current == TorMode.OFF &&
+            System.getProperty("location.iplookup")?.lowercase() != "false"
 
     @Volatile
     private var cachedFix: GeoPoint? = null
@@ -84,7 +97,7 @@ class JvmLocationService(
             if (now() - cachedAtMs < FRESH_FOR_MS) return fix
         }
 
-        if (ipLookupEnabled) {
+        if (ipLookupAdmitted()) {
             lookupLock.withLock {
                 // Another caller may have refreshed it while this one waited for the lock.
                 cachedFix?.let { fix ->
@@ -94,7 +107,7 @@ class JvmLocationService(
                 if (now() - lastAttemptMs >= RETRY_AFTER_MS) {
                     lastAttemptMs = now()
                     val startedAt = generation.get()
-                    ipLookup()?.let { fix ->
+                    ipLookup(::ipLookupAdmitted)?.let { fix ->
                         if (generation.get() != startedAt) {
                             println("JvmLocationService: discarding fix, cache cleared while looking up")
                             return@withLock
@@ -116,10 +129,13 @@ class JvmLocationService(
         }
 
         throw LocationUnavailableException(
-            if (nativeAvailable || ipLookupEnabled) {
-                LocationUnavailableException.Reason.LOOKUP_FAILED
+            // Said plainly, because "not available on this device" would be a lie: the source
+            // exists and was declined, and the user can get their channels back by turning Tor off
+            // or by entering a geohash by hand.
+            if (!nativeAvailable && !ipLookupAdmitted()) {
+                LocationUnavailableException.Reason.SUPPRESSED_BY_POLICY
             } else {
-                LocationUnavailableException.Reason.NO_SOURCE
+                LocationUnavailableException.Reason.LOOKUP_FAILED
             }
         )
     }

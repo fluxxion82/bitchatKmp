@@ -37,9 +37,23 @@ internal object IpGeolocation {
         "https://get.geojs.io/v1/ip/geo.json"
     )
 
-    suspend fun lookup(): GeoPoint? = withContext(Dispatchers.IO) {
+    /**
+     * [admit] is asked again before every provider attempt, and once more immediately before the
+     * request is put on the wire.
+     *
+     * Checking once up front is not enough: a failure here falls through to the next provider, so a
+     * single admission would let provider two start after policy had already revoked it. Nor can a
+     * started request be taken back -- disclosure completes at the TLS ClientHello inside
+     * getResponseCode(), so closing the socket afterwards un-discloses nothing. Refusing to start
+     * is the only control that means anything.
+     */
+    suspend fun lookup(admit: () -> Boolean): GeoPoint? = withContext(Dispatchers.IO) {
         for (provider in providers) {
-            val point = runCatching { query(provider) }.getOrElse { e ->
+            if (!admit()) {
+                println("IpGeolocation: lookup no longer permitted, stopping before $provider")
+                return@withContext null
+            }
+            val point = runCatching { query(provider, admit) }.getOrElse { e ->
                 println("IpGeolocation: $provider failed: ${e.message}")
                 null
             }
@@ -52,7 +66,9 @@ internal object IpGeolocation {
         null
     }
 
-    private fun query(provider: String): GeoPoint? {
+    private fun query(provider: String, admit: () -> Boolean): GeoPoint? {
+        // Constructing the connection touches no network; openConnection is documented as not
+        // establishing anything.
         val connection = (URL(provider).openConnection(Proxy.NO_PROXY) as HttpURLConnection).apply {
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
@@ -61,6 +77,14 @@ internal object IpGeolocation {
         }
 
         try {
+            /*
+             * The last possible moment. Reading responseCode is what actually connects, so this is
+             * the point the address leaves the machine; everything above is local setup.
+             */
+            if (!admit()) {
+                println("IpGeolocation: revoked before connecting to $provider")
+                return null
+            }
             val code = connection.responseCode
             if (code != 200) {
                 println("IpGeolocation: $provider returned HTTP $code")

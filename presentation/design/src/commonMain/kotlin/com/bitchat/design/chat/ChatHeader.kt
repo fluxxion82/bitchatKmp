@@ -38,6 +38,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
@@ -134,10 +136,20 @@ fun TorStatusDot(
         else -> Color(0xFFFF3B30)
     }
 
+    // A bare coloured dot cannot say which of the three states it is in, and the red one now
+    // appears in a case it never used to: Tor requested but not running.
+    val description = when {
+        torRunning && torBootstrapPercent >= 100 -> "Tor connected"
+        torRunning -> "Tor connecting, $torBootstrapPercent percent"
+        else -> "Tor is on but not connected"
+    }
+
     Surface(
         color = statusColor,
         shape = CircleShape,
-        modifier = modifier.size(8.dp)
+        modifier = modifier
+            .size(8.dp)
+            .semantics { contentDescription = description }
     ) {}
 }
 

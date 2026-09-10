@@ -36,5 +36,5 @@ actual val localModule = module {
 
     single<SettingsService> { JvmSettingsService() }
 
-    single<LocationService> { JvmLocationService(settingsFactory = get()) }
+    single<LocationService> { JvmLocationService(settingsFactory = get(), requestedTorIntent = get()) }
 }

@@ -27,6 +27,12 @@ class LocationUnavailableException(
         LOOKUP_FAILED("Could not determine your location"),
 
         /** The OS refused. Distinct from having no source at all. */
-        PERMISSION_DENIED("Location permission was denied")
+        PERMISSION_DENIED("Location permission was denied"),
+
+        /**
+         * Deliberately not looked up, because the only available source would have disclosed the
+         * user's address. Distinct from NO_SOURCE: the source exists, policy declined to use it.
+         */
+        SUPPRESSED_BY_POLICY("Location lookup is off while Tor is on")
     }
 }
