@@ -10,6 +10,8 @@ import com.bitchat.domain.location.GetAvailableChannels
 import com.bitchat.domain.location.GetBookmarkNames
 import com.bitchat.domain.location.GetBookmarkedChannels
 import com.bitchat.domain.location.GetLastFixInfo
+import com.bitchat.domain.tor.ObserveRequestedTorMode
+import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.domain.location.GetLocationNames
 import com.bitchat.domain.location.GetLocationServicesEnabled
 import com.bitchat.domain.location.GetParticipantCounts
@@ -29,6 +31,7 @@ import com.bitchat.domain.user.model.UserStateAction
 import com.bitchat.viewmodel.BaseViewModelTest
 import com.bitchat.viewvo.location.LocationChannelsEffect
 import io.mockk.coEvery
+import kotlinx.coroutines.flow.MutableStateFlow
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -61,6 +64,8 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
     private val resolveLocationName = mockk<ResolveLocationName>(relaxed = true)
     private val getUserState = mockk<GetUserState>(relaxed = true)
     private val getLastFixInfo = mockk<GetLastFixInfo>(relaxed = true)
+    private val observeRequestedTorMode = mockk<ObserveRequestedTorMode>(relaxed = true)
+    private val torMode = MutableStateFlow(TorMode.OFF)
 
     /**
      * [configure] runs after the defaults below and before construction, because the view model
@@ -78,6 +83,7 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
         coEvery { resolveLocationName(any()) } returns null
         coEvery { getUserState(Unit) } returns UserState.Active(ActiveState.Chat(Channel.Mesh))
         coEvery { getLastFixInfo(Unit) } returns null
+        coEvery { observeRequestedTorMode(Unit) } returns torMode
 
         configure()
 
@@ -95,6 +101,7 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
             getLocationServicesEnabled = getLocationServicesEnabled,
             getLocationNames = getLocationNames,
             getLastFixInfo = getLastFixInfo,
+            observeRequestedTorMode = observeRequestedTorMode,
             resolveLocationName = resolveLocationName,
             getUserState = getUserState,
         )
@@ -223,6 +230,66 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
         assertNull(state.customGeohashError)
         assertEquals(Channel.Location(GeohashChannelLevel.CITY, "9q8yy"), state.selectedChannel)
         coVerify { saveUserStateAction(UserStateAction.Chat(Channel.Location(GeohashChannelLevel.CITY, "9q8yy"), true)) }
+
+        viewModel.clearForTest()
+    }
+
+    @Test
+    fun `no fix is requested when the user has turned location services off`() = runTest {
+        /*
+         * Reading the preference first fixed the ordering, but the fix was still taken
+         * unconditionally. On desktop that meant an outbound request to a geolocation provider the
+         * user had just declined.
+         */
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns false
+        }
+        instantExecutorRule.scheduler.runCurrent()
+
+        coVerify(exactly = 0) { getAvailableChannels(Unit) }
+        assertTrue(!viewModel.state.value.isLoading, "and it must not sit on a spinner")
+
+        viewModel.clearForTest()
+    }
+
+    @Test
+    fun `turning location services off clears what the last fix produced`() = runTest {
+        coEvery { toggleLocationServices(Unit) } returns Unit
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getAvailableChannels(Unit) } returns
+                listOf(GeohashChannel(GeohashChannelLevel.CITY, "9q8yy"))
+        }
+        instantExecutorRule.scheduler.runCurrent()
+        assertEquals(1, viewModel.state.value.availableChannels.size)
+
+        coEvery { getLocationServicesEnabled(Unit) } returns false
+        viewModel.onToggleLocationServices()
+        instantExecutorRule.scheduler.runCurrent()
+
+        assertTrue(
+            viewModel.state.value.availableChannels.isEmpty(),
+            "channels derived from a fix outlived the switch that produced them"
+        )
+
+        viewModel.clearForTest()
+    }
+
+    @Test
+    fun `a change in tor policy refreshes without waiting out the poll`() = runTest {
+        // Whether a live lookup may run is policy-dependent now, so the sheet must not keep
+        // showing an answer the policy has just invalidated.
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getAvailableChannels(Unit) } returns emptyList()
+        }
+        instantExecutorRule.scheduler.runCurrent()
+
+        torMode.value = TorMode.ON
+        instantExecutorRule.scheduler.runCurrent()
+
+        // Twice: the initial load, then the policy change. Not three times -- no poll has elapsed.
+        coVerify(exactly = 2) { getAvailableChannels(Unit) }
 
         viewModel.clearForTest()
     }

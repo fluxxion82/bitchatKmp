@@ -11,6 +11,7 @@ import com.bitchat.domain.location.GetAvailableChannels
 import com.bitchat.domain.location.GetBookmarkNames
 import com.bitchat.domain.location.GetBookmarkedChannels
 import com.bitchat.domain.location.GetLastFixInfo
+import com.bitchat.domain.tor.ObserveRequestedTorMode
 import com.bitchat.domain.location.GetLocationNames
 import com.bitchat.domain.location.GetLocationServicesEnabled
 import com.bitchat.domain.location.GetParticipantCounts
@@ -37,6 +38,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -55,6 +57,7 @@ class LocationChannelsViewModel(
     private val getLocationServicesEnabled: GetLocationServicesEnabled,
     private val getLocationNames: GetLocationNames,
     private val getLastFixInfo: GetLastFixInfo,
+    private val observeRequestedTorMode: ObserveRequestedTorMode,
     private val resolveLocationName: ResolveLocationName,
     private val getUserState: GetUserState,
 ) : ViewModel() {
@@ -69,6 +72,7 @@ class LocationChannelsViewModel(
         println("🎬 [LocationChannelsViewModel] Initializing...")
         loadInitialData()
         startLiveRefresh()
+        observeLocationPolicy()
     }
 
     private fun loadInitialData() {
@@ -112,7 +116,17 @@ class LocationChannelsViewModel(
                 )
             }
 
-            loadChannels(locationNames, initial = true)
+            /*
+             * Only now, and only if the user wants it. Reading the preference first fixed the
+             * ordering but the fix was still taken unconditionally, so someone who had turned
+             * location services off still had a position looked up -- on desktop that means an
+             * outbound request to a geolocation provider they had just declined.
+             */
+            if (locationServicesEnabled) {
+                loadChannels(locationNames, initial = true)
+            } else {
+                _state.update { it.copy(isLoading = false) }
+            }
         }
     }
 
@@ -179,6 +193,25 @@ class LocationChannelsViewModel(
         } catch (e: Exception) {
             default
         }
+
+    /**
+     * Refreshes when the Tor request changes, because that changes what location is allowed to do.
+     *
+     * Whether a live lookup may run is policy-dependent now, so the answer on screen can be stale
+     * the moment the user flips the switch: turning Tor off should restore nearby channels without
+     * waiting out the poll, and turning it on should stop presenting a live fix as if it were
+     * still being refreshed. The first emission is dropped because the initial load has already
+     * run by then.
+     */
+    private fun observeLocationPolicy() {
+        viewModelScope.launch {
+            observeRequestedTorMode(Unit).drop(1).collect {
+                if (_state.value.locationServicesEnabled) {
+                    refreshData()
+                }
+            }
+        }
+    }
 
     private fun startLiveRefresh() {
         refreshJob?.cancel()
@@ -301,7 +334,21 @@ class LocationChannelsViewModel(
             toggleLocationServices(Unit)
             val enabled = getLocationServicesEnabled(Unit)
 
-            _state.update { it.copy(locationServicesEnabled = enabled) }
+            _state.update {
+                if (enabled) {
+                    it.copy(locationServicesEnabled = true)
+                } else {
+                    // Otherwise the channels computed from the last fix stay on screen after the
+                    // user has switched the thing that produced them off.
+                    it.copy(
+                        locationServicesEnabled = false,
+                        availableChannels = emptyList(),
+                        locationUnavailableReason = null,
+                        locationApproximate = false,
+                        locationStale = false,
+                    )
+                }
+            }
 
             if (enabled) {
                 refreshData()
