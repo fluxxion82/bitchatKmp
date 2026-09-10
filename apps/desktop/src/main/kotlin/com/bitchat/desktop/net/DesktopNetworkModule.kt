@@ -2,6 +2,7 @@ package com.bitchat.desktop.net
 
 import com.bitchat.client.HttpEngineProvider
 import com.bitchat.client.TorEnforcingEngineProvider
+import com.bitchat.domain.base.CoroutineScopeFacade
 import org.koin.dsl.module
 
 /**
@@ -19,6 +20,7 @@ val desktopNetworkModule = module {
         TorEnforcingEngineProvider(
             requestedIntent = get(),
             torManager = get(),
+            scope = get<CoroutineScopeFacade>().applicationScope,
         )
     }
 }

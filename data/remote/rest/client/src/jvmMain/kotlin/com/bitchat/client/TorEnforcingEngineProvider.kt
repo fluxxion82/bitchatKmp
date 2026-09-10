@@ -6,6 +6,10 @@ import com.bitchat.tor.TorManager
 import io.ktor.client.engine.HttpClientEngineFactory
 import io.ktor.client.engine.config
 import io.ktor.client.engine.okhttp.OkHttp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.Interceptor
@@ -64,8 +68,9 @@ internal class TorRoutingGate(
  * derived client, and a dispatcher held here does not.
  */
 class TorEnforcingEngineProvider(
-    requestedIntent: RequestedTorIntent,
+    private val requestedIntent: RequestedTorIntent,
     torManager: TorManager,
+    scope: CoroutineScope,
 ) : HttpEngineProvider {
 
     private val gate = TorRoutingGate(
@@ -85,8 +90,36 @@ class TorEnforcingEngineProvider(
         .addInterceptor(TorEnforcingInterceptor(gate))
         .build()
 
+    init {
+        scope.launch {
+            requestedIntent.updates
+                .drop(1)
+                .filter { it == TorMode.ON }
+                .collect { retireDirectConnections() }
+        }
+    }
+
     override fun engine(): HttpClientEngineFactory<*> = OkHttp.config {
         preconfigured = ownedClient
+    }
+
+    /**
+     * Makes connections opened while traffic went direct unusable, the moment Tor is asked for.
+     *
+     * Refusing new requests is not enough on its own: an idle pooled connection would otherwise be
+     * handed to the next request without the proxy selector ever being consulted again.
+     *
+     * What this reaches, and what it does not. The connection pool is shared with every client
+     * Ktor derives from ours, so evicting here covers all of them -- but `evictAll` skips any
+     * connection with a call in flight, so a request already executing survives to completion. The
+     * dispatcher is not shared: Ktor installs a fresh one on each derived client, so cancelling
+     * ours reaches only calls made through the client we built. Live WebSockets are closed by the
+     * relay layer instead, which owns the sessions and can close them properly.
+     */
+    private fun retireDirectConnections() {
+        println("TorEnforcingEngineProvider: Tor requested - retiring direct connections")
+        dispatcher.cancelAll()
+        connectionPool.evictAll()
     }
 }
 

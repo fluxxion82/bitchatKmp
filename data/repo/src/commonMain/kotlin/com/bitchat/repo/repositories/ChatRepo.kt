@@ -414,7 +414,7 @@ class ChatRepo(
         println("ChatRepo: Subscribing to geohash: $geohash")
 
         coroutineScopeFacade.nostrScope.launch {
-            waitForTorIfEnabled()
+            if (!torGateAllowsTraffic()) return@launch
             nostrRelay.ensureGeohashRelaysConnected(geohash, nRelays = 5, includeDefaults = false)
         }
 
@@ -449,7 +449,7 @@ class ChatRepo(
 
     private fun subscribeToDirectMessages() {
         coroutineScopeFacade.nostrScope.launch {
-            waitForTorIfEnabled()
+            if (!torGateAllowsTraffic()) return@launch
             val identity = nostrClient.getCurrentNostrIdentity() ?: return@launch
             val pubkey = identity.publicKeyHex
             if (!activeDmSubscriptions.add(pubkey)) return@launch
@@ -471,7 +471,11 @@ class ChatRepo(
         if (!activeGeohashDmSubscriptions.add(geohash)) return
 
         coroutineScopeFacade.nostrScope.launch {
-            waitForTorIfEnabled()
+            if (!torGateAllowsTraffic()) {
+                // Undo the guard above, so a later attempt is not skipped as a duplicate.
+                activeGeohashDmSubscriptions.remove(geohash)
+                return@launch
+            }
             val identity = runCatching { nostrClient.deriveIdentity(geohash) }.getOrNull() ?: return@launch
             nostrRelay.ensureGeohashRelaysConnected(geohash, nRelays = 5, includeDefaults = false)
 
@@ -506,8 +510,12 @@ class ChatRepo(
                 println("   Message type: $messageType")
                 println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-                // Wait for Tor if enabled before connecting to relays
-                waitForTorIfEnabled()
+                // Refuse rather than walk into a request the engine will reject anyway. The
+                // message is not sent either way; this just skips the wait and the doomed attempt.
+                if (!torGateAllowsTraffic()) {
+                    println("⚠️  ChatRepo: message not sent - Tor is requested but not ready")
+                    return@withContext
+                }
 
                 // Check relay availability first
                 val relays = nostrRelay.getRelaysForGeohash(geohash)
@@ -1868,8 +1876,23 @@ class ChatRepo(
         }
     }
 
-    private suspend fun waitForTorIfEnabled() {
-        awaitTorReady(torManager) { println("ChatRepo: $it") }
+    /**
+     * Waits for Tor when it is coming up, and reports whether it is safe to send.
+     *
+     * The result used to be discarded, which was harmless only while nothing enforced the policy:
+     * traffic simply went out direct. Under enforcement it means walking into a request the engine
+     * will refuse anyway -- and paying the wait first. When Tor is not requested this still
+     * answers true regardless of readiness, so nothing changes for a user who never asked for it.
+     *
+     * @return true when the caller may proceed.
+     */
+    private suspend fun torGateAllowsTraffic(): Boolean {
+        val ready = awaitTorReady(torManager) { println("ChatRepo: $it") }
+        if (ready) return true
+        if (requestedTorIntent?.current != TorMode.ON) return true
+
+        println("ChatRepo: Tor is requested but not ready - not attempting this request")
+        return false
     }
 
     @OptIn(FlowPreview::class)
@@ -1900,6 +1923,9 @@ class ChatRepo(
      *
      * Default relays are reconnected explicitly, because [establishConnectionsForActiveChannels]
      * returns immediately when no geohash channel is active and would leave them down.
+     *
+     * The ON direction matters just as much: sockets opened while traffic went direct have to be
+     * closed, or enforcement only covers connections that have not been made yet.
      */
     private fun observeTorTurnedOffAndRestoreRelays() {
         val intent = requestedTorIntent ?: return
@@ -1907,11 +1933,21 @@ class ChatRepo(
             intent.updates
                 // No distinctUntilChanged: a StateFlow already conflates equal values.
                 .drop(1)
-                .filter { it == TorMode.OFF }
-                .collect {
-                    println("🚀 ChatRepo: Tor switched off, restoring relay connections")
-                    nostrRelay.ensureDefaultRelaysConnected()
-                    establishConnectionsForActiveChannels()
+                .collect { mode ->
+                    if (mode == TorMode.OFF) {
+                        println("🚀 ChatRepo: Tor switched off, restoring relay connections")
+                        nostrRelay.ensureDefaultRelaysConnected()
+                        establishConnectionsForActiveChannels()
+                    } else {
+                        /*
+                         * Closing them is the point. An established WebSocket keeps sending
+                         * through the socket it already has -- it never consults the proxy
+                         * selector again -- so refusing new connections would leave the relays
+                         * the user was already talking to streaming outside Tor indefinitely.
+                         */
+                        println("🔒 ChatRepo: Tor switched on, closing direct relay connections")
+                        nostrRelay.disconnectAll()
+                    }
                 }
         }
     }
@@ -2222,7 +2258,7 @@ class ChatRepo(
         }
 
         coroutineScopeFacade.nostrScope.launch {
-            waitForTorIfEnabled()
+            if (!torGateAllowsTraffic()) return@launch
             nostrRelay.ensureDefaultRelaysConnected()
         }
 

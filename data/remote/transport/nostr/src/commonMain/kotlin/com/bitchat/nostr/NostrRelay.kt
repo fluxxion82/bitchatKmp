@@ -86,6 +86,23 @@ class NostrRelay(
     /**
      * Ensure default relays are connected (used for global DMs).
      */
+    /**
+     * Closes every relay connection this holds.
+     *
+     * Needed when a routing policy turns on: a WebSocket opened while traffic was allowed to go
+     * direct keeps streaming through that same socket afterwards, because an established session
+     * never consults the proxy selector again. Refusing new connections does not touch it, so it
+     * has to be closed explicitly.
+     */
+    suspend fun disconnectAll() {
+        val urls = relaysList.map { it.url }
+        println("NostrRelay: closing ${urls.size} relay connection(s)")
+        urls.forEach { url ->
+            runCatching { wsClient.disconnect(url) }
+                .onFailure { println("NostrRelay: failed to close $url: ${it.message}") }
+        }
+    }
+
     fun ensureDefaultRelaysConnected() {
         val selected = DEFAULT_RELAYS.toSet()
         if (selected.isEmpty()) return
