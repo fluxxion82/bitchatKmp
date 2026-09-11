@@ -28,16 +28,23 @@ import com.bitchat.domain.tor.GetTorAvailability
 import com.bitchat.domain.tor.ObserveRequestedTorMode
 import com.bitchat.domain.tor.GetTorStatus
 import com.bitchat.domain.tor.model.TorMode
+import com.bitchat.viewvo.settings.LoRaSwitchStatus
+import com.bitchat.viewvo.settings.LoRaSettingsOperation
 import com.bitchat.viewvo.settings.SettingsState
 import com.bitchat.viewvo.settings.ThemePreference
 import com.bitchat.viewvo.settings.toDomain
 import com.bitchat.viewvo.settings.toThemePreference
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class SettingsViewModel(
     private val setAppTheme: SetAppTheme,
@@ -62,6 +69,7 @@ class SettingsViewModel(
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsState())
     val state: StateFlow<SettingsState> = _state.asStateFlow()
+    private val loRaSwitchMutex = Mutex()
 
     init {
         loadInitialState()
@@ -210,18 +218,20 @@ class SettingsViewModel(
     }
 
     fun onLoRaRegionSelected(region: LoRaRegion) {
-        viewModelScope.launch {
-            val currentPower = _state.value.loraTxPower
-            setLoRaRegion.invoke(SetLoRaRegion.Params(region, currentPower))
-            _state.update { it.copy(loraRegion = region) }
+        updateLoRaSettings(
+            operation = LoRaSettingsOperation.REGION,
+            selection = { it.copy(loraRegion = region) },
+        ) {
+            setLoRaRegion.invoke(SetLoRaRegion.Params(region, _state.value.loraTxPower))
         }
     }
 
     fun onLoRaTxPowerSelected(power: LoRaTxPower) {
-        viewModelScope.launch {
-            val currentRegion = _state.value.loraRegion
-            setLoRaTxPower.invoke(SetLoRaTxPower.Params(power, currentRegion))
-            _state.update { it.copy(loraTxPower = power) }
+        updateLoRaSettings(
+            operation = LoRaSettingsOperation.TX_POWER,
+            selection = { it.copy(loraTxPower = power) },
+        ) {
+            setLoRaTxPower.invoke(SetLoRaTxPower.Params(power, _state.value.loraRegion))
         }
     }
 
@@ -233,9 +243,72 @@ class SettingsViewModel(
     }
 
     fun onLoRaProtocolSelected(protocol: LoRaProtocolType) {
-        viewModelScope.launch {
+        updateLoRaSettings(
+            operation = LoRaSettingsOperation.PROTOCOL,
+            selection = { it.copy(loraProtocol = protocol) },
+        ) {
             switchLoRaProtocol.invoke(protocol)
-            _state.update { it.copy(loraProtocol = protocol) }
+        }
+    }
+
+    fun onLoRaRetry() {
+        val current = _state.value
+        if (current.loraSwitchStatus != LoRaSwitchStatus.FAILED) return
+        when (current.loraOperation) {
+            LoRaSettingsOperation.PROTOCOL -> onLoRaProtocolSelected(current.loraProtocol)
+            LoRaSettingsOperation.REGION -> onLoRaRegionSelected(current.loraRegion)
+            LoRaSettingsOperation.TX_POWER -> onLoRaTxPowerSelected(current.loraTxPower)
+        }
+    }
+
+    private fun updateLoRaSettings(
+        operation: LoRaSettingsOperation,
+        selection: (SettingsState) -> SettingsState,
+        apply: suspend () -> Boolean,
+    ) {
+        viewModelScope.launch {
+            // The feedback, saved preference, and runtime request belong to one operation.
+            loRaSwitchMutex.withLock {
+                _state.update {
+                    selection(it).copy(
+                        loraOperation = operation,
+                        loraSwitchStatus = LoRaSwitchStatus.SWITCHING,
+                        loraSwitchError = null,
+                    )
+                }
+                try {
+                    val applied = apply()
+                    currentCoroutineContext().ensureActive()
+                    _state.update {
+                        it.copy(
+                            loraSwitchStatus = if (applied) LoRaSwitchStatus.READY else LoRaSwitchStatus.FAILED,
+                            loraSwitchError = if (applied) null else loRaFailureMessage(operation),
+                        )
+                    }
+                } catch (cancelled: CancellationException) {
+                    _state.update { it.copy(loraSwitchStatus = LoRaSwitchStatus.IDLE, loraSwitchError = null) }
+                    throw cancelled
+                } catch (error: Exception) {
+                    println("LoRa settings operation $operation failed: $error")
+                    _state.update {
+                        it.copy(
+                            loraSwitchStatus = LoRaSwitchStatus.FAILED,
+                            loraSwitchError = loRaFailureMessage(operation),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun loRaFailureMessage(operation: LoRaSettingsOperation): String {
+        val protocol = _state.value.loraProtocol
+        return when {
+            operation == LoRaSettingsOperation.PROTOCOL ->
+                "Could not switch to ${protocol.displayName}. Check the radio service logs, then retry."
+            protocol != LoRaProtocolType.BITCHAT ->
+                "Radio preference saved but not applied. ${protocol.displayName} keeps its own radio settings; configure those separately."
+            else -> "Radio preference saved but not applied. Check the radio service logs, then retry."
         }
     }
 }

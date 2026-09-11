@@ -10,6 +10,7 @@ import kotlinx.cinterop.refTo
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.sizeOf
 import kotlinx.cinterop.value
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
@@ -64,7 +65,7 @@ actual class MeshtasticSerial {
         const val DEFAULT_PORT = 4403
 
         /** Connection retry settings - meshtasticd may take time to open TCP port after starting */
-        const val CONNECT_RETRY_COUNT = 5
+        const val CONNECT_RETRY_COUNT = 1
         const val INITIAL_RETRY_DELAY_MS = 1000
         const val MAX_RETRY_DELAY_MS = 16000
     }
@@ -86,6 +87,9 @@ actual class MeshtasticSerial {
     actual var onDisconnect: (() -> Unit)? = null
 
     actual fun open(): Boolean {
+        if (isConnected) return true
+        if (readJob?.isCompleted == false) return false
+
         // Ensure meshtasticd service is running before connecting
         if (!ensureMeshtasticdRunning()) {
             return false
@@ -184,9 +188,30 @@ actual class MeshtasticSerial {
         return MeshtasticdService.start()
     }
 
+    private suspend fun closeConnection() {
+        val oldJob = scope?.coroutineContext?.get(Job)
+        oldJob?.cancel()
+        // Wake a blocking read without releasing/reusing its descriptor yet.
+        if (socketFd >= 0) platform.posix.shutdown(socketFd, platform.posix.SHUT_RDWR)
+        oldJob?.cancelAndJoin()
+        close()
+        readJob = null
+        scope = null
+    }
+
+    actual suspend fun reconnect(): Boolean {
+        closeConnection()
+        return connectTcp()
+    }
+
+    actual suspend fun shutdown() {
+        onDisconnect = null
+        closeConnection()
+        check(MeshtasticdService.stop()) { "Failed to stop meshtastic daemon" }
+    }
+
     actual fun close() {
         readJob?.cancel()
-        readJob = null
 
         if (socketFd >= 0) {
             close(socketFd)
@@ -194,7 +219,6 @@ actual class MeshtasticSerial {
         }
 
         scope?.cancel()
-        scope = null
     }
 
     actual fun send(data: ByteArray): Boolean {
@@ -241,6 +265,7 @@ actual class MeshtasticSerial {
      * timeout is more reliable.
      */
     private fun startReading() {
+        val readerFd = socketFd
         println("📖 MeshtasticSerial: startReading() called, scope=$scope")
         readJob = scope?.launch {
             println("📖 MeshtasticSerial: Read coroutine started, fd=$socketFd")
@@ -250,7 +275,7 @@ actual class MeshtasticSerial {
             val buffer = ByteArray(256)
             var readCount = 0
 
-            while (isActive && isConnected) {
+            while (isActive && socketFd == readerFd && readerFd >= 0) {
                 try {
                     readCount++
                     if (readCount <= 3 || readCount % 10 == 1) {
@@ -258,8 +283,9 @@ actual class MeshtasticSerial {
                     }
 
                     // Blocking read with SO_RCVTIMEO timeout (set in connectTcp)
-                    val bytesRead = read(socketFd, buffer.refTo(0), buffer.size.convert())
+                    val bytesRead = read(readerFd, buffer.refTo(0), buffer.size.convert())
 
+                    if (!isActive || socketFd != readerFd) break
                     if (bytesRead < 0) {
                         val err = errno
                         // EAGAIN/EWOULDBLOCK = timeout expired, not an error - continue loop
@@ -271,8 +297,8 @@ actual class MeshtasticSerial {
                         }
                         println("❌ Error reading from meshtasticd: errno=$err")
                         // Close and mark disconnected
-                        if (socketFd >= 0) {
-                            close(socketFd)
+                        if (socketFd == readerFd) {
+                            close(readerFd)
                             socketFd = -1
                         }
                         onDisconnect?.invoke()
@@ -280,8 +306,8 @@ actual class MeshtasticSerial {
                     } else if (bytesRead == 0L) {
                         println("📖 MeshtasticSerial: Connection closed by peer")
                         // Close and mark disconnected
-                        if (socketFd >= 0) {
-                            close(socketFd)
+                        if (socketFd == readerFd) {
+                            close(readerFd)
                             socketFd = -1
                         }
                         onDisconnect?.invoke()
@@ -357,8 +383,8 @@ actual class MeshtasticSerial {
                     if (isActive) {
                         println("❌ Error reading from meshtasticd: ${e.message}")
                         // Close and mark disconnected
-                        if (socketFd >= 0) {
-                            close(socketFd)
+                        if (socketFd == readerFd) {
+                            close(readerFd)
                             socketFd = -1
                         }
                         onDisconnect?.invoke()

@@ -45,6 +45,9 @@ expect class LoRaRadio {
      */
     fun close()
 
+    /** Await all receive work before releasing resources for another protocol. */
+    suspend fun shutdown()
+
     /**
      * Flow of events from the radio (packets received, errors, etc.)
      */

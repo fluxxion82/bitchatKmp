@@ -59,10 +59,12 @@ import com.bitchat.nostr.participant.NostrParticipantTracker
 import com.bitchat.nostr.util.hexStringToByteArray
 import com.bitchat.nostr.util.toHexString
 import com.bitchat.lora.LoRaPeer
+import com.bitchat.local.prefs.LoRaPreferences
+import com.bitchat.repo.lora.loRaConfiguration
+import com.bitchat.repo.lora.toLoRaConfiguration
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.LoRaProtocolManager
 import com.bitchat.lora.LoRaProtocolType
-import com.bitchat.lora.radio.LoRaConfig
 import com.bitchat.repo.tor.awaitTorReady
 import com.bitchat.domain.tor.RequestedTorIntent
 import com.bitchat.domain.tor.model.TorMode
@@ -117,6 +119,7 @@ class ChatRepo(
     private val torManager: TorManager? = null,
     private val requestedTorIntent: RequestedTorIntent? = null,
     private val lora: LoRaProtocol? = null,
+    private val loraPreferences: LoRaPreferences? = null,
 ) : ChatRepository, BluetoothMeshDelegate {
     private val outbox = mutableMapOf<String, MutableList<Triple<String, String, String>>>()
 
@@ -297,7 +300,7 @@ class ChatRepo(
         }
 
         println("📡 ChatRepo: Switching LoRa protocol to $protocol")
-        manager.switchProtocol(protocolType)
+        manager.switchProtocol(protocolType, loraPreferences?.toLoRaConfiguration())
     }
 
     override suspend fun reconfigureLoRa(region: LoRaRegion, txPower: LoRaTxPower): Boolean =
@@ -308,29 +311,13 @@ class ChatRepo(
                 return@withContext false
             }
 
-            val config = LoRaConfig(
-                frequency = when (region) {
-                    LoRaRegion.US_915 -> 915_125_000L
-                    LoRaRegion.EU_868 -> 868_125_000L
-                    LoRaRegion.AU_915 -> 915_125_000L
-                    LoRaRegion.AS_923 -> 923_125_000L
-                },
-                txPower = txPower.dBm,
-                syncWord = when (region) {
-                    LoRaRegion.EU_868 -> 0x12
-                    else -> 0xBC
-                },
-                spreadingFactor = when (region) {
-                    LoRaRegion.EU_868 -> 10
-                    else -> 9
-                }
-            )
+            val config = loRaConfiguration(region, txPower)
 
             println(
                 "📡 ChatRepo: Reconfiguring LoRa runtime (region=$region, txPower=$txPower, " +
                     "freq=${config.frequency}, sf=${config.spreadingFactor}, sync=0x${config.syncWord.toString(16)})"
             )
-            manager.switchProtocol(manager.activeType.value, config)
+            manager.reconfigure(config)
         }
 
     override fun getActiveLoRaProtocol(): String {

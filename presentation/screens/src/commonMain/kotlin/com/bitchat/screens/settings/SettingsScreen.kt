@@ -25,6 +25,7 @@ fun SettingsScreen(
         onLoRaTxPowerSelected = viewModel::onLoRaTxPowerSelected,
         onLoRaShowPeersToggled = viewModel::onLoRaShowPeersToggled,
         onLoRaProtocolSelected = viewModel::onLoRaProtocolSelected,
+        onLoRaRetry = viewModel::onLoRaRetry,
         onDismiss = { navController.navigateUp() },
         onShowDebug = null  // TODO: Wire when debug settings ready
     )

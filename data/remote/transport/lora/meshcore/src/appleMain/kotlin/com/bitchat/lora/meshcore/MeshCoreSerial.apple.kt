@@ -24,6 +24,9 @@ actual class MeshCoreSerial actual constructor() {
         return false
     }
 
+    actual suspend fun reconnect(): Boolean { close(); return open() }
+    actual suspend fun shutdown() { onDisconnect = null; close() }
+
     actual fun close() {
         // No-op
     }

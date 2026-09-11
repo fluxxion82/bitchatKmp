@@ -2,14 +2,17 @@ package com.bitchat.repo.di
 
 import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.initialization.AppInitializer
-import com.bitchat.domain.lora.model.LoRaRegion
-import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.domain.user.eventbus.UserEventBus
 import com.bitchat.domain.user.model.UserEvent
 import com.bitchat.domain.user.repository.UserRepository
 import com.bitchat.local.prefs.LoRaPreferences
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.radio.LoRaConfig
+import com.bitchat.repo.lora.toLoRaConfiguration
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
@@ -19,10 +22,10 @@ import kotlinx.coroutines.launch
 /**
  * App initializer for LoRa transport.
  *
- * Automatically starts LoRa radio on app launch when:
+ * Attempts LoRa bootstrap once per app lifetime, when:
  * - LoRa is enabled in settings
  * - User is in Active state
- * - LoRa transport is available (hardware detected)
+ * - A LoRa protocol adapter is available (hardware identification happens during startup)
  *
  * Uses settings from LoRaPreferences for region and TX power.
  *
@@ -34,106 +37,59 @@ class LoRaAppInitializer(
     private val userRepository: UserRepository,
     private val loraPreferences: LoRaPreferences?,
     private val userEventBus: UserEventBus,
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
 ) : AppInitializer {
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    override suspend fun initialize() {
+    private val initializationMutex = Mutex()
+    private val attemptMutex = Mutex()
+    private var initialized = false
+    private var bootstrapAttempted = false
+
+    override suspend fun initialize() = initializationMutex.withLock {
+        if (initialized) return@withLock
+        initialized = true
         if (loraTransport == null) {
             println("LoRaAppInitializer: LoRa transport not available on this platform")
-            return
+            return@withLock
         }
 
-        // Check if LoRa is enabled in settings
-        if (loraPreferences?.isLoRaEnabled() == false) {
-            println("LoRaAppInitializer: LoRa is disabled in settings")
-            return
-        }
-
-        // Initial attempt (might fail if user not Active yet)
-        scope.launch {
-            tryStartLoRa()
-        }
-
-        // Subscribe to user state changes for retry
-        // This ensures LoRa starts when user becomes Active after app startup
-        scope.launch {
+        // Subscribe before the initial attempt so an Active transition cannot be missed.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
             userEventBus.events().collect { event ->
-                if (event is UserEvent.StateChanged) {
-                    println("LoRaAppInitializer: User state changed, attempting LoRa start...")
-                    tryStartLoRa()
-                }
+                if (event is UserEvent.StateChanged) tryStartLoRa()
             }
         }
-
-        // Return immediately - LoRa will initialize in background
-        println("LoRaAppInitializer: Scheduled LoRa initialization (non-blocking)")
+        scope.launch { tryStartLoRa() }
+        println("LoRaAppInitializer: Scheduled one LoRa bootstrap attempt when the user is Active")
     }
 
-    private suspend fun tryStartLoRa() {
-        if (loraTransport?.isReady == true) {
-            println("LoRaAppInitializer: LoRa already ready, skipping")
-            return
-        }
-
+    private suspend fun tryStartLoRa() = attemptMutex.withLock {
+        if (bootstrapAttempted) return@withLock
         try {
             val userState = userRepository.getUserState()
+            if (userState !is UserState.Active) return@withLock
+            // A preference can change while waiting for permission/onboarding state.
+            if (loraPreferences?.isLoRaEnabled() == false) return@withLock
 
-            if (userState is UserState.Active) {
-                val config = buildLoRaConfig()
-                println("LoRaAppInitializer: Starting LoRa transport in background (region=${loraPreferences?.getLoRaRegion()}, txPower=${loraPreferences?.getTxPower()})...")
-                val started = loraTransport?.start(config) ?: false
-                if (started) {
-                    println("LoRaAppInitializer: LoRa transport started successfully")
-                } else {
-                    println("LoRaAppInitializer: LoRa transport failed to start (no hardware or config error)")
-                }
+            // Claim the one bootstrap attempt before invoking the transport. A failed
+            // radio must not restart on ordinary Settings/Chat/Locations navigation.
+            // Explicit user selections/retries call the manager independently.
+            bootstrapAttempted = true
+            if (loraTransport?.isReady == true) return@withLock
+            val config = loraPreferences?.toLoRaConfiguration() ?: LoRaConfig.US_915
+            println("LoRaAppInitializer: Starting saved LoRa selection (region=${loraPreferences?.getLoRaRegion()}, txPower=${loraPreferences?.getTxPower()})")
+            val started = loraTransport?.start(config) ?: false
+            if (started) {
+                println("LoRaAppInitializer: LoRa transport started successfully")
             } else {
-                println("LoRaAppInitializer: User not Active ($userState), will retry on state change")
+                println("LoRaAppInitializer: LoRa bootstrap failed; use Settings to retry")
             }
-        } catch (e: Exception) {
-            println("LoRaAppInitializer: Error starting LoRa: ${e.message}")
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            println("LoRaAppInitializer: Error starting LoRa: ${error.message}")
         }
     }
 
-    private fun buildLoRaConfig(): LoRaConfig {
-        val prefs = loraPreferences ?: return LoRaConfig.US_915
-
-        val region = prefs.getLoRaRegion()
-
-        // E22 modules on RangePi operate on fixed 1 MHz channels.
-        // Frequency scan confirmed E22 is at 868.125 MHz (-85dBm strongest signal)
-        val frequency = when (region) {
-            LoRaRegion.US_915 -> 915_125_000L
-            LoRaRegion.EU_868 -> 868_125_000L  // Confirmed by frequency scan
-            LoRaRegion.AU_915 -> 915_125_000L
-            LoRaRegion.AS_923 -> 923_125_000L
-        }
-
-        val txPower = when (prefs.getTxPower()) {
-            LoRaTxPower.LOW -> 10
-            LoRaTxPower.MEDIUM -> 17
-            LoRaTxPower.HIGH -> 20
-        }
-
-        // RangePi E22 modules may use 0x12 (public) or 0x34 (private) LoRa sync word.
-        val syncWord = when (region) {
-            LoRaRegion.EU_868 -> 0x12  // Standard public LoRa sync word
-            else -> 0xBC
-        }
-
-        // Match E22 default "2.4k" air-rate profile (SF9) for interop with RangePi/embedded.
-        // E22 2.4k air rate uses approximately SF9. Using SF10 won't communicate with SF9 devices.
-        val spreadingFactor = when (region) {
-            LoRaRegion.EU_868 -> 9  // Changed from 10 to match E22 module
-            else -> 9
-        }
-
-        return LoRaConfig(
-            frequency = frequency,
-            txPower = txPower,
-            syncWord = syncWord,
-            spreadingFactor = spreadingFactor
-        )
-    }
 }

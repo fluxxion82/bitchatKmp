@@ -1,44 +1,46 @@
 package com.bitchat.lora
 
 import com.bitchat.lora.radio.LoRaConfig
-import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.emptyFlow
-import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
-/**
- * Manager for switching between LoRa protocol implementations at runtime.
- *
- * Wraps both BitChat and Meshtastic protocols and delegates to the active one.
- * Supports switching protocols on-the-fly without app restart.
- *
- * Usage:
- * ```
- * val manager = LoRaProtocolManager(bitChatProtocol, meshtasticProtocol)
- * manager.start(config) // Starts the active protocol
- *
- * // Switch to Meshtastic
- * manager.switchProtocol(LoRaProtocolType.MESHTASTIC, config)
- * ```
- */
+/** Serializes radio ownership and keeps callers' flow subscriptions stable across switches. */
 class LoRaProtocolManager(
     private val bitChatProtocol: Lazy<LoRaProtocol>,
     private val meshtasticProtocol: Lazy<LoRaProtocol>,
-    private val meshcoreProtocol: Lazy<LoRaProtocol>
+    private val meshcoreProtocol: Lazy<LoRaProtocol>,
+    private val scope: CoroutineScope,
+    private val readinessTimeoutMs: Long = 20_000
 ) : LoRaProtocol {
-
+    private val mutex = Mutex()
     private val _activeType = MutableStateFlow(LoRaProtocolType.BITCHAT)
+    val activeType = _activeType.asStateFlow()
+    private val _peers = MutableStateFlow<List<LoRaPeer>>(emptyList())
+    override val peers = _peers.asStateFlow()
+    private val _incomingMessages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
+    override val incomingMessages = _incomingMessages.asSharedFlow()
+    private var peersJob: Job? = null
+    private var messagesJob: Job? = null
+    private var ownsSession = false
+    private var lifecycleUsed = false
+    private var readySession = false
+    private var activeConfig: LoRaConfig? = null
+    private var requestedRadioConfig = LoRaConfig.US_915
 
-    /**
-     * The currently active protocol type.
-     */
-    val activeType: StateFlow<LoRaProtocolType> = _activeType.asStateFlow()
-
-    /**
-     * The currently active protocol instance.
-     */
     private val active: LoRaProtocol
         get() = when (_activeType.value) {
             LoRaProtocolType.BITCHAT -> bitChatProtocol.value
@@ -46,92 +48,106 @@ class LoRaProtocolManager(
             LoRaProtocolType.MESHCORE -> meshcoreProtocol.value
         }
 
-    /**
-     * Switch to a different protocol implementation.
-     *
-     * Stops the current protocol and starts the new one.
-     *
-     * @param type The protocol type to switch to
-     * @param config Radio configuration for the new protocol
-     * @return true if the new protocol started successfully
-     */
-    suspend fun switchProtocol(type: LoRaProtocolType, config: LoRaConfig = LoRaConfig.US_915): Boolean {
-        if (type == _activeType.value) {
-            println("📡 LoRaProtocolManager: Already using ${type.name}")
-            return active.isReady || active.start(config)
-        }
+    override var deviceId = ""
+        set(value) { field = value; active.deviceId = value }
+    override var nickname = ""
+        set(value) { field = value; active.nickname = value }
+    override val protocolName get() = active.protocolName
+    override val isReady get() = readySession && active.isReady
+    override val supportsRadioConfiguration get() = active.supportsRadioConfiguration
 
-        println("📡 LoRaProtocolManager: Switching from ${_activeType.value} to $type")
-
-        // Stop current protocol
-        try {
-            active.stop()
-            println("📡 LoRaProtocolManager: Stopped ${_activeType.value}")
-        } catch (e: Exception) {
-            println("⚠️ LoRaProtocolManager: Error stopping ${_activeType.value}: ${e.message}")
-        }
-
-        // Switch to new protocol
-        _activeType.value = type
-
-        // Start new protocol
-        return try {
-            val started = active.start(config)
-            if (started) {
-                println("✅ LoRaProtocolManager: Started $type successfully")
-            } else {
-                println("❌ LoRaProtocolManager: Failed to start $type")
-            }
-            started
-        } catch (e: Exception) {
-            println("❌ LoRaProtocolManager: Error starting $type: ${e.message}")
-            false
-        }
-    }
-
-    /**
-     * Set the active protocol type without starting it.
-     *
-     * Used during initialization to set the preferred protocol from settings.
-     */
+    /** Initialization only, before any start, stop or switch request. */
     fun setActiveType(type: LoRaProtocolType) {
+        check(!lifecycleUsed && !mutex.isLocked)
         _activeType.value = type
     }
 
-    // LoRaProtocol interface delegation
+    suspend fun switchProtocol(type: LoRaProtocolType, config: LoRaConfig? = null): Boolean =
+        mutex.withLock {
+            lifecycleUsed = true
+            if (config != null) requestedRadioConfig = config
+            switchLocked(type, requestedRadioConfig)
+        }
 
-    override val peers: StateFlow<List<LoRaPeer>>
-        get() = active.peers
+    override suspend fun start(config: LoRaConfig): Boolean =
+        mutex.withLock {
+            lifecycleUsed = true
+            requestedRadioConfig = config
+            switchLocked(_activeType.value, config)
+        }
 
-    override val incomingMessages: Flow<ByteArray>
-        get() = active.incomingMessages
-
-    override val isReady: Boolean
-        get() = active.isReady
-
-    override val protocolName: String
-        get() = active.protocolName
-
-    override var deviceId: String
-        get() = active.deviceId
-        set(value) { active.deviceId = value }
-
-    override var nickname: String
-        get() = active.nickname
-        set(value) { active.nickname = value }
-
-    override suspend fun start(config: LoRaConfig): Boolean {
-        println("📡 LoRaProtocolManager: Starting ${_activeType.value}")
-        return active.start(config)
+    /** A daemon's RF settings must be changed through its own configuration. */
+    suspend fun reconfigure(config: LoRaConfig): Boolean = mutex.withLock {
+        lifecycleUsed = true
+        requestedRadioConfig = config
+        if (!active.supportsRadioConfiguration) false else switchLocked(_activeType.value, config)
     }
 
-    override fun stop() {
-        println("📡 LoRaProtocolManager: Stopping ${_activeType.value}")
-        active.stop()
+    private suspend fun switchLocked(type: LoRaProtocolType, config: LoRaConfig): Boolean {
+        if (type == _activeType.value && isReady &&
+            (!active.supportsRadioConfiguration || config == activeConfig)) return true
+        readySession = false
+        try {
+            stopLocked()
+            _activeType.value = type
+            val target = active
+            target.deviceId = deviceId
+            target.nickname = nickname
+            // Subscribe before startup, which can produce the first configuration/peer events.
+            peersJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                target.peers.collect { _peers.value = it }
+            }
+            messagesJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                target.incomingMessages.collect { _incomingMessages.emit(it) }
+            }
+            ownsSession = true // Even a partially failed start requires cleanup.
+            val ready = withTimeoutOrNull(readinessTimeoutMs) {
+                if (!target.start(config)) return@withTimeoutOrNull false
+                while (!target.isReady) delay(50)
+                true
+            } == true
+            if (!ready) {
+                withContext(NonCancellable) { stopLocked() }
+                return false
+            }
+            activeConfig = if (target.supportsRadioConfiguration) config else null
+            readySession = true
+            return true
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) { cleanupAfterFailure() }
+            throw e
+        } catch (e: Exception) {
+            println("LoRa ${_activeType.value} transition failed: ${e.message}")
+            withContext(NonCancellable) { cleanupAfterFailure() }
+            return false
+        }
     }
 
-    override suspend fun send(data: ByteArray): Boolean {
-        println("📡 LoRaProtocolManager.send(): activeType=${_activeType.value}, protocol=${active.protocolName}, isReady=${active.isReady}")
-        return active.send(data)
+    private suspend fun cleanupAfterFailure() {
+        try { stopLocked() } catch (e: Exception) {
+            // Retain ownsSession so a later attempt must verify this owner stops first.
+            println("LoRa cleanup failed: ${e.message}")
+        }
+    }
+
+    private suspend fun stopLocked() {
+        readySession = false
+        peersJob?.cancelAndJoin()
+        messagesJob?.cancelAndJoin()
+        peersJob = null
+        messagesJob = null
+        _peers.value = emptyList()
+        if (ownsSession) active.stop()
+        ownsSession = false
+        activeConfig = null
+    }
+
+    override suspend fun stop() = mutex.withLock {
+        lifecycleUsed = true
+        withContext(NonCancellable) { stopLocked() }
+    }
+
+    override suspend fun send(data: ByteArray): Boolean = mutex.withLock {
+        if (isReady) active.send(data) else false
     }
 }

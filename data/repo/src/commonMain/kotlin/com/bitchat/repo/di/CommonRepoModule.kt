@@ -4,6 +4,7 @@ import com.bitchat.cache.di.GEOHASH_ALIAS_CACHE
 import com.bitchat.cache.di.GEOHASH_CONVERSATION_CACHE
 import com.bitchat.cache.di.RELAY_INFO_CACHE
 import com.bitchat.domain.app.repository.AppRepository
+import com.bitchat.domain.base.CoroutineScopeFacade
 import com.bitchat.domain.chat.repository.ChatRepository
 import com.bitchat.domain.initialization.AppInitializer
 import com.bitchat.domain.location.repository.LocationRepository
@@ -65,6 +66,7 @@ val commonRepoModule = module {
             torManager = getOrNull(),
             requestedTorIntent = getOrNull(),
             lora = getOrNull(),
+            loraPreferences = getOrNull(),
         )
     }
 
@@ -134,6 +136,7 @@ val commonRepoModule = module {
             userRepository = get(),
             loraPreferences = getOrNull(),
             userEventBus = get(),
+            scope = get<CoroutineScopeFacade>().applicationScope,
         )
     } bind AppInitializer::class
 

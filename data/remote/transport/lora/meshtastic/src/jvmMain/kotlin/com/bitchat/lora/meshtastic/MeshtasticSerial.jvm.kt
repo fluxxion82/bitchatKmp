@@ -1,6 +1,7 @@
 package com.bitchat.lora.meshtastic
 
 import com.fazecast.jSerialComm.SerialPort
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,7 +26,7 @@ actual class MeshtasticSerial {
 
     private var port: SerialPort? = null
     private var readJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val _incoming = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
     actual val incoming: Flow<ByteArray> = _incoming.asSharedFlow()
@@ -39,6 +40,10 @@ actual class MeshtasticSerial {
     actual var onDisconnect: (() -> Unit)? = null
 
     actual fun open(): Boolean {
+        if (isConnected) return true
+        if (readJob?.isCompleted == false) return false
+        if (scope.coroutineContext[Job]?.isActive != true) scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
         // Find Meshtastic device
         val meshtasticPort = findMeshtasticPort()
         if (meshtasticPort == null) {
@@ -65,9 +70,26 @@ actual class MeshtasticSerial {
         return true
     }
 
+    private suspend fun closeConnection() {
+        val oldJob = scope.coroutineContext[Job]
+        close()
+        oldJob?.cancelAndJoin()
+        readJob = null
+        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    }
+
+    actual suspend fun reconnect(): Boolean {
+        closeConnection()
+        return open()
+    }
+
+    actual suspend fun shutdown() {
+        onDisconnect = null
+        closeConnection()
+    }
+
     actual fun close() {
         readJob?.cancel()
-        readJob = null
         port?.closePort()
         port = null
         scope.cancel()

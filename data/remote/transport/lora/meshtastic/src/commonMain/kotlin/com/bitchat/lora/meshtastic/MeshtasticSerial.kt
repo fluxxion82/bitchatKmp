@@ -31,6 +31,12 @@ expect class MeshtasticSerial() {
      */
     fun close()
 
+    /** Reconnect the client only; never restart a local daemon automatically. */
+    suspend fun reconnect(): Boolean
+
+    /** Await client teardown, then release this protocol's local daemon on Linux. */
+    suspend fun shutdown()
+
     /**
      * Send a raw protobuf-encoded ToRadio message.
      *

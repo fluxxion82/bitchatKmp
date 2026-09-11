@@ -1,6 +1,7 @@
 package com.bitchat.lora.bitchat.di
 
 import com.bitchat.lora.LoRaProtocol
+import com.bitchat.lora.bitchat.radio.LoRaRadio
 import com.bitchat.lora.bitchat.BitChatLoRaProtocol
 import com.bitchat.lora.bitchat.protocol.LoRaAssembler
 import com.bitchat.lora.bitchat.protocol.LoRaFragmenter
@@ -49,7 +50,7 @@ val bitChatLoraModule = module {
             println("📡 BitChat LoRa beacon probe enabled via BITCHAT_LORA_PROBE")
         }
         BitChatLoRaProtocol(
-            radio = get(),
+            radio = get<LoRaRadio>(),
             fragmenter = get(),
             assembler = get(),
             beaconProbeEnabled = probeEnabled

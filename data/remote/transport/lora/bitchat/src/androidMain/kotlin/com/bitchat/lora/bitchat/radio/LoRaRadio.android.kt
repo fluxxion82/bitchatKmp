@@ -16,6 +16,8 @@ import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.hoho.android.usbserial.util.SerialInputOutputManager
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -39,7 +41,7 @@ actual class LoRaRadio : KoinComponent {
     private var usbSerialPort: UsbSerialPort? = null
     private var ioManager: SerialInputOutputManager? = null
     private var currentConfig: LoRaConfig? = null
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val executor = Executors.newSingleThreadExecutor()
 
     private val _events = MutableSharedFlow<LoRaEvent>(extraBufferCapacity = 64)
@@ -99,6 +101,10 @@ actual class LoRaRadio : KoinComponent {
     }
 
     actual fun configure(config: LoRaConfig): Boolean {
+        if (isReady) return currentConfig == config
+        if (scope.coroutineContext[Job]?.isActive != true) {
+            scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        }
         LoRaLogger.i(LoRaTags.RADIO, "Configuring LoRa radio: $config")
         LoRaLogger.i(LoRaTags.RADIO, "isReady before config: $isReady")
 
@@ -431,6 +437,12 @@ actual class LoRaRadio : KoinComponent {
         }
     }
 
+    actual suspend fun shutdown() {
+        val oldJob = scope.coroutineContext[Job]
+        close()
+        oldJob?.cancelAndJoin()
+    }
+
     actual fun close() {
         LoRaLogger.i(LoRaTags.RADIO, "Closing LoRa radio")
         receiving = false
@@ -713,8 +725,6 @@ actual class LoRaRadio : KoinComponent {
     }
 
     private fun emitEvent(event: LoRaEvent) {
-        scope.launch {
-            _events.emit(event)
-        }
+        _events.tryEmit(event)
     }
 }

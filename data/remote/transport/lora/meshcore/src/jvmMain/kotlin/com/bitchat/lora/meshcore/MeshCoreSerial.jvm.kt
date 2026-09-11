@@ -1,5 +1,6 @@
 package com.bitchat.lora.meshcore
 
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,6 +40,9 @@ actual class MeshCoreSerial actual constructor() {
     var port: Int = MeshCoreConstants.DEFAULT_PORT
 
     actual fun open(): Boolean {
+        if (isConnected) return true
+        if (readJob?.isCompleted == false) return false
+
         return try {
             println("📡 Connecting to meshcore-pi at $host:$port...")
 
@@ -61,9 +65,26 @@ actual class MeshCoreSerial actual constructor() {
         }
     }
 
+    private suspend fun closeConnection() {
+        val oldJob = scope?.coroutineContext?.get(Job)
+        close()
+        oldJob?.cancelAndJoin()
+        readJob = null
+        scope = null
+    }
+
+    actual suspend fun reconnect(): Boolean {
+        closeConnection()
+        return open()
+    }
+
+    actual suspend fun shutdown() {
+        onDisconnect = null
+        closeConnection()
+    }
+
     actual fun close() {
         readJob?.cancel()
-        readJob = null
 
         try {
             socket?.close()
@@ -71,7 +92,6 @@ actual class MeshCoreSerial actual constructor() {
         socket = null
 
         scope?.cancel()
-        scope = null
     }
 
     actual fun send(data: ByteArray): Boolean {
@@ -98,22 +118,25 @@ actual class MeshCoreSerial actual constructor() {
     }
 
     private fun startReading() {
+        val readerSocket = socket ?: return
         readJob = scope?.launch {
             println("📖 MeshCoreSerial: Read thread started")
             var state: ReadState = ReadState.WAIT_START
             val frameBuffer = mutableListOf<Byte>()
             var framesReceived = 0
 
-            val sock = socket ?: return@launch
+            val sock = readerSocket
             val input = sock.getInputStream()
 
-            while (isActive && isConnected) {
+            while (isActive && socket === readerSocket && isConnected) {
                 try {
                     val b = input.read()
                     if (b < 0) {
                         println("📖 MeshCoreSerial: Connection closed by peer")
-                        close()
-                        onDisconnect?.invoke()
+                        if (isActive && socket === readerSocket) {
+                            close()
+                            onDisconnect?.invoke()
+                        }
                         break
                     }
 
@@ -162,8 +185,10 @@ actual class MeshCoreSerial actual constructor() {
                 } catch (e: Exception) {
                     if (isActive) {
                         println("❌ Error reading from meshcore-pi: ${e.message}")
-                        close()
-                        onDisconnect?.invoke()
+                        if (isActive && socket === readerSocket) {
+                            close()
+                            onDisconnect?.invoke()
+                        }
                     }
                     break
                 }

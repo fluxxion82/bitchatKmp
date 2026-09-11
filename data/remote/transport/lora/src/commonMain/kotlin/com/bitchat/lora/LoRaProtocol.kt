@@ -44,6 +44,9 @@ interface LoRaProtocol {
      */
     val isReady: Boolean
 
+    /** Whether app RF settings are applied by this implementation. Daemons own their RF config. */
+    val supportsRadioConfiguration: Boolean get() = true
+
     /**
      * Human-readable name of this protocol implementation.
      *
@@ -77,7 +80,7 @@ interface LoRaProtocol {
      *
      * Stops the radio, cancels background tasks, and clears state.
      */
-    fun stop()
+    suspend fun stop()
 
     /**
      * Send a message over LoRa.

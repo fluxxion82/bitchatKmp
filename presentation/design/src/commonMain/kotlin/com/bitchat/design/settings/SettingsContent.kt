@@ -38,6 +38,7 @@ fun SettingsContent(
     onLoRaTxPowerSelected: (LoRaTxPower) -> Unit,
     onLoRaShowPeersToggled: (Boolean) -> Unit,
     onLoRaProtocolSelected: (LoRaProtocolType) -> Unit,
+    onLoRaRetry: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
     onShowDebug: (() -> Unit)? = null
@@ -125,11 +126,15 @@ fun SettingsContent(
                         loraTxPower = state.loraTxPower,
                         loraShowPeers = state.loraShowPeers,
                         loraProtocol = state.loraProtocol,
+                        loraOperation = state.loraOperation,
+                        loraSwitchStatus = state.loraSwitchStatus,
+                        loraSwitchError = state.loraSwitchError,
                         onLoRaEnabledToggled = onLoRaEnabledToggled,
                         onLoRaRegionSelected = onLoRaRegionSelected,
                         onLoRaTxPowerSelected = onLoRaTxPowerSelected,
                         onLoRaShowPeersToggled = onLoRaShowPeersToggled,
-                        onLoRaProtocolSelected = onLoRaProtocolSelected
+                        onLoRaProtocolSelected = onLoRaProtocolSelected,
+                        onLoRaRetry = onLoRaRetry,
                     )
                 }
             }

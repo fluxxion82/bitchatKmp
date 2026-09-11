@@ -11,6 +11,7 @@ import android.os.Build
 import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,7 +35,7 @@ actual class MeshtasticSerial {
     private var port: UsbSerialPort? = null
     private var driver: UsbSerialDriver? = null
     private var readJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val _incoming = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
     actual val incoming: Flow<ByteArray> = _incoming.asSharedFlow()
@@ -51,6 +52,10 @@ actual class MeshtasticSerial {
     var context: Context? = null
 
     actual fun open(): Boolean {
+        if (isConnected) return true
+        if (readJob?.isCompleted == false) return false
+        if (scope.coroutineContext[Job]?.isActive != true) scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
         val ctx = context ?: run {
             println("❌ Context not set")
             return false
@@ -146,9 +151,26 @@ actual class MeshtasticSerial {
         usbManager?.requestPermission(device, permissionIntent)
     }
 
+    private suspend fun closeConnection() {
+        val oldJob = scope.coroutineContext[Job]
+        close()
+        oldJob?.cancelAndJoin()
+        readJob = null
+        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    }
+
+    actual suspend fun reconnect(): Boolean {
+        closeConnection()
+        return open()
+    }
+
+    actual suspend fun shutdown() {
+        onDisconnect = null
+        closeConnection()
+    }
+
     actual fun close() {
         readJob?.cancel()
-        readJob = null
 
         try {
             port?.close()

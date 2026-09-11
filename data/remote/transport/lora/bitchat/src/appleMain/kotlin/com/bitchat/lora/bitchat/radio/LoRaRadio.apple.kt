@@ -38,6 +38,8 @@ actual class LoRaRadio {
         // No-op
     }
 
+    actual suspend fun shutdown() { close() }
+
     actual fun close() {
         // No-op
     }

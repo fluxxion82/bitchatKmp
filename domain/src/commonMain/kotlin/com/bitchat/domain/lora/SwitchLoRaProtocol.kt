@@ -8,10 +8,10 @@ import com.bitchat.domain.lora.repository.LoRaSettingsRepository
 class SwitchLoRaProtocol(
     private val loraSettingsRepository: LoRaSettingsRepository,
     private val chatRepository: ChatRepository,
-) : Usecase<LoRaProtocolType, Unit> {
+) : Usecase<LoRaProtocolType, Boolean> {
 
-    override suspend fun invoke(param: LoRaProtocolType) {
+    override suspend fun invoke(param: LoRaProtocolType): Boolean {
         loraSettingsRepository.setLoRaProtocol(param)
-        chatRepository.switchLoRaProtocol(param.name)
+        return chatRepository.switchLoRaProtocol(param.name)
     }
 }

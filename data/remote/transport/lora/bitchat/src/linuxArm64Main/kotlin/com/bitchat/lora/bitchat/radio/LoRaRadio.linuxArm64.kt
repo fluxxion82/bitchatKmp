@@ -20,20 +20,23 @@ import platform.posix.*
  * - RFM95W/SX1276 module connected via SPI
  *
  * Wiring for Orange Pi Zero 3:
- * - MOSI: Pin 19 (PC2)
- * - MISO: Pin 21 (PC0)
- * - SCK:  Pin 23 (PC1)
- * - CS:   Pin 24 (PC3) - hardware SPI1_CS1
+ * - MOSI: Pin 19 (PH7)
+ * - MISO: Pin 21 (PH8)
+ * - SCK:  Pin 23 (PH6)
+ * - CS:   Pin 24 (PH9) - hardware SPI1_CS1
  *
- * Note: GPIO reset is not required - module initializes correctly on power-up.
+ * The current PCB RESET also reaches the PMIC interrupt. Software reset is omitted;
+ * power-on reset is the remaining reset mechanism, not a claim of measured radio health.
  */
 @OptIn(ExperimentalForeignApi::class)
 actual class LoRaRadio(
-    private val spiDevice: String = DEFAULT_SPI_DEVICE
+    private val spiDevice: String = DEFAULT_SPI_DEVICE,
+    private val spi: SpiPort = PosixSpiPort,
+    private val acquireOwnership: () -> Boolean = { LoRaServiceManager.ensureNoConflictingServices() }
 ) {
     private var spiFd: Int = -1
     private var currentConfig: LoRaConfig? = null
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private var scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     private val _events = MutableSharedFlow<LoRaEvent>(extraBufferCapacity = 64)
     actual val events: Flow<LoRaEvent> = _events.asSharedFlow()
@@ -53,18 +56,26 @@ actual class LoRaRadio(
         LoRaLogger.i(LoRaTags.RADIO, "Configuring LoRa radio via SPI: $config")
         LoRaLogger.d(LoRaTags.SPI, "Using SPI device: $spiDevice")
 
-        // Stop any conflicting services (like meshtasticd) that may be using the SPI radio
-        if (!LoRaServiceManager.ensureNoConflictingServices()) {
+        // Reconfiguration must follow awaited shutdown; never overwrite an open descriptor.
+        if (spiFd >= 0 || receiveJob?.isCompleted == false) {
+            return isReady && currentConfig == config
+        }
+        if (scope.coroutineContext[Job]?.isActive != true) {
+            scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        }
+
+        // Stop both daemon owners before opening direct SPI.
+        if (!acquireOwnership()) {
             LoRaLogger.e(
                 LoRaTags.SPI,
                 "Conflicting LoRa service is still active; refusing to continue to avoid TX/RX timeouts"
             )
-            emitEvent(LoRaEvent.Error("Conflicting LoRa service active (meshtasticd)"))
+            emitEvent(LoRaEvent.Error("Conflicting LoRa service active"))
             return false
         }
 
         // Open SPI device
-        spiFd = open(spiDevice, O_RDWR)
+        spiFd = spi.open(spiDevice)
         if (spiFd < 0) {
             val error = strerror(errno)?.toKString() ?: "unknown error"
             LoRaLogger.e(LoRaTags.SPI, "Failed to open SPI device '$spiDevice': $error")
@@ -73,7 +84,7 @@ actual class LoRaRadio(
         }
 
         // Configure SPI mode and speed
-        if (!configureSpi()) {
+        if (!spi.configure(spiFd, SPI_SPEED_HZ)) {
             close()
             return false
         }
@@ -155,7 +166,7 @@ actual class LoRaRadio(
     }
 
     actual fun startReceiving() {
-        if (spiFd < 0) return
+        if (spiFd < 0 || receiveJob?.isCompleted == false) return
 
         LoRaLogger.i(LoRaTags.RADIO, "Starting receive mode")
         receiving = true
@@ -182,7 +193,7 @@ actual class LoRaRadio(
             applyProbeProfile(PROBE_RX_PROFILES[0])
             lastProfileSwitchMs = getTimeMillis()
         } else {
-            LoRaLogger.i(LoRaTags.RADIO, "Frequency: 868.125 MHz (confirmed), using configured LoRa profile")
+            LoRaLogger.i(LoRaTags.RADIO, "Receive frequency: ${currentConfig?.frequency?.div(1_000_000.0)} MHz, using configured LoRa profile")
         }
 
         // Start polling for received packets
@@ -205,59 +216,32 @@ actual class LoRaRadio(
         LoRaLogger.i(LoRaTags.RADIO, "Stopping receive mode")
         receiving = false
         receiveJob?.cancel()
-        receiveJob = null
 
         if (spiFd >= 0) {
             writeRegister(REG_OP_MODE, MODE_STDBY or MODE_LORA)
         }
     }
 
-    actual fun close() {
-        LoRaLogger.i(LoRaTags.RADIO, "Closing LoRa radio")
-        stopReceiving()
+    actual suspend fun shutdown() {
+        receiving = false
+        // Join polling before touching its descriptor. Cancellation alone is insufficient.
+        scope.coroutineContext[Job]?.cancelAndJoin()
+        receiveJob = null
+        close()
+    }
 
+    actual fun close() {
+        // Synchronous cleanup is only for initialization failure or after awaited shutdown.
+        check(receiveJob?.isCompleted != false) { "Use shutdown() to await active radio receive work" }
+        receiving = false
         if (spiFd >= 0) {
-            // Put module in sleep mode to save power
-            writeRegister(REG_OP_MODE, MODE_SLEEP or MODE_LORA)
-            platform.posix.close(spiFd)
+            if (currentConfig != null) writeRegister(REG_OP_MODE, MODE_SLEEP or MODE_LORA)
+            spi.close(spiFd)
             spiFd = -1
         }
         currentConfig = null
         scope.cancel()
-        LoRaServiceManager.restoreConflictingServices()
         emitEvent(LoRaEvent.Disconnected)
-    }
-
-    private fun configureSpi(): Boolean {
-        memScoped {
-            val mode = alloc<UByteVar>()
-            mode.value = 0u // SPI_MODE_0
-
-            // Set SPI mode
-            if (ioctl(spiFd, SPI_IOC_WR_MODE, mode.ptr) < 0) {
-                LoRaLogger.e(LoRaTags.SPI, "Failed to set SPI mode: ${strerror(errno)?.toKString()}")
-                return false
-            }
-
-            // Set bits per word
-            val bits = alloc<UByteVar>()
-            bits.value = 8u
-            if (ioctl(spiFd, SPI_IOC_WR_BITS_PER_WORD, bits.ptr) < 0) {
-                LoRaLogger.e(LoRaTags.SPI, "Failed to set bits per word")
-                return false
-            }
-
-            // Set max speed (1 MHz - SX1276 supports up to 10MHz)
-            val speed = alloc<UIntVar>()
-            speed.value = SPI_SPEED_HZ.toUInt()
-            if (ioctl(spiFd, SPI_IOC_WR_MAX_SPEED_HZ, speed.ptr) < 0) {
-                LoRaLogger.e(LoRaTags.SPI, "Failed to set SPI speed")
-                return false
-            }
-        }
-
-        LoRaLogger.d(LoRaTags.SPI, "SPI configured: mode=0, bits=8, speed=${SPI_SPEED_HZ}Hz")
-        return true
     }
 
     private fun initializeRadio(config: LoRaConfig): Boolean {
@@ -557,100 +541,11 @@ actual class LoRaRadio(
      * Uses full-duplex SPI transfer for reliable communication.
      */
     private fun writeRegister(register: Int, value: Int) {
-        memScoped {
-            val txBuf = allocArray<UByteVar>(2)
-            val rxBuf = allocArray<UByteVar>(2)
-
-            txBuf[0] = (register or 0x80).toUByte() // Write bit (MSB=1)
-            txBuf[1] = value.toUByte()
-
-            spiTransfer(txBuf, rxBuf, 2)
-        }
+        spi.transfer(spiFd, byteArrayOf((register or 0x80).toByte(), value.toByte()))
     }
 
-    /**
-     * Read a value from an SX1276 register via SPI.
-     * Uses full-duplex SPI transfer for reliable communication.
-     */
-    private fun readRegister(register: Int): Int {
-        memScoped {
-            val txBuf = allocArray<UByteVar>(2)
-            val rxBuf = allocArray<UByteVar>(2)
-
-            txBuf[0] = (register and 0x7F).toUByte() // Read bit (MSB=0)
-            txBuf[1] = 0u // Dummy byte to clock out response
-
-            spiTransfer(txBuf, rxBuf, 2)
-
-            return rxBuf[1].toInt() and 0xFF
-        }
-    }
-
-    /**
-     * Perform a full-duplex SPI transfer using ioctl(SPI_IOC_MESSAGE).
-     * This is the proper way to do SPI on Linux - simultaneous read/write.
-     */
-    private fun MemScope.spiTransfer(
-        txBuf: CArrayPointer<UByteVar>,
-        rxBuf: CArrayPointer<UByteVar>,
-        len: Int
-    ) {
-        // Allocate spi_ioc_transfer structure
-        // struct spi_ioc_transfer {
-        //     __u64 tx_buf;           // offset 0
-        //     __u64 rx_buf;           // offset 8
-        //     __u32 len;              // offset 16
-        //     __u32 speed_hz;         // offset 20
-        //     __u16 delay_usecs;      // offset 24
-        //     __u8  bits_per_word;    // offset 26
-        //     __u8  cs_change;        // offset 27
-        //     __u8  tx_nbits;         // offset 28
-        //     __u8  rx_nbits;         // offset 29
-        //     __u8  word_delay_usecs; // offset 30
-        //     __u8  pad;              // offset 31
-        // }; // Total: 32 bytes
-
-        val transfer = allocArray<UByteVar>(32)
-
-        // Zero out the structure
-        for (i in 0 until 32) {
-            transfer[i] = 0u
-        }
-
-        // Set tx_buf pointer (offset 0, 8 bytes)
-        val txPtr = txBuf.toLong().toULong()
-        for (i in 0 until 8) {
-            transfer[i] = ((txPtr shr (i * 8)) and 0xFFu).toUByte()
-        }
-
-        // Set rx_buf pointer (offset 8, 8 bytes)
-        val rxPtr = rxBuf.toLong().toULong()
-        for (i in 0 until 8) {
-            transfer[8 + i] = ((rxPtr shr (i * 8)) and 0xFFu).toUByte()
-        }
-
-        // Set len (offset 16, 4 bytes)
-        transfer[16] = (len and 0xFF).toUByte()
-        transfer[17] = ((len shr 8) and 0xFF).toUByte()
-        transfer[18] = ((len shr 16) and 0xFF).toUByte()
-        transfer[19] = ((len shr 24) and 0xFF).toUByte()
-
-        // Set speed_hz (offset 20, 4 bytes)
-        val speed = SPI_SPEED_HZ
-        transfer[20] = (speed and 0xFF).toUByte()
-        transfer[21] = ((speed shr 8) and 0xFF).toUByte()
-        transfer[22] = ((speed shr 16) and 0xFF).toUByte()
-        transfer[23] = ((speed shr 24) and 0xFF).toUByte()
-
-        // Set bits_per_word (offset 26)
-        transfer[26] = 8u
-
-        // Perform the SPI transfer
-        val result = ioctl(spiFd, SPI_IOC_MESSAGE_1, transfer)
-        if (result < 0) {
-            LoRaLogger.e(LoRaTags.SPI, "SPI transfer failed: ${strerror(errno)?.toKString()}")
-        }
-    }
+    private fun readRegister(register: Int): Int =
+        spi.transfer(spiFd, byteArrayOf((register and 0x7F).toByte(), 0))[1].toInt() and 0xFF
 
     /**
      * Get current time in milliseconds (for timeout calculations).
@@ -664,9 +559,7 @@ actual class LoRaRadio(
     }
 
     private fun emitEvent(event: LoRaEvent) {
-        scope.launch {
-            _events.emit(event)
-        }
+        _events.tryEmit(event)
     }
 
     companion object {
@@ -677,15 +570,6 @@ actual class LoRaRadio(
 
         // SPI configuration
         private const val SPI_SPEED_HZ = 1_000_000 // 1 MHz
-
-        // SPI ioctl constants (from linux/spi/spidev.h)
-        // _IOW('k', 0, sizeof(spi_ioc_transfer)) for 1 transfer
-        // = 0x40 (write) | (32 << 16) | ('k' << 8) | 0
-        // = 0x40206B00
-        private const val SPI_IOC_MESSAGE_1: ULong = 0x40206B00uL
-        private const val SPI_IOC_WR_MODE: ULong = 0x40016B01uL
-        private const val SPI_IOC_WR_BITS_PER_WORD: ULong = 0x40016B03uL
-        private const val SPI_IOC_WR_MAX_SPEED_HZ: ULong = 0x40046B04uL
 
         // SX1276 registers
         private const val REG_FIFO = 0x00

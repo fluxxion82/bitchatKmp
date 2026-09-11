@@ -7,6 +7,8 @@ import com.bitchat.lora.radio.LoRaEvent
 import com.fazecast.jSerialComm.SerialPort
 import com.fazecast.jSerialComm.SerialPortDataListener
 import com.fazecast.jSerialComm.SerialPortEvent
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,7 +26,7 @@ import kotlinx.coroutines.launch
 actual class LoRaRadio {
     private var serialPort: SerialPort? = null
     private var currentConfig: LoRaConfig? = null
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val _events = MutableSharedFlow<LoRaEvent>(extraBufferCapacity = 64)
     actual val events: Flow<LoRaEvent> = _events.asSharedFlow()
@@ -36,6 +38,10 @@ actual class LoRaRadio {
     private var receiving = false
 
     actual fun configure(config: LoRaConfig): Boolean {
+        if (isReady) return currentConfig == config
+        if (scope.coroutineContext[Job]?.isActive != true) {
+            scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        }
         LoRaLogger.i(LoRaTags.RADIO, "Configuring LoRa radio: $config")
 
         val port = findLoRaPort()
@@ -110,6 +116,12 @@ actual class LoRaRadio {
         receiving = false
         // AT+IDLE returns to idle mode
         sendATCommand("AT+IDLE")
+    }
+
+    actual suspend fun shutdown() {
+        val oldJob = scope.coroutineContext[Job]
+        close()
+        oldJob?.cancelAndJoin()
     }
 
     actual fun close() {
@@ -226,8 +238,6 @@ actual class LoRaRadio {
     }
 
     private fun emitEvent(event: LoRaEvent) {
-        scope.launch {
-            _events.emit(event)
-        }
+        _events.tryEmit(event)
     }
 }

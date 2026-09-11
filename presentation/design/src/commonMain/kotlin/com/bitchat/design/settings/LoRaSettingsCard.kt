@@ -17,6 +17,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,6 +33,8 @@ import com.bitchat.design.icons.filled.Radio
 import com.bitchat.domain.lora.model.LoRaProtocolType
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
+import com.bitchat.viewvo.settings.LoRaSwitchStatus
+import com.bitchat.viewvo.settings.LoRaSettingsOperation
 
 @Composable
 fun LoRaSettingsCard(
@@ -40,14 +43,19 @@ fun LoRaSettingsCard(
     loraTxPower: LoRaTxPower,
     loraShowPeers: Boolean,
     loraProtocol: LoRaProtocolType,
+    loraOperation: LoRaSettingsOperation,
+    loraSwitchStatus: LoRaSwitchStatus,
+    loraSwitchError: String?,
     onLoRaEnabledToggled: (Boolean) -> Unit,
     onLoRaRegionSelected: (LoRaRegion) -> Unit,
     onLoRaTxPowerSelected: (LoRaTxPower) -> Unit,
     onLoRaShowPeersToggled: (Boolean) -> Unit,
     onLoRaProtocolSelected: (LoRaProtocolType) -> Unit,
+    onLoRaRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val switching = loraSwitchStatus == LoRaSwitchStatus.SWITCHING
 
     Column(modifier = modifier.padding(horizontal = 20.dp)) {
         Text(
@@ -69,7 +77,8 @@ fun LoRaSettingsCard(
                     title = "LoRa Transport",
                     subtitle = "Enable long-range radio communication",
                     checked = loraEnabled,
-                    onCheckedChange = onLoRaEnabledToggled
+                    onCheckedChange = onLoRaEnabledToggled,
+                    enabled = !switching,
                 )
 
                 if (loraEnabled) {
@@ -84,7 +93,8 @@ fun LoRaSettingsCard(
                         subtitle = "Radio frequency band for your location",
                         currentValue = loraRegion.toDisplayName(),
                         options = LoRaRegion.entries.map { it to it.toDisplayName() },
-                        onOptionSelected = { onLoRaRegionSelected(it) }
+                        onOptionSelected = { onLoRaRegionSelected(it) },
+                        enabled = !switching,
                     )
 
                     HorizontalDivider(
@@ -98,7 +108,8 @@ fun LoRaSettingsCard(
                         subtitle = "Transmit power level",
                         currentValue = loraTxPower.toDisplayName(),
                         options = LoRaTxPower.entries.map { it to it.toDisplayName() },
-                        onOptionSelected = { onLoRaTxPowerSelected(it) }
+                        onOptionSelected = { onLoRaTxPowerSelected(it) },
+                        enabled = !switching,
                     )
 
                     HorizontalDivider(
@@ -126,8 +137,37 @@ fun LoRaSettingsCard(
                         subtitle = "LoRa messaging protocol",
                         currentValue = loraProtocol.displayName,
                         options = LoRaProtocolType.entries.map { it to it.displayName },
-                        onOptionSelected = { onLoRaProtocolSelected(it) }
+                        onOptionSelected = { onLoRaProtocolSelected(it) },
+                        enabled = !switching,
                     )
+
+                    Column(modifier = Modifier.padding(start = 52.dp, end = 16.dp, bottom = 12.dp)) {
+                        Text(
+                            text = when (loraSwitchStatus) {
+                                LoRaSwitchStatus.IDLE -> "Saved selection"
+                                LoRaSwitchStatus.SWITCHING -> when (loraOperation) {
+                                    LoRaSettingsOperation.PROTOCOL -> "Switching to ${loraProtocol.displayName}…"
+                                    LoRaSettingsOperation.REGION -> "Applying radio region…"
+                                    LoRaSettingsOperation.TX_POWER -> "Applying transmit power…"
+                                }
+                                LoRaSwitchStatus.READY -> when (loraOperation) {
+                                    LoRaSettingsOperation.PROTOCOL -> "Last switch initialized ${loraProtocol.displayName} successfully"
+                                    LoRaSettingsOperation.REGION -> "Radio region applied successfully"
+                                    LoRaSettingsOperation.TX_POWER -> "Transmit power applied successfully"
+                                }
+                                LoRaSwitchStatus.FAILED -> loraSwitchError ?: "LoRa could not start. Check the radio service logs, then retry."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (loraSwitchStatus == LoRaSwitchStatus.FAILED) colorScheme.error else colorScheme.onSurfaceVariant,
+                        )
+                        if (loraSwitchStatus == LoRaSwitchStatus.FAILED &&
+                            (loraOperation == LoRaSettingsOperation.PROTOCOL || loraProtocol == LoRaProtocolType.BITCHAT)
+                        ) {
+                            TextButton(onClick = onLoRaRetry) {
+                                Text("Retry")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -148,6 +188,7 @@ private fun <T> LoRaDropdownRow(
     currentValue: String,
     options: List<Pair<T, String>>,
     onOptionSelected: (T) -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -156,7 +197,7 @@ private fun <T> LoRaDropdownRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable { expanded = true }
+            .clickable(enabled = enabled) { expanded = true }
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -195,7 +236,7 @@ private fun <T> LoRaDropdownRow(
         }
 
         DropdownMenu(
-            expanded = expanded,
+            expanded = expanded && enabled,
             onDismissRequest = { expanded = false }
         ) {
             options.forEach { (option, displayName) ->

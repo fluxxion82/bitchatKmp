@@ -17,6 +17,9 @@ import com.bitchat.lora.meshtastic.proto.RegionCode
 import com.bitchat.lora.meshtastic.proto.ToRadio
 import com.bitchat.lora.radio.LoRaConfig
 import okio.ByteString.Companion.decodeBase64
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -83,6 +86,7 @@ class MeshtasticProtocol(
     val events: Flow<MeshtasticEvent> = _events.asSharedFlow()
 
     override val isReady: Boolean get() = serial.isConnected && configReceived
+    override val supportsRadioConfiguration: Boolean = false
     override val protocolName: String = "Meshtastic"
 
     override var deviceId: String = ""
@@ -142,7 +146,7 @@ class MeshtasticProtocol(
         println("📡 Starting Meshtastic protocol")
 
         // Create fresh scope for this session
-        scope?.cancel()
+        if (scope != null) stop()
         scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
         // Subscribe to disconnect notifications for auto-reconnection
@@ -152,8 +156,7 @@ class MeshtasticProtocol(
 
         if (!serial.open()) {
             println("❌ Failed to open Meshtastic serial connection")
-            scope?.cancel()
-            scope = null
+            stop()
             return false
         }
 
@@ -196,6 +199,8 @@ class MeshtasticProtocol(
             return
         }
 
+        if (scope?.isActive != true) return
+        reconnecting = true
         reconnectJob?.cancel()
         reconnectJob = scope?.launch {
             println("⚠️ Meshtastic connection lost, attempting reconnection...")
@@ -212,11 +217,9 @@ class MeshtasticProtocol(
                 println("🔄 Reconnection attempt $attempt/$maxAttempts...")
                 emitEvent(MeshtasticEvent.Reconnecting)
 
-                if (serial.open()) {
+                if (serial.reconnect()) {
                     println("✅ Reconnected to meshtasticd")
 
-                    // Restart the incoming listener
-                    startIncomingListener()
 
                     // Wait for connection to stabilize
                     delay(500)
@@ -244,19 +247,13 @@ class MeshtasticProtocol(
         }
     }
 
-    override fun stop() {
-        println("📡 Stopping Meshtastic protocol")
-
-        reconnectJob?.cancel()
-        reconnectJob = null
-        configJob?.cancel()
-        configJob = null
-
+    override suspend fun stop() = withContext(NonCancellable) {
         serial.onDisconnect = null
-        serial.close()
-        scope?.cancel()
+        val oldScope = scope
         scope = null
-
+        oldScope?.coroutineContext?.get(Job)?.cancelAndJoin()
+        reconnectJob = null
+        configJob = null
         _peers.value = emptyList()
         configReceived = false
         channelConfigured = false
@@ -265,6 +262,7 @@ class MeshtasticProtocol(
         loraConfigApplied = false
         channelConfigApplied = false
         reconnecting = false
+        serial.shutdown()
     }
 
     /**

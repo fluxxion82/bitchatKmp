@@ -9,12 +9,12 @@ import com.bitchat.domain.lora.repository.LoRaSettingsRepository
 class SetLoRaRegion(
     private val loraSettingsRepository: LoRaSettingsRepository,
     private val chatRepository: ChatRepository,
-) : Usecase<SetLoRaRegion.Params, Unit> {
+) : Usecase<SetLoRaRegion.Params, Boolean> {
 
     data class Params(val region: LoRaRegion, val currentTxPower: LoRaTxPower)
 
-    override suspend fun invoke(param: Params) {
+    override suspend fun invoke(param: Params): Boolean {
         loraSettingsRepository.setLoRaRegion(param.region)
-        chatRepository.reconfigureLoRa(param.region, param.currentTxPower)
+        return chatRepository.reconfigureLoRa(param.region, param.currentTxPower)
     }
 }

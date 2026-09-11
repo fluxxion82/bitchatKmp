@@ -10,6 +10,7 @@ import kotlinx.cinterop.refTo
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.sizeOf
 import kotlinx.cinterop.value
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
@@ -57,7 +58,7 @@ import platform.posix.write
 actual class MeshCoreSerial actual constructor() {
 
     companion object {
-        const val CONNECT_RETRY_COUNT = 5
+        const val CONNECT_RETRY_COUNT = 1
         const val INITIAL_RETRY_DELAY_MS = 1000
         const val MAX_RETRY_DELAY_MS = 16000
     }
@@ -75,6 +76,9 @@ actual class MeshCoreSerial actual constructor() {
     actual var onDisconnect: (() -> Unit)? = null
 
     actual fun open(): Boolean {
+        if (isConnected) return true
+        if (readJob?.isCompleted == false) return false
+
         // Ensure meshcore service is running before connecting
         if (!ensureMeshcoreRunning()) {
             return false
@@ -165,9 +169,30 @@ actual class MeshCoreSerial actual constructor() {
         return MeshCoreService.start()
     }
 
+    private suspend fun closeConnection() {
+        val oldJob = scope?.coroutineContext?.get(Job)
+        oldJob?.cancel()
+        // Wake a blocking read without releasing/reusing its descriptor yet.
+        if (socketFd >= 0) platform.posix.shutdown(socketFd, platform.posix.SHUT_RDWR)
+        oldJob?.cancelAndJoin()
+        close()
+        readJob = null
+        scope = null
+    }
+
+    actual suspend fun reconnect(): Boolean {
+        closeConnection()
+        return connectTcp()
+    }
+
+    actual suspend fun shutdown() {
+        onDisconnect = null
+        closeConnection()
+        check(MeshCoreService.stop()) { "Failed to stop meshcore daemon" }
+    }
+
     actual fun close() {
         readJob?.cancel()
-        readJob = null
 
         if (socketFd >= 0) {
             close(socketFd)
@@ -175,10 +200,7 @@ actual class MeshCoreSerial actual constructor() {
         }
 
         scope?.cancel()
-        scope = null
 
-        // Stop meshcore service to free up radio for other protocols
-        MeshCoreService.stop()
     }
 
     actual fun send(data: ByteArray): Boolean {
@@ -217,6 +239,7 @@ actual class MeshCoreSerial actual constructor() {
      * Start reading from the TCP socket.
      */
     private fun startReading() {
+        val readerFd = socketFd
         readJob = scope?.launch {
             println("📖 MeshCoreSerial: Read coroutine started, fd=$socketFd")
             var state: ReadState = ReadState.WAIT_START
@@ -224,26 +247,27 @@ actual class MeshCoreSerial actual constructor() {
             var framesReceived = 0
             val buffer = ByteArray(256)
 
-            while (isActive && isConnected) {
+            while (isActive && socketFd == readerFd && readerFd >= 0) {
                 try {
-                    val bytesRead = read(socketFd, buffer.refTo(0), buffer.size.convert())
+                    val bytesRead = read(readerFd, buffer.refTo(0), buffer.size.convert())
 
+                    if (!isActive || socketFd != readerFd) break
                     if (bytesRead < 0) {
                         val err = errno
                         if (err == EAGAIN || err == EWOULDBLOCK) {
                             continue // Timeout, retry
                         }
                         println("❌ Error reading from meshcore-pi: errno=$err")
-                        if (socketFd >= 0) {
-                            close(socketFd)
+                        if (socketFd == readerFd) {
+                            close(readerFd)
                             socketFd = -1
                         }
                         onDisconnect?.invoke()
                         break
                     } else if (bytesRead == 0L) {
                         println("📖 MeshCoreSerial: Connection closed by peer")
-                        if (socketFd >= 0) {
-                            close(socketFd)
+                        if (socketFd == readerFd) {
+                            close(readerFd)
                             socketFd = -1
                         }
                         onDisconnect?.invoke()
@@ -307,8 +331,8 @@ actual class MeshCoreSerial actual constructor() {
                 } catch (e: Exception) {
                     if (isActive) {
                         println("❌ Error reading from meshcore-pi: ${e.message}")
-                        if (socketFd >= 0) {
-                            close(socketFd)
+                        if (socketFd == readerFd) {
+                            close(readerFd)
                             socketFd = -1
                         }
                         onDisconnect?.invoke()

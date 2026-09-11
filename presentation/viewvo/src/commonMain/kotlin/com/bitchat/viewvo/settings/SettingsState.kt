@@ -37,7 +37,10 @@ data class SettingsState(
     val loraRegion: LoRaRegion = LoRaRegion.US_915,
     val loraTxPower: LoRaTxPower = LoRaTxPower.MEDIUM,
     val loraShowPeers: Boolean = true,
-    val loraProtocol: LoRaProtocolType = LoRaProtocolType.BITCHAT
+    val loraProtocol: LoRaProtocolType = LoRaProtocolType.BITCHAT,
+    val loraOperation: LoRaSettingsOperation = LoRaSettingsOperation.PROTOCOL,
+    val loraSwitchStatus: LoRaSwitchStatus = LoRaSwitchStatus.IDLE,
+    val loraSwitchError: String? = null,
 ) {
     /** Convenience for the many places that only care whether the switch is live. */
     val torAvailable: Boolean get() = torAvailability.isAvailable
@@ -55,3 +58,8 @@ enum class ThemePreference {
     LIGHT,
     DARK
 }
+
+/** Result of the latest explicit radio settings operation, not a live connection monitor. */
+enum class LoRaSwitchStatus { IDLE, SWITCHING, READY, FAILED }
+
+enum class LoRaSettingsOperation { PROTOCOL, REGION, TX_POWER }

@@ -3,6 +3,9 @@ package com.bitchat.lora.meshcore
 import com.bitchat.lora.LoRaPeer
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.radio.LoRaConfig
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,6 +53,7 @@ class MeshCoreProtocol(
     val events: Flow<MeshCoreEvent> = _events.asSharedFlow()
 
     override val isReady: Boolean get() = serial.isConnected && selfInfoReceived
+    override val supportsRadioConfiguration: Boolean = false
     override val protocolName: String = "MeshCore"
 
     override var deviceId: String = ""
@@ -105,7 +109,7 @@ class MeshCoreProtocol(
     override suspend fun start(config: LoRaConfig): Boolean {
         println("📡 Starting MeshCore protocol")
 
-        scope?.cancel()
+        if (scope != null) stop()
         scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
         serial.onDisconnect = {
@@ -114,8 +118,7 @@ class MeshCoreProtocol(
 
         if (!serial.open()) {
             println("❌ Failed to open MeshCore serial connection")
-            scope?.cancel()
-            scope = null
+            stop()
             return false
         }
 
@@ -133,29 +136,22 @@ class MeshCoreProtocol(
         return true
     }
 
-    override fun stop() {
-        println("📡 Stopping MeshCore protocol")
-
-        initJob?.cancel()
-        initJob = null
-        reconnectJob?.cancel()
-        reconnectJob = null
-        advertJob?.cancel()
-        advertJob = null
-        syncJob?.cancel()
-        syncJob = null
-
+    override suspend fun stop() = withContext(NonCancellable) {
         serial.onDisconnect = null
-        serial.close()
-        scope?.cancel()
+        val oldScope = scope
         scope = null
-
+        oldScope?.coroutineContext?.get(Job)?.cancelAndJoin()
+        initJob = null
+        reconnectJob = null
+        advertJob = null
+        syncJob = null
         _peers.value = emptyList()
         contacts.clear()
         deviceInfoReceived = false
         selfInfoReceived = false
         channelConfigured = false
         reconnecting = false
+        serial.shutdown()
     }
 
     override suspend fun send(data: ByteArray): Boolean {
@@ -566,6 +562,8 @@ class MeshCoreProtocol(
     private fun handleDisconnect() {
         if (reconnecting) return
 
+        if (scope?.isActive != true) return
+        reconnecting = true
         reconnectJob?.cancel()
         reconnectJob = scope?.launch {
             println("⚠️ MeshCore connection lost, attempting reconnection...")
@@ -583,9 +581,8 @@ class MeshCoreProtocol(
                 println("🔄 Reconnection attempt $attempt/$maxAttempts...")
                 emitEvent(MeshCoreEvent.Reconnecting)
 
-                if (serial.open()) {
+                if (serial.reconnect()) {
                     println("✅ Reconnected to MeshCore daemon")
-                    startIncomingListener()
                     delay(STEP_DELAY_MS)
                     beginStartupSequence()
                     emitEvent(MeshCoreEvent.Reconnected)

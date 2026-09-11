@@ -12,6 +12,11 @@ import com.bitchat.lora.bitchat.protocol.RangePiBeacon
 import com.bitchat.lora.bitchat.radio.LoRaRadio
 import com.bitchat.lora.radio.LoRaConfig
 import com.bitchat.lora.radio.LoRaEvent
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -60,14 +65,19 @@ import kotlin.time.Instant
  * }
  * ```
  */
-class BitChatLoRaProtocol(
-    private val radio: LoRaRadio,
+class BitChatLoRaProtocol internal constructor(
+    private val radio: BitChatRadio,
     private val fragmenter: LoRaFragmenter,
     private val assembler: LoRaAssembler,
-    private val beaconProbeEnabled: Boolean = false
+    private val beaconProbeEnabled: Boolean = false,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.Default
 ) : LoRaProtocol {
 
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    constructor(radio: LoRaRadio, fragmenter: LoRaFragmenter, assembler: LoRaAssembler,
+                beaconProbeEnabled: Boolean = false) :
+        this(PlatformBitChatRadio(radio), fragmenter, assembler, beaconProbeEnabled)
+
+    private var scope: CoroutineScope? = null
 
     // Peer tracking
     private val _peers = MutableStateFlow<List<LoRaPeer>>(emptyList())
@@ -103,13 +113,16 @@ class BitChatLoRaProtocol(
     override suspend fun start(config: LoRaConfig): Boolean {
         LoRaLogger.i(LoRaTags.TRANSPORT, "Starting LoRa transport (BitChat protocol)")
 
+        if (scope != null) stop()
         if (!radio.configure(config)) {
+            withContext(NonCancellable) { radio.shutdown() }
             LoRaLogger.e(LoRaTags.TRANSPORT, "Failed to configure radio")
             return false
         }
 
-        // Start listening to radio events
-        scope.launch {
+        scope = CoroutineScope(dispatcher + SupervisorJob())
+        // Attach before enabling RX so packets from the new session cannot be missed.
+        scope?.launch(start = CoroutineStart.UNDISPATCHED) {
             radio.events.collect { event ->
                 handleRadioEvent(event)
             }
@@ -125,23 +138,16 @@ class BitChatLoRaProtocol(
         return true
     }
 
-    override fun stop() {
+    override suspend fun stop() = withContext(NonCancellable) {
         LoRaLogger.i(LoRaTags.TRANSPORT, "Stopping LoRa transport")
-
-        // Cancel background jobs
-        heartbeatJob?.cancel()
+        val oldScope = scope
+        scope = null
+        oldScope?.coroutineContext?.get(Job)?.cancelAndJoin()
         heartbeatJob = null
-        peerCleanupJob?.cancel()
         peerCleanupJob = null
-
-        // Clear peer list
-        scope.launch {
-            _peers.emit(emptyList())
-        }
-
-        radio.stopReceiving()
-        radio.close()
-        scope.cancel()
+        _peers.value = emptyList()
+        assembler.clear()
+        radio.shutdown()
         emitTransportEvent(TransportEvent.Stopped)
     }
 
@@ -220,7 +226,7 @@ class BitChatLoRaProtocol(
      */
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
-        heartbeatJob = scope.launch {
+        heartbeatJob = scope?.launch {
             // Send initial heartbeat after a short delay
             delay(1000)
 
@@ -260,7 +266,7 @@ class BitChatLoRaProtocol(
      */
     private fun startPeerCleanup() {
         peerCleanupJob?.cancel()
-        peerCleanupJob = scope.launch {
+        peerCleanupJob = scope?.launch {
             while (isActive) {
                 delay(PEER_CLEANUP_INTERVAL_MS)
                 cleanupStalePeers()
@@ -432,9 +438,7 @@ class BitChatLoRaProtocol(
     }
 
     private fun emitTransportEvent(event: TransportEvent) {
-        scope.launch {
-            _transportEvents.emit(event)
-        }
+        _transportEvents.tryEmit(event)
     }
 
     companion object {
