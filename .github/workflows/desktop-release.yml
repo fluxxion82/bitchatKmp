@@ -1,0 +1,126 @@
+name: Desktop release
+
+# Builds the Arti native library and packages the desktop app with it inside.
+#
+# The point of doing this here is that nobody installing bitchat should have to install a Rust
+# toolchain. The library is a build-time product: the desktop build stages every .so/.dylib from
+# data/remote/tor/native/libs/desktop into the application's own resources, so once this workflow
+# has built it, the installer carries it and Tor works on first launch.
+#
+# data/remote/tor/native/build-desktop.sh stays the developer path for building it locally.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - 'data/remote/tor/native/**'
+      - '.github/workflows/desktop-release.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x64
+            os: ubuntu-latest
+            lib: libarti_desktop.so
+            package: packageDeb packageRpm
+          - label: macos-arm64
+            os: macos-14
+            lib: libarti_desktop.dylib
+            package: packageDmg
+          - label: macos-x64
+            os: macos-13
+            lib: libarti_desktop.dylib
+            package: packageDmg
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Arti is a submodule pinned to a specific commit. Without this the build script would
+          # have to clone a tag instead, which is not guaranteed to be the commit this repo pins.
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/bitchat-arti/src/arti-desktop-wrapper/target
+          key: arti-${{ matrix.label }}-${{ hashFiles('data/remote/tor/native/arti-desktop-wrapper/Cargo.lock', 'data/remote/tor/native/ARTI_VERSION') }}
+          restore-keys: arti-${{ matrix.label }}-
+
+      # --install puts the library where the desktop build stages it from. That is the whole
+      # purpose of this job, so unlike a local build it is always installed here.
+      - name: Build the Arti native library
+        run: bash data/remote/tor/native/build-desktop.sh --install
+
+      - name: Confirm the library was staged
+        run: |
+          set -eu
+          test -f "data/remote/tor/native/libs/desktop/${{ matrix.lib }}"
+          ls -lh data/remote/tor/native/libs/desktop/
+
+      # jpackage shells out to rpmbuild for packageRpm, and ubuntu-latest does not ship it.
+      # Without this the Linux job builds the library fine and then fails at packaging.
+      - name: Install packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm fakeroot
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Package the desktop app
+        run: ./gradlew ${{ matrix.package }} --console=plain
+
+      # Uploaded separately from the installers so the library can be inspected on its own, and so
+      # a failed packaging step still yields something useful.
+      - name: Upload the native library
+        uses: actions/upload-artifact@v4
+        with:
+          name: arti-${{ matrix.label }}
+          path: data/remote/tor/native/libs/desktop/${{ matrix.lib }}
+          if-no-files-found: error
+
+      - name: Upload the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitchat-desktop-${{ matrix.label }}
+          # The whole tree rather than per-format globs: the exact subdirectory names come from
+          # the Compose plugin, and this has never been run here -- the local JDK has no jmods, so
+          # jpackage cannot execute. Uploading the directory removes the guess.
+          path: apps/desktop/build/compose/binaries/main/**
+          if-no-files-found: error
+
+  release:
+    name: Attach to the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          fail_on_unmatched_files: true

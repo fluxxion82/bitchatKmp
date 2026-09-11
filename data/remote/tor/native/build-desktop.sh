@@ -124,22 +124,44 @@ check_prerequisites() {
   print_success "Rust $(rustc --version | cut -d' ' -f2)"
 
   mkdir -p "$BUILD_ROOT"
-  local fstype
-  fstype="$(df -T "$BUILD_ROOT" 2>/dev/null | awk 'NR==2 {print $2}')"
-  case "$fstype" in
-    ntfs|ntfs3|fuseblk|exfat|vfat)
-      print_error "Build directory is on $fstype: $BUILD_ROOT"
-      print_error "Arti has corrupted this filesystem when built on it."
-      print_error "Set BITCHAT_ARTI_BUILD_ROOT to a path on ext4/btrfs/xfs."
-      exit 1
-      ;;
-  esac
-  print_success "Build directory on $fstype: $BUILD_ROOT"
 
+  # Filesystem check is Linux-only: it reads /proc/mounts, which is where the type is knowable
+  # without GNU-specific df flags. Elsewhere -- macOS and CI runners on other systems -- it simply
+  # does not apply, and build.rs carries the same guard for anyone who bypasses this script.
+  if [ -r /proc/mounts ]; then
+    local target
+    target="$(cd "$BUILD_ROOT" && pwd -P)"
+    local fstype=""
+    local best=0
+    while read -r _dev mount type _rest; do
+      case "$mount" in
+        *'\'*) continue ;;
+      esac
+      case "$target/" in
+        "$mount"/*|"$mount")
+          if [ "${#mount}" -ge "$best" ]; then best="${#mount}"; fstype="$type"; fi
+          ;;
+      esac
+    done < /proc/mounts
+
+    case "$fstype" in
+      ntfs|ntfs3|fuseblk|exfat|vfat)
+        print_error "Build directory is on $fstype: $BUILD_ROOT"
+        print_error "Arti has corrupted this filesystem when built on it."
+        print_error "Set BITCHAT_ARTI_BUILD_ROOT to a path on ext4/btrfs/xfs."
+        exit 1
+        ;;
+    esac
+    print_success "Build directory on ${fstype:-unknown}: $BUILD_ROOT"
+  else
+    print_info "Skipping filesystem check (no /proc/mounts): $BUILD_ROOT"
+  fi
+
+  # df -Pk is POSIX; -BG and --output are GNU-only and silently produce nothing on macOS.
   local avail_gb
-  avail_gb="$(df -BG --output=avail "$BUILD_ROOT" 2>/dev/null | awk 'NR==2 {gsub(/G/,""); print $1}')"
-  if [ -n "$avail_gb" ] && [ "$avail_gb" -lt 15 ]; then
-    print_error "Only ${avail_gb}G free at $BUILD_ROOT; Arti needs roughly 10-15G of build output."
+  avail_gb="$(df -Pk "$BUILD_ROOT" 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}')"
+  if [ -n "$avail_gb" ] && [ "$avail_gb" -lt 5 ]; then
+    print_error "Only ${avail_gb}G free at $BUILD_ROOT; this build needs a few GB of scratch space."
     exit 1
   fi
   print_success "${avail_gb:-?}G free, building with -j$JOBS"
