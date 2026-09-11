@@ -109,6 +109,27 @@ remote() { ssh -n "${SSH_OPTS[@]}" "$HOST" "$@"; }
 # ssh and rsync exit 255 when the transport itself failed, not the remote command.
 # The optional third argument is appended to the message (used once current is swapped).
 transport_check() { [[ "$1" != 255 ]] || die "ssh transport failure talking to $HOST ($2)${3:+; $3}"; }
+# Flush the device's page cache to the card.
+#
+# Uploading and verifying a release does not make it durable. sha256sum -c reads back through
+# the page cache, so it reports the bytes in RAM, not the bytes on the card -- a release can
+# verify perfectly while none of it has been written. The Orange Pi mounts root data=writeback
+# with commit=120 (Armbian's defaults, to spare the SD card), which leaves a window up to two
+# minutes wide where losing power turns freshly written files into zero-length ones that still
+# have valid metadata and their original mode. That is not theoretical: it emptied every file
+# of a verified release except the kexe, and a 0-byte ExecStartPre script with its +x bit
+# intact fails at boot with 203/EXEC.
+#
+# A clean reboot syncs, so this only matters when power is cut. Needs no privileges. Never
+# fatal: a release that is on the device but not yet flushed is still better than aborting,
+# and the device flushes on its own soon enough.
+sync_remote() {
+  local rc=0
+  remote "sync" || rc=$?
+  transport_check "$rc" "sync${1:+, $1}" "${2:-}"
+  [[ "$rc" == 0 ]] \
+    || echo "WARNING: sync failed on $HOST (exit $rc)${1:+ ($1)}; the release is not durable until the device flushes on its own -- do not cut power yet" >&2
+}
 
 # --- 2. build ---------------------------------------------------------------
 if [[ "$DO_BUILD" == 1 ]]; then
@@ -199,6 +220,11 @@ log "$RSYNC -> $HOST:$REMOTE_DIR/"
 rc=0; "$RSYNC" -a --delete -e "ssh ${SSH_OPTS[*]}" "$STAGE/" "$HOST:$REMOTE_DIR/" || rc=$?
 transport_check "$rc" "rsync"
 [[ "$rc" == 0 ]] || die "rsync failed (exit $rc)"
+
+# Before verifying, not after: the checksum pass below reads through the page cache either
+# way, but syncing first means what it verifies is also what survives a power cut.
+log "flushing the upload to disk on $HOST"
+sync_remote "after upload"
 
 # --- 9. verify on the device: checksums, then the exact identity line -------
 log "verifying checksums and --version on $HOST"
@@ -408,6 +434,14 @@ if [[ "$DO_RESTART" == 1 ]]; then
   echo "--- journal for invocation $INV (last 15 lines) ---"
   printf '%s\n' "$JOURNAL" | tail -n 15
 fi
+
+# --- 11b. flush everything written since the upload -------------------------
+# The current symlink, ~/bitchat-embedded.kexe and /etc/systemd/system/bitchat.service are all
+# written after the sync in step 8, and a release the device cannot find at boot is as broken
+# as one with empty files. Runs whatever --no-restart did, because the symlink swap happens
+# either way.
+log "flushing the switch to disk on $HOST"
+sync_remote "after switch" "$SWAPPED"
 
 # --- 12. summary ------------------------------------------------------------
 echo
