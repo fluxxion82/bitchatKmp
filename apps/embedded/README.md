@@ -1,8 +1,16 @@
 # Bitchat Embedded
 
-Kotlin/Native `linuxArm64` binary for running bitchat on an Orange Pi Zero 3 with an Elecrow 5" HDMI touch display (800x480) and M5Stack CardKB I2C keyboard. No JVM, no desktop environment.
+Kotlin/Native `linuxArm64` binary for running bitchat on an Orange Pi Zero 3 with an HDMI/USB capacitive touch display and M5Stack CardKB I2C keyboard. The older Elecrow SPI resistive screen remains supported. No JVM, no desktop environment.
 
 Uses a DRM/GBM/EGL rendering pipeline with upstream Skiko (`skiko-linuxarm64`, whose bundled Skia is EGL-only since 0.9.47).
+
+## LoRa and the current PCB
+
+Use the [Orange Pi Zero 3 PCB profile](docs/ORANGEPI_ZERO3_PCB.md): SPI1.1, DIO0 GPIO 70/header 11, no software reset. RESET physically reaches header 7/GPIO 73, shared with the PMIC interrupt; software must drive neither that line nor the unrelated GPIO 71. Keep `spi1-enable` and `spi1-cs1-touch` even when touch uses USB.
+
+The app's saved Settings → LoRa selection determines the radio owner at startup. It supports MeshCore (`meshcored`/TCP 5000), Meshtastic (`meshtasticd`/TCP 4403), and direct BitChat SPI. Current daemon units remain installed but disabled at boot; `bitchat.service` stays enabled. The old environment/config-file selection overrides are unused. A failed old-owner shutdown blocks a new start, and failed initialization permits a fresh bounded explicit retry without claiming a connected radio.
+
+Radio runtime changes use the explicit audit/apply workflow in `scripts/configure-pi-lora.sh --help`, independently of ordinary app deployment. It creates backups and preserves identities, channels, credentials, and the saved protocol. See [LoRa testing](../../scripts/LORA_TESTING.md) for the default read-only probe. Protocol initialization and over-the-air messages require separate verification from software lifecycle tests.
 
 ## Prerequisites
 
@@ -169,8 +177,8 @@ Key-based ssh must work (`-o BatchMode=yes`) and the user must be in the `video`
 The post-restart check runs `journalctl` and `systemctl is-active`/`show` without sudo, so the ssh user also needs
 journal read access (the `systemd-journal` group above, or an equivalent); reconnect after `usermod` so the new group applies.
 
-Boot ordering: `bitchat.service` is `After=multi-user.target cardkb.service xpt2046-touch.service`, and naming the
-target there is load-bearing. `cardkb.service` is the CardKB I2C-to-uinput daemon and is tracked in this repo at
+Boot ordering: `bitchat.service` is `After=multi-user.target cardkb.service`, and naming the
+target there is load-bearing. The USB profile no longer depends on `xpt2046-touch.service`. `cardkb.service` is the CardKB I2C-to-uinput daemon and is tracked in this repo at
 `scripts/cardkb/cardkb.service` (installed by `scripts/cardkb/install-cardkb.sh`); `xpt2046-touch.service` is the touch
 daemon and exists only on the device, not in this repo. Both are `After=multi-user.target` and `WantedBy=multi-user.target`.
 
@@ -193,7 +201,7 @@ prints a loud ERROR banner if the cycle is back.
 
 The app also scans for its input devices only once at startup (`KeyboardInput.findKeyboardDevice`,
 `TouchInput.findTouchDevice`), so `ExecStartPre` runs `wait-for-input-devices.sh` (shipped in the release directory,
-`TimeoutStartSec=120` covers it). It waits up to 20 s for both `CardKb-I2C` and `XPT2046 Touchscreen` to appear in
+`TimeoutStartSec=120` covers it). It waits up to 20 s for `CardKb-I2C` and either `QDtech MPI5001` or `XPT2046 Touchscreen` (`BITCHAT_TOUCH_NAME` overrides the touch name) to appear in
 `/sys/class/input/event*/device/name` (the name is on the parent input device, not the event device) *and* for their `/dev/input/event*` node to be readable — udev applies permissions
 asynchronously, so a sysfs name alone does not mean the app can open it — then always exits 0, logging what was missing
 if it gave up. Run it by hand with an optional timeout:

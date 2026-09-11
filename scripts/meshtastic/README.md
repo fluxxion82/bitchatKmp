@@ -1,30 +1,12 @@
-# Meshtastic Runtime Files (Pi)
+# Meshtastic runtime files for the Orange Pi PCB
 
-This folder stores runtime files copied from the working Orange Pi setup.
+These files implement the [current PCB profile](../../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md). They are deployment inputs, not evidence of successful radio initialization.
 
-Canonical setup guide:
-- [`../../docs/meshtastic-orangepi-setup.md`](../../docs/meshtastic-orangepi-setup.md)
+- `lora-rfm95w-opi3.yaml` supplies SPI1.1, 500 kHz, and IRQ GPIO 70. It intentionally omits reset control.
+- `reset-lora.sh`, installed at `/usr/local/bin/reset-lora.sh` for an existing `ExecStartPre` hook, is an explicit no-op. The PCB RESET net shares the PMIC interrupt. It must not pulse GPIO 71 or 73.
 
-## Files
+From the repository root use `scripts/configure-pi-lora.sh --help` for the audit/explicit-apply workflow. Review all effective Meshtastic YAML files for stale `Lora.Reset` fields before applying; simply installing this fragment does not erase assignments from another file. Omit the field rather than supplying `Reset: -1`.
 
-- `reset-lora.sh`
-  - Installed on Pi at: `/usr/local/bin/reset-lora.sh`
-  - Used by `meshtasticd` as `ExecStartPre`.
+Preserve Meshtastic node identity, channels, keys, and RF settings. Keep its service installed and disabled at boot; the app starts it when the saved protocol is Meshtastic. Do not blindly restart it during installation while another protocol owns SPI.
 
-- `lora-rfm95w-opi3.yaml`
-  - Installed on Pi at: `/etc/meshtasticd/config.d/lora-rfm95w-opi3.yaml`
-  - Contains LoRa hardware mapping (`spidev`, IRQ, reset lines, speed).
-
-## Install on a Pi
-
-```bash
-sudo install -m 755 reset-lora.sh /usr/local/bin/reset-lora.sh
-sudo install -m 644 lora-rfm95w-opi3.yaml /etc/meshtasticd/config.d/lora-rfm95w-opi3.yaml
-sudo systemctl daemon-reload
-sudo systemctl restart meshtasticd
-```
-
-## Notes
-
-- These are runtime deployment files, not firmware source files.
-- Keep this folder in sync whenever you change Pi-side runtime config.
+See the [Meshtastic guide](../../docs/meshtastic-orangepi-setup.md) for build and readiness checks and [LoRa testing](../LORA_TESTING.md) for a read-only probe.

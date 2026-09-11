@@ -9,18 +9,18 @@ See also:
 
 - **Orange Pi Zero 3** (Allwinner H618, aarch64)
 - **RFM95W / SX1276** LoRa radio module (915 MHz band)
-- Wiring: RFM95W connected to SPI1.1 with DIO0 on GPIO 70 and RESET on GPIO 71 (gpiochip1)
+- Wiring: SPI1.1, DIO0 GPIO 70/header 11, software reset disabled. See the [current PCB profile](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md).
 
 ### SPI Wiring (Orange Pi Zero 3 to RFM95W)
 
 | RFM95W Pin | Orange Pi Pin | Notes |
 |------------|---------------|-------|
-| MOSI       | SPI1 MOSI     | |
-| MISO       | SPI1 MISO     | |
-| SCK        | SPI1 SCLK     | |
-| NSS/CS     | SPI1 CS1      | Directly mapped to `/dev/spidev1.1` |
-| DIO0 (IRQ) | gpiochip1 pin 70 | Interrupt pin for RX/TX complete |
-| RESET      | gpiochip1 pin 71 | Radio hardware reset |
+| MOSI       | Header 19 / PH7 | GPIO 231 |
+| MISO       | Header 21 / PH8 | GPIO 232 |
+| SCK        | Header 23 / PH6 | GPIO 230 |
+| NSS/CS     | Header 24 / PH9 | Directly mapped to `/dev/spidev1.1` |
+| DIO0 (IRQ) | Header 11 / PC6 / offset 70 | Interrupt pin for RX/TX complete |
+| RESET      | Header 7 / PC9 / GPIO 73 | Shared PMIC IRQ; no software reset output |
 | VCC        | 3.3V          | |
 | GND        | GND           | |
 
@@ -34,7 +34,7 @@ Linux 6.12.x-current-sunxi64
 
 ### Enable SPI
 
-Ensure SPI1 is enabled in the device tree / Armbian config. Verify:
+Keep the existing SPI1 overlays, including `spi1-cs1-touch`, which also supplies LoRa CS1 with USB touch. Do not alter the SPI0 flash binding. Verify:
 ```bash
 ls /dev/spidev1.*
 # Should show: /dev/spidev1.0  /dev/spidev1.1
@@ -64,22 +64,11 @@ export PATH=$HOME/.local/bin:$PATH
 
 ## Resource Contention: meshcored vs meshtasticd
 
-> **meshcored and meshtasticd cannot run simultaneously.** Both daemons use the same SPI device (`/dev/spidev1.1`) and GPIO lines (70, 71). If one is running, the other will fail to claim the GPIO lines and crash-loop.
+The two daemons and direct BitChat use the same SPI1.1 radio. The app serializes ownership changes and verifies the old service/job/manual process has stopped before starting the selected protocol. A failed stop blocks the new owner; a failed startup is cleaned up and can be retried explicitly.
 
-Always stop one before starting the other:
+Select MeshCore under Settings → LoRa. The saved app-user setting in `~/.bitchat/settings/lora_settings.prefs` determines startup. `LORA_PROTOCOL` and `/opt/bitchat/lora-protocol.conf` are obsolete, unused selection overrides. Keep the daemon units installed and disabled at boot; `bitchat.service` starts the selected one. The legacy Python `meshcore.service` remains disabled.
 
-```bash
-# Switch to meshcored
-sudo systemctl stop meshtasticd && sudo systemctl start meshcored
-
-# Switch to meshtasticd
-sudo systemctl stop meshcored && sudo systemctl start meshtasticd
-```
-
-If either daemon is crash-looping, check that the other is stopped:
-```bash
-sudo systemctl status meshtasticd meshcored
-```
+Before manual diagnostics or replacing a daemon binary, stop the app first, then both daemons, and verify there are no pending service jobs or manual daemon processes. Use [the diagnostic workflow](../scripts/LORA_TESTING.md). Do not connect a second TCP client to MeshCore while the app is connected; MeshCore's companion interface has one client slot.
 
 ## Source Code
 
@@ -99,7 +88,7 @@ The fork branch already includes the Orange Pi Zero 3 + SX1276 changes below. Yo
 
 | File | Change | Why |
 |------|--------|-----|
-| `variants/linux/LinuxBoard.cpp` | `gpioInit(256)` instead of default 64 | Default GPIO range too small for pins 70/71 on gpiochip1 |
+| `variants/linux/LinuxBoard.cpp` | `gpioInit(256)` instead of default 64 | Default GPIO range too small for IRQ offset 70 on gpiochip1 |
 | `variants/linux/LinuxBoard.h` | Added `gpio_chip` field (default `"gpiochip0"`) | Allows runtime gpiochip selection via ini config |
 | `variants/linux/platformio.ini` | New `[env:linux_companion_sx1276]` target | SX1276-specific build environment |
 | `variants/linux/target.cpp` | `resetAGC()` call after radio param changes | Fixes radio stuck in STANDBY after `CMD_SET_RADIO_PARAMS` (see Troubleshooting) |
@@ -145,11 +134,11 @@ lat = 0.0
 lon = 0.0
 
 # Orange Pi Zero 3 with RFM95W on SPI1.1
-# GPIO pins are on gpiochip1 (H616/H618)
+# gpiochip1 is the verified main GPIO controller on this Pi
 spidev = /dev/spidev1.1
 gpio_chip = gpiochip1
 lora_irq_pin = 70
-lora_reset_pin = 71
+# Software reset disabled: omit lora_reset_pin (PCB RESET shares PMIC IRQ)
 #lora_nss_pin =     # SS handled by spidev
 #lora_busy_pin =    # SX1276 has no busy pin
 
@@ -161,7 +150,7 @@ lora_cr = 5
 lora_tx_power = 10
 ```
 
-**Critical: Radio parameters must match exactly.** The MeshCore phone network uses BW=62.5kHz, SF=7, CR=5 at 910.525 MHz. If these don't match the phones, the radio will transmit but nothing will decode on either side.
+**Radio parameters must match the intended peer network.** The example is the previously used phone network: BW=62.5 kHz, SF=7, CR=5 at 910.525 MHz. Preserve the installed device's RF settings, identity and credentials during this repair; do not overwrite a live INI with the example. The KMP deployment copy is [`scripts/meshcore/orangepi_zero3.ini`](../scripts/meshcore/orangepi_zero3.ini).
 
 ### Systemd service
 
@@ -188,14 +177,9 @@ WorkingDirectory=/root
 WantedBy=multi-user.target
 ```
 
-Install and start:
-```bash
-sudo cp ./out/meshcored /usr/local/bin/meshcored
-sudo mkdir -p /etc/meshcored
-sudo cp orangepi_zero3.ini /etc/meshcored/meshcored.ini
-sudo systemctl daemon-reload
-sudo systemctl enable --now meshcored
-```
+Use the explicit runtime setup workflow from the KMP repository (`scripts/configure-pi-lora.sh --help`) to audit/apply the current PCB fields, service drop-ins and boot policy with backups. Stop the app and both radio owners before replacing the binary; retain the previous binary for rollback. On an existing device do not replace the entire INI with this sample.
+
+The Linux companion repair exits with status 78 on configuration, GPIO-binding or radio-initialization failure. Install the tracked `apps/embedded/systemd/meshcored.service.d/bitchat-lora.conf` drop-in so systemd does not repeatedly restart that failure. Other unexpected failures retain bounded restart behavior. Select MeshCore in the app after installation; do not enable the daemon independently at boot.
 
 ### Verify meshcored is running
 
@@ -207,6 +191,7 @@ sudo journalctl -u meshcored --no-pager -n 50
 Look for:
 - `RadioLibWrapper: noise_floor = -10x` — radio is in RX mode, actively listening
 - No GPIO claim errors
+- Companion initialization completes in the app; an active process or TCP listener alone is not radio readiness
 
 ## Building the Kotlin embedded app
 
@@ -274,15 +259,13 @@ Note: `RadioLibWrapper::idle()` does the same thing but is a **protected** metho
 
 ### GPIO issues
 
-```bash
-# Check DIO0 (IRQ) pin state — should be 0 when idle
-sudo gpioget gpiochip1 70
+Inspect line ownership without requesting an output:
 
-# Check pin allocation
-sudo gpioinfo gpiochip1 | grep -E "70|71"
+```bash
+sudo gpioinfo gpiochip1
 ```
 
-If pins show as "used" by another driver, there may be a device tree conflict.
+DIO0 is line 70. RESET is omitted from daemon configuration; GPIO 73 remains the PMIC interrupt and must not be unbound or driven. GPIO 71 is a different physical header pin. Use the read-only probe with owners stopped if identification is failing. A reset-free profile relies on power-on reset; a Pi reboot is not necessarily a radio power cycle.
 
 ### meshcored log spam
 
@@ -308,7 +291,7 @@ After the embedded app connects, look for either:
 └──────────────────────┘                  └──────────┬───────────┘
                                                      │ SPI1.1
                                                      │ GPIO 70 (IRQ)
-                                                     │ GPIO 71 (RST)
+                                                     │ No software reset
                                                 ┌────┴────┐
                                                 │ RFM95W  │
                                                 │ SX1276  │

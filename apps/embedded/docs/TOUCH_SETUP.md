@@ -1,4 +1,16 @@
-# Touch Input Setup for Orange Pi Zero 3 + Elecrow 5" HDMI Display
+# Touch input on Orange Pi Zero 3
+
+## Current HDMI/USB capacitive screen
+
+The current screen provides HDMI video and USB touch (`QDtech MPI5001`); it uses no header GPIO or SPI. Keep CardKB enabled and keep the LoRa SPI1 overlays, including `spi1-cs1-touch`, because that overlay also supplies the radio's CS1. See the [current PCB profile](ORANGEPI_ZERO3_PCB.md).
+
+The app startup helper accepts a readable `QDtech MPI5001` or `XPT2046 Touchscreen` input node and a readable `CardKb-I2C` node. `BITCHAT_TOUCH_NAME` can override the exact touch name. It waits at most 20 seconds, then starts with an accurate missing-device message. The app discovers touch capabilities independently.
+
+The explicit LoRa/USB runtime setup disables `xpt2046-touch.service` for this USB profile. Do not install or start the SPI-touch daemon below for the USB screen. The app unit retains `After=multi-user.target cardkb.service` ordering; it does not depend on the obsolete touchscreen daemon.
+
+## Historical Elecrow resistive screen setup
+
+The remaining sections record the previous GPIO/SPI XPT2046 setup. They are for that screen only. Header SPI bank labels have been corrected; physical pin 26 / PC10 / GPIO 74 below is the old screen's software chip select, never the LoRa RESET pin.
 
 This document explains how touch input was configured for the embedded Bitchat app running on an Orange Pi Zero 3 with an Elecrow 5" 800x480 HDMI display with resistive touchscreen.
 
@@ -103,7 +115,7 @@ The Elecrow display expects the touch CS (chip select) pin on **physical pin 26*
 
 | Signal | Elecrow Expects | OPi Zero 3 SPI1 |
 |--------|-----------------|-----------------|
-| T_CS   | Pin 26 (PC10)   | Pin 24 (PC3)    |
+| T_CS   | Pin 26 (PC10)   | Pin 24 (PH9)    |
 | T_CLK  | Pin 23          | Pin 23 ✓        |
 | T_DIN  | Pin 19          | Pin 19 ✓        |
 | T_DO   | Pin 21          | Pin 21 ✓        |
@@ -382,10 +394,10 @@ The Orange Pi Zero 3 has a 26-pin header (not 40-pin like Raspberry Pi).
 Key pins for SPI1:
 | Pin | Function | GPIO |
 |-----|----------|------|
-| 19  | SPI1_MOSI | PC2 |
-| 21  | SPI1_MISO | PC0 |
-| 23  | SPI1_CLK  | PC1 |
-| 24  | SPI1_CS   | PC3 (hardware CS) |
+| 19  | SPI1_MOSI | PH7 / GPIO 231 |
+| 21  | SPI1_MISO | PH8 / GPIO 232 |
+| 23  | SPI1_CLK  | PH6 / GPIO 230 |
+| 24  | SPI1_CS1  | PH9 / GPIO 233 (hardware CS) |
 | 26  | GPIO      | PC10 (software CS for Elecrow) |
 
 GPIO number formula: `GPIO = (letter - 'A') * 32 + pin`

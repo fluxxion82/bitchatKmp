@@ -1,160 +1,69 @@
-# LoRa Hardware Testing Guide
+# RFM95W diagnostics on Orange Pi Zero 3
 
-Scripts for testing RFM95W LoRa module on Orange Pi Zero 3.
+Use [the current PCB profile](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md): **SPI1.1**, IRQ GPIO 70/header 11, software reset disabled. The header SPI pins are PH7/MOSI (19), PH8/MISO (21), PH6/SCK (23), and PH9/NSS (24).
 
-## Which SPI bus the radio is on
+The September 9 instructions assigning these pins to SPI0 were incorrect. The SPI0 flash-unbinding overlay has been removed. Keep `spi1-enable` and `spi1-cs1-touch`; the latter supplies LoRa CS1 even with USB touch. RESET reaches header 7/GPIO 73, shared with the PMIC interrupt. Neither that line nor unrelated GPIO 71 is a diagnostic reset output.
 
-The RFM95W is wired to header pins 19/21/23/24 = PC2/PC0/PC1/PC3. The kernel calls that
-controller **spi0** (`5010000.spi`), confirmed from the live pinmux:
+## Prepare without competing radio owners
 
-```
-pin 67 (PC3): device 5010000.spi function spi0 group PC3
-```
-
-so the radio is reached through **`/dev/spidev0.0`**.
-
-`/dev/spidev1.x` is a different controller (`5011000.spi`, the PH-bank pins) that the resistive
-touchscreen used. Pointing the daemons or this script at `spidev1.1` makes every transfer succeed
-on a bus the radio is not wired to, and reports `Chip version: 0x00` -- which reads like dead
-hardware and is not.
-
-Two things are needed for `/dev/spidev0.0` to exist at all: the base DTB declares a
-`jedec,spi-nor` `flash@0` on that chip select, so the NOR driver claims it and no spidev node is
-created. `apps/embedded/overlays/lora-spi0-spidev.dts` disables that node and adds a spidev one;
-install it as a user overlay and set `user_overlays=lora-spi0-spidev` in `/boot/armbianEnv.txt`.
-
-## Quick Start
-
-### 1. Copy scripts to Orange Pi
-
-`$PI_HOST` is your own ssh destination (`user@host`, or a `Host` alias from `~/.ssh/config`); it is not
-checked into this repository.
+Run on the Pi from the repository root. Install the Python SPI binding if needed:
 
 ```bash
-export PI_HOST=user@orangepi
-scp lora_test.py gpio_discover.sh "$PI_HOST:~/"
+sudo apt install python3-spidev
+sudo systemctl stop bitchat.service
+sudo systemctl stop meshtasticd.service meshcored.service
+systemctl show meshtasticd.service meshcored.service -p ActiveState -p SubState -p Job
+pgrep -x meshtasticd
+pgrep -x meshcored
 ```
 
-### 2. SSH to Orange Pi
+The service jobs must be gone and no manual daemon may remain before probing. A `pgrep` with no matches exits 1; that is expected. The obsolete Python `meshcore.service` must also be stopped if present. With the old resistive screen, stop `xpt2046-touch.service` for an isolated SPI test; the HDMI/USB touchscreen does not use SPI.
+
+## Default: identity only, no radio changes
 
 ```bash
-ssh "$PI_HOST"
+sudo python3 scripts/lora_test.py
+sudo python3 scripts/lora_test.py --dump
 ```
 
-### 3. Install dependencies
+Both commands use `/dev/spidev1.1`, mode 0, 500 kHz. They read `RegVersion` ten times; all ten values must be `0x12`. `--dump` reads a small set of non-FIFO registers, even after failed identification. Neither command requests GPIO, writes registers, configures RF settings, nor changes mode during cleanup. `--skip-gpio` remains accepted as a compatibility no-op.
+
+Exit 0 means the requested checks passed; exit 1 means missing SPI, failed/inconsistent identification, transfer error, or failed explicit configuration/TX. Exit 2 means invalid CLI arguments. Old `--gpio-test` and `--reset-pin` options are rejected before opening SPI.
+
+| Result | Meaning |
+|---|---|
+| Ten `0x12` samples | Consistent SX1276 register response; protocol/OTA unverified |
+| `0x00` samples | No valid identity; not proof that the chip is damaged |
+| `0xff` samples | Bus reads high; no valid identity |
+| Other or inconsistent samples | Identification fails; configuration and TX are blocked |
+| SPI node missing | Inspect existing SPI1 overlays and device permissions |
+
+## Explicit write and transmit tests
+
+These operations replace volatile radio settings with a diagnostic profile: 915 MHz, SF7, BW125 kHz, CR4/5, CRC on, sync word `0x12`, and +17 dBm. This profile is separate from MeshCore or Meshtastic network settings. Use only where that frequency and power are appropriate, with an antenna attached for transmission.
 
 ```bash
-sudo apt update
-sudo apt install python3-spidev python3-rpi.gpio gpiod libgpiod-utils
+# Configure and verify register readback; no transmission
+sudo python3 scripts/lora_test.py --configure
+
+# Configure, verify, then send the raw payload BITCHAT_TEST once
+sudo python3 scripts/lora_test.py --transmit
 ```
 
-### 4. Stop touch daemon (if running)
+Failed identification prevents **all** register writes, including cleanup. Failed configuration readback prevents TX. FIFO and write-one-to-clear IRQ accesses have protocol-specific behavior rather than ordinary equality readback. A TX-done flag confirms only the radio's local transmission completion, not delivery to another device; this raw payload is not a MeshCore or Meshtastic message.
 
-The XPT2046 touch daemon uses spidev1.0. Stop it to avoid conflicts:
+After diagnostics, restart the app so it initializes the saved protocol and restores that protocol's radio configuration:
 
 ```bash
-sudo pkill -f xpt2046_touch.py
+sudo systemctl start bitchat.service
 ```
 
-### 5. Run the test
+No software reset can be requested with the current PCB profile. Power-on reset remains available; a Pi reboot does not necessarily power-cycle the radio.
+
+## Offline behavior tests
 
 ```bash
-chmod +x lora_test.py
-
-# Basic test (verify SPI and chip) - uses spidev1.1 by default
-sudo python3 lora_test.py --skip-gpio
-
-# Full test with transmission
-sudo python3 lora_test.py --skip-gpio --transmit
+python3 -m unittest discover -s scripts/tests -p 'test_lora_test.py' -v
 ```
 
-### 6. Restart touch daemon
-
-```bash
-nohup python3 -u ~/xpt2046_touch.py > /tmp/xpt2046.log 2>&1 &
-```
-
-## Expected Output
-
-### Success
-```
-[OK] SPI device exists: /dev/spidev0.0
-[OK] SPI device is readable/writable
-[OK] GPIO initialized (reset pin: 74)
-[OK] Reset toggled (pin 74)
-[OK] SPI opened: bus=0, device=0, speed=500kHz
-[OK] Chip version: 0x12 (SX1276/RFM95W detected)
-[OK] Configured for 915 MHz (SF7, BW125, CR4/5, +17dBm)
-[OK] TX complete! (took 45.3ms)
-```
-
-### Common Failures
-
-| Symptom | Likely Cause | Fix |
-|---------|--------------|-----|
-| `Chip version: 0x00` | Module not powered or wrong wiring | Check 3.3V power, MOSI/MISO/SCK connections |
-| `Chip version: 0xFF` | CS line issue or SPI disabled | Verify CS wiring, check SPI overlay enabled |
-| `SPI device not found` | SPI not enabled | Enable SPI in device tree overlay |
-| `Permission denied` | Need root | Run with `sudo` |
-| `TX timeout` | Module stuck or antenna issue | Check antenna, try reset |
-
-## Verify with HackRF
-
-On a separate machine with HackRF:
-
-```bash
-# Capture raw IQ data
-hackrf_transfer -r capture.raw -f 915000000 -s 2000000
-
-# Or use gqrx
-# Set frequency to 915 MHz, look for chirp spread spectrum
-```
-
-LoRa signals have a distinctive "chirp" pattern - frequency sweeps visible as diagonal lines in waterfall.
-
-## Hardware Wiring Reference
-
-**IMPORTANT**: The Orange Pi Zero 3 with touch screen uses:
-- **spidev1.0** (CS0) → Touch screen (XPT2046)
-- **spidev1.1** (CS1) → LoRa module (RFM95W)
-
-| RFM95W Pin | Orange Pi Pin | GPIO | Function |
-|------------|---------------|------|----------|
-| VCC | Pin 1 (3.3V) | - | Power |
-| GND | Pin 6 (GND) | - | Ground |
-| MOSI | Pin 19 | PC2 | SPI1 data out |
-| MISO | Pin 21 | PC0 | SPI1 data in |
-| SCK | Pin 23 | PC1 | SPI1 clock |
-| NSS | Pin 24 | PC3 | SPI1 CS (hardware) |
-| RESET | (optional) | - | Not needed with --skip-gpio |
-| DIO0 | (optional) | - | For interrupt-driven RX |
-
-**Note**: If you have an Elecrow touch display, its T_CS uses GPIO 74 (Pin 26) via software CS.
-
-## Troubleshooting GPIO
-
-If the default GPIO pins don't work:
-
-1. Run `sudo ./gpio_discover.sh` to see available GPIOs
-2. Try alternative pin numbers:
-   ```bash
-   # Different base calculations
-   sudo python3 lora_test.py --reset-pin 10   # Just the offset
-   sudo python3 lora_test.py --reset-pin 266  # Alternative base
-   ```
-
-3. Test GPIO independently:
-   ```bash
-   sudo python3 lora_test.py --gpio-test
-   ```
-
-4. Skip GPIO entirely to test SPI:
-   ```bash
-   sudo python3 lora_test.py --skip-gpio
-   ```
-
-## Files
-
-- `lora_test.py` - Main hardware test script
-- `gpio_discover.sh` - GPIO mapping discovery helper
-- `LORA_TESTING.md` - This documentation
+These run the real CLI and SPI transfer code with a fake SPI device, covering identity failures, no default GPIO/write access, explicit configuration/TX, readback failures, and descriptor cleanup. They do not test PCB continuity or OTA messaging.

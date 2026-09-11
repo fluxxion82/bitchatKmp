@@ -19,11 +19,12 @@
 # bitchat -> cardkb -> multi-user.target -> bitchat. systemd breaks a cycle by deleting a job,
 # and at boot it deleted ours: "Found ordering cycle ... Job bitchat.service/start deleted".
 # Naming the target in After= is exactly what suppresses that implicit edge, so the original
-# three-unit ordering below is cycle-free. systemctl restart never exercises this; only a
+# target/CardKB ordering below is cycle-free. systemctl restart never exercises this; only a
 # reboot does (journalctl -b -g 'ordering cycle').
+# USB touch is discovered by the wait script; no XPT2046 service dependency is required.
 [Unit]
 Description=Bitchat embedded UI (DRM/EGL, Orange Pi Zero 3)
-After=multi-user.target cardkb.service xpt2046-touch.service
+After=multi-user.target cardkb.service
 
 [Service]
 Type=simple

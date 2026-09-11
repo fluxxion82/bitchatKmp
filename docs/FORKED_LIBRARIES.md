@@ -224,15 +224,17 @@ Full evidence (per-version `llvm-nm` over the published klibs) is in
 - SX1276 radio support (vs. default SX1262)
 - Orange Pi Zero 3 GPIO pin mappings
 - SPI device configuration for `/dev/spidev1.1`
+- Current PCB template omits reset: header 7/PC9 is shared with the PMIC interrupt
+- Linux companion exits nonzero on configuration, GPIO-binding, or radio-init failure rather than spinning in the MCU halt loop
 
-See [`MESHCORE_RUNBOOK.md`](../apps/embedded/docs/MESHCORE_RUNBOOK.md) for full patch details and pin configuration.
+See the [current PCB profile](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md) and [MeshCore setup](meshcore-orangepi-setup.md) for current pin/runtime configuration. [`MESHCORE_RUNBOOK.md`](../apps/embedded/docs/MESHCORE_RUNBOOK.md) preserves earlier patch history with a reset-mapping correction.
 
 **Build (on-device):**
 
 ```bash
 cd ~/meshcore-linux
 FIRMWARE_VERSION=dev ./build.sh build-firmware linux_companion_sx1276
-sudo cp out/meshcored /usr/local/bin/meshcored
+# Deploy only after stopping the app and both radio owners; preserve the prior binary.
 ```
 
 ## 5. Meshtastic Firmware
@@ -249,6 +251,8 @@ sudo cp out/meshcored /usr/local/bin/meshcored
 - `CUSTOM_CHANGES.md` — full documentation of changes, known issues (RF95 init -20, IRQ flood, invalid pointer crash), and configuration
 - `orangepi/runtime-captures/` — snapshots of Pi-only runtime/dependency patches (`LinuxGPIOPin.cpp`, `SX127x.cpp`) so ad-hoc changes are not lost
 
+The current PCB profile omits `Lora.Reset` in every effective YAML source and retains the reset prestart hook as a no-op. Do not replace preserved Pi dependency patches merely to change pin configuration; reset omission is supported by the existing parser.
+
 See the "Need source build for patched behavior" section in [`meshtastic-orangepi-setup.md`](meshtastic-orangepi-setup.md) for build steps.
 
 **Build (on-device):**
@@ -257,7 +261,7 @@ See the "Need source build for patched behavior" section in [`meshtastic-orangep
 cd ~/firmware
 source ~/meshtastic-venv/bin/activate
 pio run -e native
-sudo cp .pio/build/native/program /usr/bin/meshtasticd
+# Deploy only after stopping the app and both radio owners; preserve the prior binary.
 ```
 
 ---

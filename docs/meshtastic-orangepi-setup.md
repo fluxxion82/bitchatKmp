@@ -6,9 +6,10 @@ For the MeshCore-based path instead, use [`meshcore-orangepi-setup.md`](meshcore
 
 ## Overview
 
-BitChat embedded supports two LoRa protocol backends:
-- **BitChat/MeshCore path**: app talks to `meshcored` on TCP 5000.
-- **Meshtastic path**: app talks to `meshtasticd` on TCP 4403.
+BitChat embedded supports three LoRa protocols:
+- **BitChat**: the app uses SPI directly.
+- **MeshCore**: the app talks to `meshcored` on TCP 5000.
+- **Meshtastic**: the app talks to `meshtasticd` on TCP 4403.
 
 Only one path can control the LoRa hardware at a time.
 
@@ -40,10 +41,10 @@ Only one path can control the LoRa hardware at a time.
 - Orange Pi Zero 3 (Armbian, linuxArm64)
 - SX1276/RFM95W-class LoRa module on `spidev1.1`
 - IRQ: `gpiochip1` line `70`
-- RESET: `gpiochip1` line `71`
+- Software reset disabled; PCB RESET reaches header 7/GPIO 73, shared with PMIC IRQ
 
 See canonical wiring and overlay baseline:
-- [`../apps/embedded/docs/LORA_SETUP.md`](../apps/embedded/docs/LORA_SETUP.md)
+- [current PCB profile](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md)
 
 ## 1) Prepare OS and SPI
 
@@ -79,27 +80,22 @@ Lora:
     pin: 70
     gpiochip: 1
     line: 70
-  Reset:
-    pin: 71
-    gpiochip: 1
-    line: 71
+  # Omit Reset: PCB RESET shares the PMIC interrupt.
 ```
 
 Reference runtime files in this repo:
 - [`../scripts/meshtastic/lora-rfm95w-opi3.yaml`](../scripts/meshtastic/lora-rfm95w-opi3.yaml)
 - [`../scripts/meshtastic/reset-lora.sh`](../scripts/meshtastic/reset-lora.sh)
 
-Install helper files on device:
+Use `scripts/configure-pi-lora.sh --help` from the KMP repository root for the audit/explicit-apply workflow. It preserves device settings and stages reviewed changes with backups. Audit `/etc/meshtasticd/config.yaml` and every loaded fragment: a stale `Lora.Reset` in another source must also be removed. Do not use `Reset: -1`, because the parser enables an explicitly supplied scalar pin mapping. The retained reset hook is a no-op.
 
-```bash
-sudo install -m 755 reset-lora.sh /usr/local/bin/reset-lora.sh
-sudo install -m 644 lora-rfm95w-opi3.yaml /etc/meshtasticd/config.d/lora-rfm95w-opi3.yaml
-```
+Keep `meshtasticd.service` installed but disabled at boot, with the tracked `apps/embedded/systemd/meshtasticd.service.d/bitchat-lora.conf` drop-in for bounded failures. Keep the app enabled so it starts the saved protocol. Do not enable both radio daemons or blindly restart Meshtastic while another protocol owns SPI.
 
 ## 4) Validate daemon health
 
+Select Meshtastic in the app first. Then inspect health without starting a competing owner:
+
 ```bash
-sudo systemctl restart meshtasticd
 sudo systemctl status meshtasticd --no-pager -l
 sudo journalctl -u meshtasticd -n 120 --no-pager
 ss -tlnp | grep 4403
@@ -110,7 +106,9 @@ Healthy signals:
 - logs include successful RF95 init
 - TCP listener active on port 4403
 
-Optional CLI check:
+An active process or open listener is not proof of radio or protocol readiness. The app must complete Meshtastic initialization without an RF error. A failed stop prevents the target from starting; explicit retry permits a new bounded attempt.
+
+Optional CLI check during manual maintenance, with the app stopped and only Meshtastic running:
 
 ```bash
 meshtastic --host localhost --info
@@ -130,23 +128,20 @@ Deploy and run:
 
 ```bash
 scp apps/embedded/build/bin/linuxArm64/releaseExecutable/bitchat-embedded.kexe user@<orangepi-ip>:/tmp/
-ssh user@<orangepi-ip> 'LORA_PROTOCOL=MESHTASTIC /tmp/bitchat-embedded.kexe'
+ssh user@<orangepi-ip> '/tmp/bitchat-embedded.kexe'
 ```
 
 ### Protocol selection
 
-| Method | Details |
-|--------|---------|
-| **Settings UI** (recommended for testing) | Run `./bitchat-embedded.kexe` → Settings → LoRa → change Protocol to Meshtastic. Switches at runtime but does not persist across restarts. |
-| **Environment variable** | `LORA_PROTOCOL=MESHTASTIC ./bitchat-embedded.kexe` |
-| **Config file** (persistent) | `echo "MESHTASTIC" | sudo tee /opt/bitchat/lora-protocol.conf` |
+Select Meshtastic under Settings → LoRa. The app persists the choice in the app user's `~/.bitchat/settings/lora_settings.prefs` and reads it at startup. The old `LORA_PROTOCOL` environment variable and `/opt/bitchat/lora-protocol.conf` are not active overrides.
 
-BitChat handles service management automatically:
-
-| Switching to | Action |
+| Switching to | Action after confirmed old-owner shutdown |
 |-------------|--------|
-| **Meshtastic** | Starts meshtasticd, connects via TCP |
-| **BitChat** | Stops meshtasticd, uses SPI directly |
+| **Meshtastic** | Starts meshtasticd, connects and initializes the protocol |
+| **MeshCore** | Starts meshcored, connects and initializes the companion protocol |
+| **BitChat** | Stops both daemons and opens SPI directly |
+
+A failed stop blocks the target. Serialized transitions keep existing message/peer subscribers attached to the selected protocol. A process, socket, or selection alone is not a successful connection.
 
 ### Channel configuration
 
@@ -168,22 +163,13 @@ meshtastic --host localhost --ch-set name "MyChannel" --ch-index 0
 3. send message from BitChat embedded and receive on another Meshtastic node
 4. send from external Meshtastic node and observe receive in BitChat
 
-### Expected log output
+### Inspect application startup
 
 ```bash
-LORA_PROTOCOL=MESHTASTIC ./bitchat-embedded.kexe > /tmp/bitchat.log 2>&1 &
-tail -f /tmp/bitchat.log
+journalctl -u bitchat.service -n 120 --no-pager
 ```
 
-Healthy startup:
-```
-📡 LoRa protocol from environment: MESHTASTIC
-🚀 Starting meshtasticd service...
-✅ meshtasticd started successfully
-📡 Connecting to meshtasticd at 127.0.0.1:4403...
-✅ TCP connected to meshtasticd
-📱 My node: XXXXXXXX
-```
+Check that the saved Meshtastic selection is used, daemon ownership is acquired, TCP connects, and the protocol completes node/config initialization. Do not treat a service-start log alone as readiness.
 
 ### Monitor traffic
 
@@ -195,26 +181,10 @@ meshtastic --host localhost --listen
 
 ### `RF95 init` failures / no radio detected
 
-- Recheck SPI wiring and antenna.
-- Recheck `spidev1.1`, IRQ 70, RESET 71 configuration.
-- Verify no other process owns SPI/GPIO lines.
-- Check GPIO state:
-  ```bash
-  gpioinfo | grep -E 'line\\s+70:|line\\s+71:'
-  ```
-- Quick SPI reliability test:
-  ```bash
-  python3 -c "
-  import spidev
-  spi = spidev.SpiDev()
-  spi.open(1, 1)
-  spi.max_speed_hz = 500000
-  spi.mode = 0
-  correct = sum(1 for _ in range(100) if spi.xfer2([0x42, 0x00])[1] == 0x12)
-  print(f'SPI reliability: {correct}%')
-  "
-  ```
-  Should be 100%. If not, check wiring (especially MISO).
+- Check SPI1.1, IRQ 70, and omission of reset in **all** effective YAML sources.
+- Verify no other process owns SPI/GPIO; stop the app before manual daemon maintenance.
+- Use [`scripts/lora_test.py`](../scripts/lora_test.py) with all owners stopped, following [LoRa testing](../scripts/LORA_TESTING.md). Its default and `--dump` paths read registers only and require ten consistent `0x12` samples.
+- No software should claim GPIO 71 or drive GPIO 73. GPIO 73's PMIC interrupt binding remains intact.
 
 ### Daemon starts but unstable behavior
 
@@ -231,10 +201,11 @@ git clone -b orangepi-rfm95w --recursive https://github.com/fluxxion82/firmware.
 cd firmware
 pip install platformio
 pio run -e native
-sudo cp .pio/build/native/meshtasticd /usr/bin/meshtasticd
+# Preserve the existing binary and Pi-local dependency patches before deployment.
+# Stop the app and both radio owners before installing the verified build.
 ```
 
-Use runbook docs above for pin/runtime details from known-good recovery flows.
+Use the current PCB profile for pin/runtime configuration. February runbooks describe historical recovery on an Adafruit breakout and contain correction notices.
 For Pi-only dependency/runtime patches used during recovery, see `orangepi/runtime-captures/` in the same fork.
 
 ## BitChat Code Reference
@@ -244,7 +215,7 @@ For Pi-only dependency/runtime patches used during recovery, see `orangepi/runti
 | `lora/meshtastic/.../MeshtasticSerial.linuxArm64.kt` | TCP client |
 | `lora/meshtastic/.../MeshtasticdService.kt` | Service management |
 | `lora/meshtastic/.../MeshtasticProtocol.kt` | Protocol handler |
-| `lora/bitchat/.../LoRaServiceManager.kt` | Stops meshtasticd for BitChat |
+| `lora/bitchat/.../LoRaServiceManager.kt` | Stops both radio daemons for direct BitChat |
 | `apps/embedded/.../LoRaProtocolSelector.kt` | Protocol selection |
 
 ## Files Reference
@@ -253,12 +224,12 @@ For Pi-only dependency/runtime patches used during recovery, see `orangepi/runti
 |------|---------|
 | `/etc/meshtasticd/config.yaml` | Main meshtasticd config |
 | `/etc/meshtasticd/config.d/lora-rfm95w-opi3.yaml` | LoRa pin config |
-| `/opt/bitchat/lora-protocol.conf` | Protocol selection override |
+| `~/.bitchat/settings/lora_settings.prefs` | Saved protocol in the app user's home |
 
 ## Related Docs
 
 - MeshCore path: [`meshcore-orangepi-setup.md`](meshcore-orangepi-setup.md)
-- LoRa hardware baseline: [`../apps/embedded/docs/LORA_SETUP.md`](../apps/embedded/docs/LORA_SETUP.md)
+- LoRa hardware baseline: [current PCB profile](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md)
 - Embedded app overview: [`../apps/embedded/README.md`](../apps/embedded/README.md)
 - [Meshtastic Linux Native Hardware](https://meshtastic.org/docs/hardware/devices/linux-native-hardware/)
 - [Meshtastic Python CLI](https://meshtastic.org/docs/development/python/library/)

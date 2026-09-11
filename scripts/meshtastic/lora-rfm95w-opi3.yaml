@@ -7,7 +7,5 @@ Lora:
     pin: 70
     gpiochip: 1
     line: 70
-  Reset:
-    pin: 71
-    gpiochip: 1
-    line: 71
+  # RESET reaches header 7 / PC9, also the PMIC IRQ.
+  # Omit Reset so the driver does not claim or drive it.

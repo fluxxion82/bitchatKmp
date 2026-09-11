@@ -19,7 +19,10 @@
 set -u
 
 KEYBOARD_NAME="CardKb-I2C"
-TOUCH_NAME="XPT2046 Touchscreen"
+# Empty override accepts either supported display; set an exact name to select another.
+TOUCH_NAME="${BITCHAT_TOUCH_NAME:-}"
+SYSFS_ROOT="${BITCHAT_INPUT_SYSFS_ROOT:-/sys/class/input}"
+DEV_ROOT="${BITCHAT_INPUT_DEV_ROOT:-/dev/input}"
 
 TIMEOUT="${1:-20}"
 case "$TIMEOUT" in
@@ -28,6 +31,13 @@ case "$TIMEOUT" in
         TIMEOUT=20
         ;;
 esac
+# Strip leading zeroes before comparing; bound very large integers without shell overflow.
+TIMEOUT=$(printf '%s' "$TIMEOUT" | sed 's/^0*//')
+TIMEOUT=${TIMEOUT:-0}
+if [ "${#TIMEOUT}" -gt 2 ] || [ "$TIMEOUT" -gt 20 ]; then
+    echo "bitchat: limiting timeout to 20 s"
+    TIMEOUT=20
+fi
 
 # Echoes the /dev/input/eventN node whose sysfs name matches exactly and is readable now,
 # or nothing (exit 1). An unmatched glob leaves the pattern itself in "$f"; the -r test
@@ -40,11 +50,11 @@ esac
 # so the node is two dirnames up from the name file, not one.
 node_for() {
     want="$1"
-    for f in /sys/class/input/event*/device/name; do
+    for f in "$SYSFS_ROOT"/event*/device/name; do
         [ -r "$f" ] || continue
         name=$(cat "$f" 2>/dev/null) || continue
         [ "$name" = "$want" ] || continue
-        node="/dev/input/$(basename "$(dirname "$(dirname "$f")")")"
+        node="$DEV_ROOT/$(basename "$(dirname "$(dirname "$f")")")"
         [ -r "$node" ] || continue
         echo "$node"
         return 0
@@ -52,12 +62,20 @@ node_for() {
     return 1
 }
 
+touch_node() {
+    if [ -n "$TOUCH_NAME" ]; then
+        node_for "$TOUCH_NAME"
+    else
+        node_for "QDtech MPI5001" || node_for "XPT2046 Touchscreen"
+    fi
+}
+
 elapsed=0
 keyboard=""
 touch=""
 while :; do
     [ -n "$keyboard" ] || keyboard=$(node_for "$KEYBOARD_NAME")
-    [ -n "$touch" ] || touch=$(node_for "$TOUCH_NAME")
+    [ -n "$touch" ] || touch=$(touch_node)
     if [ -n "$keyboard" ] && [ -n "$touch" ]; then
         echo "bitchat: input devices ready after ${elapsed} s (keyboard $keyboard, touch $touch)"
         exit 0
@@ -67,6 +85,7 @@ while :; do
     elapsed=$((elapsed + 1))
 done
 
+[ -n "$TOUCH_NAME" ] || TOUCH_NAME="QDtech MPI5001 or XPT2046 Touchscreen"
 missing=""
 [ -n "$keyboard" ] || missing="keyboard '$KEYBOARD_NAME'"
 [ -n "$touch" ] || missing="${missing:+$missing and }touch '$TOUCH_NAME'"
