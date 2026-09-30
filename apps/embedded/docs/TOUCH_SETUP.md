@@ -2,7 +2,7 @@
 
 ## Current HDMI/USB capacitive screen
 
-The current screen provides HDMI video and USB touch (`QDtech MPI5001`); it uses no header GPIO or SPI. Keep CardKB enabled and keep the LoRa SPI1 overlays, including `spi1-cs1-touch`, because that overlay also supplies the radio's CS1. See the [current PCB profile](ORANGEPI_ZERO3_PCB.md).
+The current screen provides HDMI video and USB touch (`QDtech MPI5001`); it uses no header GPIO or SPI. Keep CardKB enabled and keep the LoRa SPI1 overlay (`spi1-cs1-lora` on a fresh board, `spi1-cs1-touch` on the first board), because it supplies the radio's CS1. See the [current PCB profile](ORANGEPI_ZERO3_PCB.md).
 
 The app startup helper accepts a readable `QDtech MPI5001` or `XPT2046 Touchscreen` input node and a readable `CardKb-I2C` node. `BITCHAT_TOUCH_NAME` can override the exact touch name. It waits at most 20 seconds, then starts with an accurate missing-device message. The app discovers touch capabilities independently.
 

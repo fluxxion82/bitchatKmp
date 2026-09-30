@@ -46,7 +46,7 @@ overlays=i2c3-ph
 If you have other overlays, append `i2c3-ph` to the list:
 
 ```
-overlays=spi1-enable i2c3-ph
+overlays=i2c3-ph
 ```
 
 Reboot for changes to take effect:

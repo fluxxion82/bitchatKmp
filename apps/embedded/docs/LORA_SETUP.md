@@ -4,11 +4,11 @@ Use the [current PCB profile](ORANGEPI_ZERO3_PCB.md) for pin numbers and reset p
 
 ## Existing device setup
 
-Keep the current SPI1 and I2C overlays in `/boot/armbianEnv.txt`. In particular, `spi1-cs1-touch` also supplies LoRa CS1 and remains required when the screen uses HDMI/USB. Do not install an SPI0 overlay or disable the SPI0 flash binding.
+SPI1 must be enabled for the radio. A fresh board uses the `spi1-cs1-lora` overlay described in the [PCB profile](ORANGEPI_ZERO3_PCB.md#spi-and-reset-policy); the first board uses hand-built `spi1-enable` + `spi1-cs1-touch` overlays, which supply the same CS1 and should be kept there. Do not install an SPI0 overlay or disable the SPI0 flash binding.
 
 ```bash
 ls /dev/spidev*
-# Existing target: /dev/spidev1.0 and /dev/spidev1.1
+# Expected: /dev/spidev1.1 (the first board also has /dev/spidev1.0)
 ```
 
 From the repository root, inspect `scripts/configure-pi-lora.sh --help`. Its default audit reports the planned profile/runtime changes; explicit apply creates backups, preserves device identity and radio settings, and lets the app own protocol startup. Do not overwrite a live INI with sample credentials or blindly enable both daemons.

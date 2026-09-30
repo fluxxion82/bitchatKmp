@@ -6,7 +6,7 @@ Uses a DRM/GBM/EGL rendering pipeline with upstream Skiko (`skiko-linuxarm64`, w
 
 ## LoRa and the current PCB
 
-Use the [Orange Pi Zero 3 PCB profile](docs/ORANGEPI_ZERO3_PCB.md): SPI1.1, DIO0 GPIO 70/header 11, no software reset. RESET physically reaches header 7/GPIO 73, shared with the PMIC interrupt; software must drive neither that line nor the unrelated GPIO 71. Keep `spi1-enable` and `spi1-cs1-touch` even when touch uses USB.
+Use the [Orange Pi Zero 3 PCB profile](docs/ORANGEPI_ZERO3_PCB.md): SPI1.1, DIO0 GPIO 70/header 11, no software reset. RESET physically reaches header 7/GPIO 73, shared with the PMIC interrupt; software must drive neither that line nor the unrelated GPIO 71. SPI1 needs the `spi1-cs1-lora` overlay on a fresh board (the first board keeps its hand-built `spi1-enable` + `spi1-cs1-touch`), even when touch uses USB.
 
 The app's saved Settings → LoRa selection determines the radio owner at startup. It supports MeshCore (`meshcored`/TCP 5000), Meshtastic (`meshtasticd`/TCP 4403), and direct BitChat SPI. Current daemon units remain installed but disabled at boot; `bitchat.service` stays enabled. The old environment/config-file selection overrides are unused. A failed old-owner shutdown blocks a new start, and failed initialization permits a fresh bounded explicit retry without claiming a connected radio.
 

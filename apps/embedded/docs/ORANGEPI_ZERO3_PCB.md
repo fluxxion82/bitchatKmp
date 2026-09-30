@@ -17,7 +17,20 @@ Physical header numbers, SoC names, and GPIO line offsets are different numberin
 
 ## SPI and reset policy
 
-The radio uses **`/dev/spidev1.1`**, SPI mode 0, 500 kHz in the diagnostic/Meshtastic profile. The relevant controller is `5011000.spi`, using the PH-bank header pins. Keep the existing `spi1-enable` and `spi1-cs1-touch` overlays in `/boot/armbianEnv.txt`, along with the existing I2C overlays. Despite its name, `spi1-cs1-touch` provides LoRa CS1 and remains needed with USB touch. Do not replace the SPI0 flash binding or install an SPI0 LoRa overlay.
+The radio uses **`/dev/spidev1.1`**, SPI mode 0, 500 kHz in the diagnostic/Meshtastic profile. The relevant controller is `5011000.spi`, using the PH-bank header pins. Do not replace the SPI0 flash binding or install an SPI0 LoRa overlay.
+
+**Enabling SPI1 on a board.** Use the overlay in [`apps/embedded/overlays/spi1-cs1-lora.dts`](../overlays/spi1-cs1-lora.dts). It enables SPI1, muxes SCK/MOSI/MISO (PH6/PH7/PH8) and CS1 (PH9), and creates `/dev/spidev1.1`. Armbian's stock `spidev1_1` overlay is not enough: it adds the spidev node but no pinctrl, and on current Armbian (kernel 6.18, verified 2026-09-30) the base device tree does not mux SPI1's pins, so the bus would reach nothing and read `0x00`/`0xff`. On the Pi:
+
+```bash
+dtc -@ -I dts -O dtb -o /tmp/spi1-cs1-lora.dtbo apps/embedded/overlays/spi1-cs1-lora.dts
+sudo mkdir -p /boot/overlay-user && sudo cp /tmp/spi1-cs1-lora.dtbo /boot/overlay-user/
+echo 'user_overlays=spi1-cs1-lora' | sudo tee -a /boot/armbianEnv.txt   # or append to an existing user_overlays line
+echo 'SUBSYSTEM=="spidev", KERNEL=="spidev1.1", GROUP="dialout", MODE="0660"' | sudo tee /etc/udev/rules.d/60-bitchat-lora.rules
+sudo apt-get install -y python3-spidev
+sudo reboot
+```
+
+After the reboot `dmesg` shows `sun6i-spi 5011000.spi: registered child spi1.1`, `/dev/spidev1.1` is `root:dialout 0660`, and the read-only probe below should report `RegVersion = 0x12` without sudo. The first board was set up with hand-built `spi1-enable` and `spi1-cs1-touch` overlays whose source was never kept; if a board still has them, leave them in place (`spi1-cs1-touch` supplies the same CS1) rather than stacking this overlay on top. `/dev/gpiochip1` (DIO0) stays root-only unless a matching udev rule is added; MeshCore and Meshtastic run as root.
 
 Software reset is **disabled** for this PCB. Do not assign either GPIO 71 or GPIO 73 as a radio output, pulse RESET, or unbind the PMIC driver. Omitting reset control does not electrically disconnect the PCB's RESET net from PC9. The radio still has power-on reset; a Pi reboot may not remove power from the module.
 

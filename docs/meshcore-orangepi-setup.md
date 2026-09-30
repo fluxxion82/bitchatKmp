@@ -34,10 +34,10 @@ Linux 6.12.x-current-sunxi64
 
 ### Enable SPI
 
-Keep the existing SPI1 overlays, including `spi1-cs1-touch`, which also supplies LoRa CS1 with USB touch. Do not alter the SPI0 flash binding. Verify:
+Enable SPI1 as described in the [PCB profile](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md#spi-and-reset-policy) (`spi1-cs1-lora` overlay on a fresh board; keep `spi1-cs1-touch` on the first board). Do not alter the SPI0 flash binding. Verify:
 ```bash
 ls /dev/spidev1.*
-# Should show: /dev/spidev1.0  /dev/spidev1.1
+# Should show /dev/spidev1.1 (the first board also has /dev/spidev1.0)
 ```
 
 ### Install build dependencies

@@ -1,0 +1,41 @@
+// SPI1 for the RFM95W LoRa radio on the Orange Pi Zero 3 PCB.
+//
+// Enables spi@5011000 on the PH header bank (SCK PH6, MOSI PH7, MISO PH8) with chip select 1 on PH9
+// (header pin 24) and exposes it as /dev/spidev1.1. Armbian's stock spidev1_1 overlay adds the spidev
+// node but no pinctrl, and since kernel 6.18 the base device tree no longer muxes SPI1's pins, so
+// that overlay alone leaves the bus disconnected from the header.
+//
+// Build and install (see ../docs/ORANGEPI_ZERO3_PCB.md):
+//   dtc -@ -I dts -O dtb -o /tmp/spi1-cs1-lora.dtbo spi1-cs1-lora.dts
+//   sudo mkdir -p /boot/overlay-user && sudo cp /tmp/spi1-cs1-lora.dtbo /boot/overlay-user/
+//   add "user_overlays=spi1-cs1-lora" to /boot/armbianEnv.txt, then reboot
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "allwinner,sun50i-h616";
+
+    fragment@0 {
+        target-path = "/aliases";
+        __overlay__ {
+            spi1 = "/soc/spi@5011000";
+        };
+    };
+
+    fragment@1 {
+        target = <&spi1>;
+        __overlay__ {
+            status = "okay";
+            pinctrl-names = "default";
+            pinctrl-0 = <&spi1_pins>, <&spi1_cs1_pin>;
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            spidev@1 {
+                compatible = "rohm,dh2228fv";
+                reg = <1>;
+                spi-max-frequency = <1000000>;
+            };
+        };
+    };
+};
