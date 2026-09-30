@@ -31,7 +31,7 @@ class NostrIdentityMintPolicyTest {
     }
 
     @Test
-    fun `a populated store still mints, because a new device passes through that state`() {
+    fun `a populated store still mints because a new device passes through that state`() {
         // bluetoothModule writes the mesh signing key into this same store while Koin builds
         // the graph, so on a genuine first run Nostr always finds "other keys but not mine".
         // Refusing here would leave every new device without a Nostr identity for ever.
