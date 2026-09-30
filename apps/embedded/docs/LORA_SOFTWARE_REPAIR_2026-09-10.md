@@ -42,7 +42,7 @@ The native service controller has a maximum configured start budget of 28 second
 
 ### Pi deployment and rollback
 
-Target: Orange Pi Zero 3 at `sterling@192.168.4.26`, kernel `6.12.67-current-sunxi64`.
+Target: Orange Pi Zero 3 at `<user>@<pi-address>`, kernel `6.12.67-current-sunxi64`.
 
 - Runtime package: `/home/sterling/bitchat-lora-runtime-20260910`.
 - Private backup/restore manifest: `/var/backups/bitchat-lora/20260911T015700.872069Z/manifest.json`. UTC date is September 11; local implementation date is September 10.
