@@ -20,6 +20,7 @@ import com.bitchat.local.service.LocationService
 import com.bitchat.nostr.NostrClient
 import com.bitchat.nostr.NostrPreferences
 import com.bitchat.nostr.NostrRelay
+import com.bitchat.nostr.NostrSubscriptionId
 import com.bitchat.nostr.logging.logNostrDebug
 import com.bitchat.nostr.model.NostrFilter
 import com.bitchat.nostr.participant.NostrParticipantTracker
@@ -73,7 +74,7 @@ class LocationRepo(
 
         try {
             geohashes.forEachIndexed { index, hash ->
-                val subId = "notes_${geoHash}_$index"
+                val subId = NostrSubscriptionId.notes(geoHash, index)
                 val filter = NostrFilter.geohashNotes(hash, limit = 100)
 
                 nostrRelay.subscribe(
@@ -248,7 +249,7 @@ class LocationRepo(
         toAdd.forEach { geohash ->
             nostrRelay.ensureGeohashRelaysConnected(geohash, nRelays = 5, includeDefaults = false)
             val relayUrls = nostrRelay.getRelaysForGeohash(geohash).toSet()
-            val subId = "sampling_$geohash"
+            val subId = NostrSubscriptionId.sampling(geohash)
             val filter = NostrFilter.geohashEphemeral(geohash, since = sinceMs, limit = 200)
 
             nostrRelay.subscribe(

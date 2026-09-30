@@ -89,6 +89,10 @@ actual class TorManager internal constructor(
     @Volatile
     private var currentPort = DEFAULT_SOCKS_PORT
 
+    /** Monotonic identity for the listener that [start] has confirmed bound. */
+    @Volatile
+    private var nextRouteGeneration = 0L
+
     init {
         File(dataDir).mkdirs()
 
@@ -170,7 +174,7 @@ actual class TorManager internal constructor(
 
         println("$TAG: Starting SOCKS proxy on port $currentPort...")
         _statusFlow.update {
-            it.copy(mode = TorMode.ON, state = TorState.STARTING, errorMessage = null)
+            it.copy(mode = TorMode.ON, state = TorState.STARTING, errorMessage = null, routeGeneration = 0)
         }
 
         val result = callNative { native.startSocksProxy(currentPort) }.getOrElse { e ->
@@ -199,6 +203,7 @@ actual class TorManager internal constructor(
      */
     private fun markProxyListening() {
         val line = "SOCKS proxy listening on 127.0.0.1:$currentPort"
+        val generation = ++nextRouteGeneration
         println("$TAG: $line")
         _statusFlow.update {
             it.copy(
@@ -207,7 +212,8 @@ actual class TorManager internal constructor(
                 bootstrapPercent = 100,
                 state = TorState.RUNNING,
                 lastLogLine = line,
-                errorMessage = null
+                errorMessage = null,
+                routeGeneration = generation,
             )
         }
     }
@@ -241,6 +247,7 @@ actual class TorManager internal constructor(
                 running = false,
                 bootstrapPercent = 0,
                 state = TorState.OFF,
+                routeGeneration = 0,
                 // A stop that worked clears whatever went wrong before it. A stop that threw keeps
                 // its own reason instead of reporting a clean shutdown that did not happen.
                 // "No Arti library" is not something a stop can fix, so it survives here exactly
@@ -318,13 +325,14 @@ actual class TorManager internal constructor(
                     it.copy(
                         state = TorState.OFF,
                         running = false,
-                        bootstrapPercent = 0
+                        bootstrapPercent = 0,
+                        routeGeneration = 0,
                     )
                 }
             }
 
             line.contains("ERROR", ignoreCase = true) -> {
-                _statusFlow.update { it.copy(state = TorState.ERROR, errorMessage = line) }
+                _statusFlow.update { it.copy(state = TorState.ERROR, errorMessage = line, running = false, routeGeneration = 0) }
             }
         }
     }

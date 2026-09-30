@@ -1,5 +1,6 @@
 package com.bitchat.nostr
 
+import com.bitchat.client.TorRouteProvenance
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -15,25 +16,40 @@ import kotlin.test.assertTrue
 class TorRouteClaimTest {
 
     @Test
-    fun `a socket that was on Tor at both ends is reported as Tor`() {
-        assertTrue(claimsTorRoute(viaTorAtConnect = true, routingThroughTorNow = true))
+    fun `a proxied session in the current route generation is reported as Tor`() {
+        assertTrue(claimsTorRoute(Route(true, true)))
     }
 
     @Test
-    fun `tor dropping while the socket opened is not reported as Tor`() {
-        // The over-claim this exists to stop: the selector answered NO_PROXY and the socket left
-        // directly, but the pre-connect snapshot still said Tor.
-        assertFalse(claimsTorRoute(viaTorAtConnect = true, routingThroughTorNow = false))
+    fun `a proxied session from a revoked generation is not reported as Tor`() {
+        assertFalse(claimsTorRoute(Route(true, false)))
     }
 
     @Test
-    fun `tor arriving while the socket opened is not reported as Tor either`() {
-        // The selector had already sent this one direct. Under-claiming costs the user nothing.
-        assertFalse(claimsTorRoute(viaTorAtConnect = false, routingThroughTorNow = true))
+    fun `a direct session in the current generation is not reported as Tor`() {
+        assertFalse(claimsTorRoute(Route(false, true)))
     }
 
     @Test
-    fun `a socket with no Tor at either end is reported as direct`() {
-        assertFalse(claimsTorRoute(viaTorAtConnect = false, routingThroughTorNow = false))
+    fun `a missing session provenance is not reported as Tor`() {
+        assertFalse(claimsTorRoute(null))
+    }
+
+    @Test
+    fun `clearing claims after a terminal Tor transition removes prior session evidence`() {
+        val claims = TorRouteClaims()
+        claims.remember("wss://relay.example", Route(true, true))
+
+        val retired = claims.removeAll()
+
+        assertTrue(retired.single() == ("wss://relay.example" to true))
+        assertFalse(claims.claimsTorRoute("wss://relay.example"))
+    }
+
+    private class Route(
+        override val usedTorProxy: Boolean,
+        private val current: Boolean,
+    ) : TorRouteProvenance {
+        override fun isCurrent(): Boolean = current
     }
 }

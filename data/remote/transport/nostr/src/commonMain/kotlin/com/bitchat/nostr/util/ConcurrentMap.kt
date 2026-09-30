@@ -22,6 +22,10 @@ class ConcurrentMap<K, V> {
 
     fun clear() = lock.withLock { map.clear() }
 
+    fun takeAll(): Map<K, V> = lock.withLock {
+        map.toMap().also { map.clear() }
+    }
+
     fun containsKey(key: K): Boolean = lock.withLock { map.containsKey(key) }
 
     fun remove(key: K): V? = lock.withLock { map.remove(key) }

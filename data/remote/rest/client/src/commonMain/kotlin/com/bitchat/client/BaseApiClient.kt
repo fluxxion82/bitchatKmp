@@ -1,6 +1,7 @@
 package com.bitchat.client
 
 import com.bitchat.client.model.ApiException
+import com.bitchat.client.model.ClientType
 import com.bitchat.client.model.RetryConfig
 import com.bitchat.domain.base.model.Outcome
 import com.bitchat.domain.base.model.failure.Failure
@@ -17,7 +18,9 @@ import kotlinx.coroutines.withContext
 import kotlin.math.pow
 
 class BaseApiClient(
-    val client: HttpClient,
+    private val routeProvider: RouteAwareClientProvider,
+    private val clientType: ClientType,
+    private val interceptors: List<(HttpRequestBuilder) -> Unit>,
     private val retryConfig: RetryConfig = RetryConfig()
 ) {
     suspend inline fun <reified T> get(
@@ -25,7 +28,7 @@ class BaseApiClient(
         crossinline builder: HttpRequestBuilder.() -> Unit = {}
     ): Outcome<T> {
         return executeWithRetry {
-            val response = client.get(path, builder)
+            val response = withClient { it.get(path, builder) }
             handleResponse(response)
         }
     }
@@ -35,7 +38,7 @@ class BaseApiClient(
         crossinline builder: HttpRequestBuilder.() -> Unit = {}
     ): Outcome<T> {
         return executeWithRetry {
-            val response = client.post(path, builder)
+            val response = withClient { it.post(path, builder) }
             handleResponse(response)
         }
     }
@@ -45,7 +48,7 @@ class BaseApiClient(
         crossinline builder: HttpRequestBuilder.() -> Unit = {}
     ): Outcome<T> {
         return executeWithRetry {
-            val response = client.put(path, builder)
+            val response = withClient { it.put(path, builder) }
             handleResponse(response)
         }
     }
@@ -55,7 +58,7 @@ class BaseApiClient(
         crossinline builder: HttpRequestBuilder.() -> Unit = {}
     ): Outcome<T> {
         return executeWithRetry {
-            val response = client.delete(path, builder)
+            val response = withClient { it.delete(path, builder) }
             handleResponse(response)
         }
     }
@@ -65,13 +68,16 @@ class BaseApiClient(
         noinline builder: FormBuilder.() -> Unit
     ): Outcome<T> {
         return executeWithRetry {
-            val response = client.submitFormWithBinaryData(
-                url = path,
-                formData = formData(builder)
-            )
+            val response = withClient {
+                it.submitFormWithBinaryData(url = path, formData = formData(builder))
+            }
             handleResponse(response)
         }
     }
+
+    @PublishedApi
+    internal suspend fun <T> withClient(block: suspend (HttpClient) -> T): T =
+        routeProvider.withRestClient(clientType, interceptors, block)
 
     suspend inline fun <reified T> handleResponse(response: HttpResponse): T {
         return when (response.status) {

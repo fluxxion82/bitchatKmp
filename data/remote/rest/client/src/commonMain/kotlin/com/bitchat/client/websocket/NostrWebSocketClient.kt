@@ -1,11 +1,12 @@
 package com.bitchat.client.websocket
 
-import io.ktor.client.*
+import com.bitchat.client.TorRouteProvenance
+import com.bitchat.client.WebSocketRouteProvider
 
 class NostrWebSocketClient(
-    httpClient: HttpClient
+    routeProvider: WebSocketRouteProvider
 ) {
-    private val wsClient = KtorWebSocketClient(httpClient)
+    private val wsClient = KtorWebSocketClient(routeProvider)
     fun connect(
         relayUrl: String,
         listener: NostrWebSocketListener,
@@ -14,8 +15,8 @@ class NostrWebSocketClient(
         maxBackoffMs: Long = 60000L
     ) {
         val adaptedListener = object : WebSocketListener {
-            override fun onOpen(url: String) {
-                listener.onOpen(relayUrl)
+            override fun onOpen(url: String, route: TorRouteProvenance) {
+                listener.onOpen(relayUrl, route)
             }
 
             override fun onMessage(url: String, text: String) {
@@ -66,7 +67,7 @@ class NostrWebSocketClient(
 }
 
 interface NostrWebSocketListener {
-    fun onOpen(relayUrl: String)
+    fun onOpen(relayUrl: String, route: TorRouteProvenance)
     fun onMessage(relayUrl: String, text: String)
     fun onClosing(relayUrl: String, code: Int, reason: String)
     fun onClosed(relayUrl: String, code: Int, reason: String)

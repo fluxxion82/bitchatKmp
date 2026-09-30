@@ -77,6 +77,7 @@ class TorManagerReadinessTest {
         assertEquals(TorMode.ON, status.mode)
         assertEquals(TorState.RUNNING, status.state)
         assertTrue(status.running)
+        assertTrue(status.routeGeneration > 0, "a ready SOCKS listener must publish a usable route generation")
         assertNull(status.errorMessage)
 
         // The whole point: nothing above came from a log line.

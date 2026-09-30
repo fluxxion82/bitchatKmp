@@ -3,13 +3,13 @@ package com.bitchat.local.prefs
 import com.bitchat.domain.tor.model.TorMode
 
 /**
- * Linux (the embedded build) starts with Tor off, because its HTTP engine cannot route through a
- * SOCKS proxy at all (`httpEngineSupportsTorProxy` is false in `ktorHttpClient.linux.kt`).
+ * Linux (the embedded build) starts with Tor on, like Android: its Curl engine routes Nostr through
+ * Arti (`httpEngineSupportsTorProxy` is true in `ktorHttpClient.linux.kt`).
  *
- * Defaulting to ON there is not a safe default but a dead one: the Tor gate refuses every relay
- * connection while the mode is ON, so a fresh install had no geohash channels and no Nostr DMs
- * because of a choice its user never made. The coupling is deliberate and repeated rather than
- * derived: `:data:local:platform` does not depend on `:data:remote:rest:client`, and a whole module
- * dependency for one boolean is worse than these two lines. Keep this in step with that actual.
+ * The two values must move together. With Tor ON and an engine that cannot proxy, the Tor gate
+ * refuses every relay connection, so a fresh install would get no geohash channels and no Nostr
+ * DMs from a choice its user never made. The coupling is repeated rather than derived:
+ * `:data:local:platform` does not depend on `:data:remote:rest:client`, and a module dependency for
+ * one boolean is worse than keeping these two lines in step.
  */
-internal actual val platformDefaultTorMode: TorMode = TorMode.OFF
+internal actual val platformDefaultTorMode: TorMode = TorMode.ON

@@ -13,6 +13,7 @@ class EnableTor(
     private val requestedIntent: MutableRequestedTorIntent,
     private val torEventBus: TorEventBus,
     private val coroutineScopeFacade: CoroutineScopeFacade,
+    private val routeLifecycle: TorRouteLifecycle? = null,
 ) : Usecase<Unit, Unit> {
 
     override suspend fun invoke(param: Unit) {
@@ -24,8 +25,17 @@ class EnableTor(
          * after the user had already switched off, and routing had nothing to read during the
          * whole window in between - which is exactly the window enforcement has to cover.
          */
-        requestedIntent.set(TorMode.ON)
-        torEventBus.update(TorEvent.ModeChanged)
+        // Existing direct requests and connection attempts must be gone before ON is observable.
+        // Otherwise a retry can acquire a direct route during the transition window.
+        if (routeLifecycle != null) {
+            routeLifecycle.transition {
+                requestedIntent.set(TorMode.ON)
+                torEventBus.update(TorEvent.ModeChanged)
+            }
+        } else {
+            requestedIntent.set(TorMode.ON)
+            torEventBus.update(TorEvent.ModeChanged)
+        }
 
         coroutineScopeFacade.applicationScope.launch {
             torRepository.enable()

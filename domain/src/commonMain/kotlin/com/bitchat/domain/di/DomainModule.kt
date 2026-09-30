@@ -236,9 +236,9 @@ val domainModule = module {
 
     single { GetTorStatus(torRepository = get(), torEventBus = get()) }
     single { GetTorMode(torRepository = get(), torEventBus = get()) }
-    single { EnableTor(torRepository = get(), requestedIntent = get(), torEventBus = get(), coroutineScopeFacade = get()) }
+    single { EnableTor(torRepository = get(), requestedIntent = get(), torEventBus = get(), coroutineScopeFacade = get(), routeLifecycle = getOrNull()) }
     single { ObserveRequestedTorMode(requestedIntent = get()) }
-    single { DisableTor(torRepository = get(), requestedIntent = get(), torEventBus = get()) }
+    single { DisableTor(torRepository = get(), requestedIntent = get(), torEventBus = get(), routeLifecycle = getOrNull()) }
     single { GetTorAvailability(torRepository = get()) }
 
     single { GetAllFavorites(userRepository = get()) }

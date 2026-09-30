@@ -194,10 +194,26 @@ class SettingsViewModel(
         if (enabled && !_state.value.torAvailable) return
 
         viewModelScope.launch {
-            if (enabled) {
-                enableTor()
-            } else {
-                disableTor()
+            try {
+                if (enabled) {
+                    enableTor()
+                } else {
+                    disableTor()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                // A route transition that did not publish cannot be represented as protection.
+                // Keep the failure in state instead of letting a viewModelScope child report it
+                // only as an unhandled exception.
+                _state.update {
+                    it.copy(
+                        torRunning = false,
+                        torBootstrapPercent = 0,
+                        torErrorMessage = "Unable to change Tor routing: ${error.message ?: "unknown error"}. " +
+                            "Traffic is unprotected.",
+                    )
+                }
             }
         }
     }

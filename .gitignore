@@ -9,7 +9,8 @@ CLAUDE.md
 AGENTS.md
 
 # Rust/Cargo build output                                                                                                                                                                                    
-**/target/ 
+**/target/
+**/target-*/
 
 data/remote/tor/jniLibs
 data/remote/tor/native/libs/
@@ -22,7 +23,7 @@ data/crypto/native/libsodium/build/
 data/crypto/native/secp256k1/build/
 data/noise/native/noise-c/build/
 
-data/remote/transport/bluetooth/native/sysroot/                                                                                                                                                                   
+data/remote/transport/bluetooth/native/sysroot                                                                                                                                                                   
 data/remote/transport/bluetooth/native/gattlib/build/                                                                                                                                                             
 data/remote/transport/bluetooth/native/stubs/*.o                                                                                                                                                                  
 data/remote/transport/bluetooth/native/stubs/*.a 

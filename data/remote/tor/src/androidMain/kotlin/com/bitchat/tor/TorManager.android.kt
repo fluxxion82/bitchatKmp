@@ -40,6 +40,10 @@ actual class TorManager actual constructor(
     @Volatile
     private var currentPort = DEFAULT_SOCKS_PORT
 
+    /** Monotonic identity for each listener confirmed ready by Arti. */
+    @Volatile
+    private var nextRouteGeneration = 0L
+
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     private var retryJob: Job? = null
@@ -119,7 +123,7 @@ actual class TorManager actual constructor(
         }
 
         Log.i(TAG, "Starting SOCKS proxy on port $currentPort...")
-        _statusFlow.update { it.copy(mode = TorMode.ON, state = TorState.STARTING) }
+        _statusFlow.update { it.copy(mode = TorMode.ON, state = TorState.STARTING, routeGeneration = 0) }
 
         val result = withContext(Dispatchers.IO) {
             try {
@@ -161,7 +165,8 @@ actual class TorManager actual constructor(
                 mode = TorMode.OFF,
                 running = false,
                 bootstrapPercent = 0,
-                state = TorState.OFF
+                state = TorState.OFF,
+                routeGeneration = 0,
             )
         }
     }
@@ -191,11 +196,13 @@ actual class TorManager actual constructor(
             }
 
             line.contains("We have found that guard [scrubbed] is usable", ignoreCase = true) -> {
+                val generation = _statusFlow.value.routeGeneration.takeIf { it > 0 } ?: ++nextRouteGeneration
                 _statusFlow.update {
                     it.copy(
                         bootstrapPercent = 100,
                         state = TorState.RUNNING,
-                        running = true
+                        running = true,
+                        routeGeneration = generation,
                     )
                 }
                 retryCount = 0
@@ -212,7 +219,8 @@ actual class TorManager actual constructor(
                     it.copy(
                         state = TorState.OFF,
                         running = false,
-                        bootstrapPercent = 0
+                        bootstrapPercent = 0,
+                        routeGeneration = 0,
                     )
                 }
             }
@@ -223,7 +231,8 @@ actual class TorManager actual constructor(
                         state = TorState.ERROR,
                         errorMessage = line,
                         running = false,  // Clear running flag on error
-                        bootstrapPercent = 0  // Reset bootstrap progress
+                        bootstrapPercent = 0,  // Reset bootstrap progress
+                        routeGeneration = 0,
                     )
                 }
                 scheduleRetry()

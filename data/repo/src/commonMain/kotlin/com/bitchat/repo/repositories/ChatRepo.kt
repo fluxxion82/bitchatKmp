@@ -54,6 +54,7 @@ import com.bitchat.nostr.NostrClient
 import com.bitchat.nostr.NostrPreferences
 import com.bitchat.nostr.NostrProofOfWork
 import com.bitchat.nostr.NostrRelay
+import com.bitchat.nostr.NostrSubscriptionId
 import com.bitchat.nostr.NostrTransport
 import com.bitchat.nostr.logging.logNostrDebug
 import com.bitchat.nostr.model.NostrEvent
@@ -82,7 +83,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
@@ -419,7 +419,7 @@ class ChatRepo(
         println("ChatRepo: Creating subscription for ${relayUrls.size} relays (geohash $geohash)")
 
         nostrRelay.subscribe(
-            subscriptionId = "geohash_$geohash",
+            subscriptionId = NostrSubscriptionId.geohash(geohash),
             filter = filter,
             handler = { event -> handleGeohashEvent(geohash, event) },
             targetRelayUrls = relayUrls.ifEmpty { null },
@@ -427,7 +427,7 @@ class ChatRepo(
         )
 
         nostrRelay.subscribe(
-            subscriptionId = "sampling_$geohash",
+            subscriptionId = NostrSubscriptionId.sampling(geohash),
             filter = filter,
             handler = { event -> handleGeohashEvent(geohash, event) },
             targetRelayUrls = relayUrls.ifEmpty { null },
@@ -441,16 +441,17 @@ class ChatRepo(
 
     private fun subscribeToDirectMessages() {
         coroutineScopeFacade.nostrScope.launch {
-            if (!torGateAllowsTraffic()) return@launch
             val identity = nostrClient.getCurrentNostrIdentity() ?: return@launch
             val pubkey = identity.publicKeyHex
             if (!activeDmSubscriptions.add(pubkey)) return@launch
 
+            // Subscription intent is independent of route readiness. NostrRelay retains this
+            // registration and sends it as soon as a READY/OFF-recovery connection opens.
             nostrRelay.ensureDefaultRelaysConnected()
 
             val filter = NostrFilter.giftWrapsFor(pubkey)
             nostrRelay.subscribe(
-                subscriptionId = "dm_$pubkey",
+                subscriptionId = NostrSubscriptionId.directMessages(pubkey),
                 filter = filter,
                 handler = { event -> handleDirectMessageEvent(event, identity, null) },
                 targetRelayUrls = null,
@@ -463,18 +464,15 @@ class ChatRepo(
         if (!activeGeohashDmSubscriptions.add(geohash)) return
 
         coroutineScopeFacade.nostrScope.launch {
-            if (!torGateAllowsTraffic()) {
-                // Undo the guard above, so a later attempt is not skipped as a duplicate.
-                activeGeohashDmSubscriptions.remove(geohash)
-                return@launch
-            }
             val identity = runCatching { nostrClient.deriveIdentity(geohash) }.getOrNull() ?: return@launch
+            // Keep the desired geohash subscription while Tor is starting. The relay restores
+            // it when its route reconnects instead of losing it to a one-shot readiness gate.
             nostrRelay.ensureGeohashRelaysConnected(geohash, nRelays = 5, includeDefaults = false)
 
             val relayUrls = nostrRelay.getRelaysForGeohash(geohash).toSet()
             val filter = NostrFilter.giftWrapsFor(identity.publicKeyHex)
             nostrRelay.subscribe(
-                subscriptionId = "geodm_$geohash",
+                subscriptionId = NostrSubscriptionId.geohashDirectMessages(geohash),
                 filter = filter,
                 handler = { event -> handleDirectMessageEvent(event, identity, geohash) },
                 targetRelayUrls = relayUrls.ifEmpty { null },
@@ -1895,8 +1893,8 @@ class ChatRepo(
         torManager?.takeIf { httpEngineSupportsTorProxy }?.let { manager ->
             coroutineScopeFacade.nostrScope.launch {
                 manager.statusFlow
-                    .distinctUntilChangedBy { it.running to it.bootstrapPercent to it.state }
-                    .filter { it.running && it.bootstrapPercent >= 100 && it.state == com.bitchat.domain.tor.model.TorState.RUNNING }
+                    .distinctUntilChangedBy { manager.isProxyReady() }
+                    .filter { manager.isProxyReady() }
                     .debounce(1000) // ADDED: Debounce for 1 second as additional defense layer
                     .collect {
                         println("🚀 ChatRepo: Tor is now ready, establishing relay connections")
@@ -1935,8 +1933,8 @@ class ChatRepo(
         val intent = requestedTorIntent ?: return
         coroutineScopeFacade.nostrScope.launch {
             intent.updates
-                // No distinctUntilChanged: a StateFlow already conflates equal values.
-                .drop(1)
+                // The initial stored ON is a real route transition too. Skipping it let relay
+                // startup keep direct sessions alive until some later user toggle.
                 .collect { mode ->
                     if (mode == TorMode.OFF) {
                         println("🚀 ChatRepo: Tor switched off, restoring relay connections")

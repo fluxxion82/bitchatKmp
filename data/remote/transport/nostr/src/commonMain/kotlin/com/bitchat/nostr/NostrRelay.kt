@@ -2,6 +2,7 @@ package com.bitchat.nostr
 
 import com.bitchat.domain.base.logBody
 import com.bitchat.cache.Cache
+import com.bitchat.client.TorRouteProvenance
 import com.bitchat.client.websocket.NostrWebSocketClient
 import com.bitchat.client.websocket.NostrWebSocketListener
 import com.bitchat.nostr.model.NostrEvent
@@ -75,12 +76,8 @@ class NostrRelay(
     // Per-geohash relay selection
     private val geohashToRelays = ConcurrentMap<String, Set<String>>() // geohash -> relay URLs
 
-    /**
-     * Whether the socket for a relay URL went through the Tor SOCKS proxy. Written twice: the
-     * snapshot taken before the connect call, then narrowed to the confirmed answer when the open
-     * is reported. See [claimsTorRoute] for why one read is not enough either way.
-     */
-    private val connectedViaTor = ConcurrentMap<String, Boolean>()
+    /** Route evidence for each open socket. Terminal states clear this store before reconnecting. */
+    private val routeClaims = TorRouteClaims()
 
     private fun routingThroughTor(): Boolean = torProxyStatus?.isRoutingThroughTor() == true
 
@@ -98,6 +95,12 @@ class NostrRelay(
     suspend fun disconnectAll() {
         val urls = relaysList.map { it.url }
         println("NostrRelay: closing ${urls.size} relay connection(s)")
+        // Replace any published "Tor connection established" evidence before cancellation. A
+        // cancellation deliberately suppresses onFailure, so leaving this to callbacks would
+        // retain a false protection line through restart and bootstrap.
+        routeClaims.removeAll().forEach { (url, viaTor) ->
+            RelayLogFormatter.disconnected(url, viaTor)?.let { relayLogSink?.onLogLine(it) }
+        }
         urls.forEach { url ->
             runCatching { wsClient.disconnect(url) }
                 .onFailure { println("NostrRelay: failed to close $url: ${it.message}") }
@@ -217,16 +220,13 @@ class NostrRelay(
         }
 
         println("NostrRelay: Connecting to $relayUrl...")
-        // An attempt line, and honest as one: this is what Tor looked like when the connect was
-        // made. handleRelayOpen narrows it before anything claims the connection is established.
-        val viaTor = routingThroughTor()
-        connectedViaTor[relayUrl] = viaTor
-        RelayLogFormatter.connectAttempt(relayUrl, viaTor)?.let { relayLogSink?.onLogLine(it) }
+        routeClaims.removeClaim(relayUrl)
+        RelayLogFormatter.connectAttempt(relayUrl, false)?.let { relayLogSink?.onLogLine(it) }
 
         try {
             val listener = object : NostrWebSocketListener {
-                override fun onOpen(relayUrl: String) {
-                    handleRelayOpen(relayUrl)
+                override fun onOpen(relayUrl: String, route: TorRouteProvenance) {
+                    handleRelayOpen(relayUrl, route)
                 }
 
                 override fun onMessage(relayUrl: String, text: String) {
@@ -259,16 +259,10 @@ class NostrRelay(
         }
     }
 
-    private fun handleRelayOpen(relayUrl: String) {
+    private fun handleRelayOpen(relayUrl: String, route: TorRouteProvenance) {
         println("NostrRelay: ✓ Connected to $relayUrl")
-        // Re-checked here rather than trusting the pre-connect snapshot alone: the engine picks
-        // the proxy while this socket is opening, so Tor may have gone away since. The confirmed
-        // answer is stored back, so the eventual "connection closed" line agrees with this one.
-        val viaTor = claimsTorRoute(
-            viaTorAtConnect = connectedViaTor[relayUrl] == true,
-            routingThroughTorNow = routingThroughTor(),
-        )
-        connectedViaTor[relayUrl] = viaTor
+        val viaTor = claimsTorRoute(route)
+        routeClaims.remember(relayUrl, route)
         RelayLogFormatter.connected(relayUrl, viaTor)?.let { relayLogSink?.onLogLine(it) }
         updateRelayStatus(relayUrl, true)
 
@@ -559,7 +553,7 @@ class NostrRelay(
         println("NostrRelay: Error type: ${error::class.simpleName}")
         println("NostrRelay: Error message: ${error.message}")
         error.printStackTrace()
-        RelayLogFormatter.disconnected(relayUrl, connectedViaTor.remove(relayUrl) == true)
+        RelayLogFormatter.disconnected(relayUrl, routeClaims.removeClaim(relayUrl))
             ?.let { relayLogSink?.onLogLine(it) }
 
         updateRelayStatus(relayUrl, false, error)
@@ -675,9 +669,7 @@ class NostrRelay(
         handler: (NostrEvent) -> Unit,
         targetRelayUrls: Set<String>? = null
     ): String {
-        // use shortened eventId to keep subscription ID under 64 chars (relay limit)
-        val shortEventId = channelEventId.take(16)
-        val subscriptionId = "chan_$shortEventId"
+        val subscriptionId = NostrSubscriptionId.channelMessages(channelEventId)
 
         val filter = NostrFilter(
             kinds = listOf(NostrKind.CHANNEL_MESSAGE),
@@ -705,11 +697,8 @@ class NostrRelay(
         channelName: String? = null,
         targetRelayUrls: Set<String>? = null
     ): String {
-        val subscriptionId = if (channelName != null) {
-            "channel_create_${channelName.hashCode()}"
-        } else {
-            "channel_create_all"
-        }
+        val subscriptionId = channelName?.let(NostrSubscriptionId::channelCreations)
+            ?: NostrSubscriptionId.allChannelCreations()
 
         val filter = NostrFilter(
             kinds = listOf(NostrKind.CHANNEL_CREATE)
@@ -780,17 +769,13 @@ class NostrRelay(
      * @param channelEventId The ID of the kind 40 channel creation event
      */
     fun unsubscribeFromChannelMessages(channelEventId: String) {
-        val shortEventId = channelEventId.take(16)
-        val subscriptionId = "chan_$shortEventId"
-        unsubscribe(subscriptionId)
+        unsubscribe(NostrSubscriptionId.channelMessages(channelEventId))
     }
 
     fun unsubscribeFromChannelCreations(channelName: String? = null) {
-        val subscriptionId = if (channelName != null) {
-            "channel_create_${channelName.hashCode()}"
-        } else {
-            "channel_create_all"
-        }
-        unsubscribe(subscriptionId)
+        unsubscribe(
+            channelName?.let(NostrSubscriptionId::channelCreations)
+                ?: NostrSubscriptionId.allChannelCreations()
+        )
     }
 }

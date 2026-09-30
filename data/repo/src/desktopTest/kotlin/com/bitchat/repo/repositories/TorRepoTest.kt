@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
@@ -143,6 +144,43 @@ class TorRepoTest {
         assertEquals(
             "Tor connection established to relay.primal.net:443",
             torRepo.getTorStatus().lastLogLine
+        )
+    }
+
+    @Test
+    fun `route retirement clears a published tor relay line without a relay callback`() = runTest {
+        val flow = MutableStateFlow(TorStatus(state = TorState.RUNNING, running = true))
+        val manager = mockk<TorManager>(relaxed = true).also {
+            every { it.statusFlow } returns flow
+            every { it.isAvailable } returns true
+        }
+        val torRepo = repo(manager)
+        torRepo.recordExternalLogLine("Tor connection established to relay.primal.net:443")
+
+        flow.value = TorStatus(state = TorState.ERROR, lastLogLine = "listener retired")
+        advanceUntilIdle()
+
+        assertEquals("listener retired", torRepo.getTorStatus().lastLogLine)
+    }
+
+    @Test
+    fun `relay evidence is not published after its route generation retires`() = runTest {
+        val flow = MutableStateFlow(
+            TorStatus(state = TorState.RUNNING, running = true, routeGeneration = 7)
+        )
+        val manager = mockk<TorManager>(relaxed = true).also {
+            every { it.statusFlow } returns flow
+            every { it.isAvailable } returns true
+        }
+        val torRepo = repo(manager)
+        torRepo.recordExternalLogLine("Tor connection established to relay.primal.net:443")
+
+        flow.value = TorStatus(state = TorState.RUNNING, running = true, routeGeneration = 8)
+        advanceUntilIdle()
+
+        assertFalse(
+            torRepo.getTorStatus().lastLogLine.contains("Tor connection established"),
+            "evidence from the retired generation was still published"
         )
     }
 

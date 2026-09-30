@@ -355,4 +355,25 @@ class SettingsViewModelTorTest : BaseViewModelTest() {
 
         assertFalse(viewModel.state.value.torBlocksNostr)
     }
+
+    @Test
+    fun `a failed Tor transition is shown as unprotected instead of escaping the toggle coroutine`() = runTest {
+        coEvery { enableTor(Unit) } throws IllegalStateException("direct transport did not retire")
+        val viewModel = buildViewModel(
+            torAvailability = TorAvailability.AVAILABLE,
+            torMode = TorMode.OFF,
+            torStatus = TorStatus(state = TorState.ERROR, errorMessage = null),
+        )
+        instantExecutorRule.scheduler.runCurrent()
+
+        viewModel.onTorNetworkToggled(true)
+        instantExecutorRule.scheduler.advanceUntilIdle()
+
+        assertFalse(viewModel.state.value.torNetworkEnabled, "failed ON must not be presented as protection")
+        assertFalse(viewModel.state.value.torRunning)
+        assertTrue(
+            viewModel.state.value.torErrorMessage?.contains("direct transport did not retire") == true,
+            "the failed routing transition needs a visible explanation",
+        )
+    }
 }

@@ -1,13 +1,15 @@
 package com.bitchat.client.websocket
 
+import com.bitchat.client.WebSocketRouteProvider
 import com.bitchat.domain.base.logBody
-import io.ktor.client.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -16,17 +18,29 @@ import kotlin.math.pow
 import kotlin.time.Duration.Companion.seconds
 
 internal class KtorWebSocketClient(
-    private val httpClient: HttpClient,
+    private val routeProvider: WebSocketRouteProvider,
 ) {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-    private val activeConnections = mutableMapOf<String, WebSocketConnection>()
+    internal val activeConnections = mutableMapOf<String, WebSocketConnection>()
+
+    internal data class ReconnectPolicy(
+        val listener: WebSocketListener,
+        val maxReconnectAttempts: Int,
+        val initialBackoffMs: Long,
+        val maxBackoffMs: Long,
+        val backoffMultiplier: Double,
+    )
 
     data class WebSocketConnection(
         val url: String,
         var reconnectAttempts: Int = 0,
         var job: Job? = null,
         var reconnectJob: Job? = null,
-        var session: WebSocketSession? = null
+        var session: WebSocketSession? = null,
+        var route: com.bitchat.client.TorRouteProvenance? = null,
+        internal var reconnectPolicy: ReconnectPolicy? = null,
+        /** Identity of the reader allowed to report on this connection; replaced per launch. */
+        internal var owner: Any? = null,
     )
 
     /**
@@ -57,11 +71,22 @@ internal class KtorWebSocketClient(
             println("KtorWebSocketClient: resetting retry budget for $url")
             connection.reconnectAttempts = 0
         }
+        connection.reconnectPolicy = ReconnectPolicy(
+            listener = listener,
+            maxReconnectAttempts = maxReconnectAttempts,
+            initialBackoffMs = initialBackoffMs,
+            maxBackoffMs = maxBackoffMs,
+            backoffMultiplier = backoffMultiplier,
+        )
 
-        // ADDED: Early return if already successfully connected
+        // A live socket is reusable only while its route provenance remains current.
         if (connection.session?.isActive == true) {
-            println("⚠️ KtorWebSocketClient: Already connected to $url, skipping duplicate connect()")
-            return
+            if (connection.route?.isCurrent() == true) {
+                println("⚠️ KtorWebSocketClient: Already connected to $url, skipping duplicate connect()")
+                return
+            }
+            println("KtorWebSocketClient: retiring stale route for $url before reconnecting")
+            retireConnection(connection)
         }
 
         // ADDED: Early return if connection already in progress
@@ -74,82 +99,98 @@ internal class KtorWebSocketClient(
         connection.job?.cancel()
         connection.reconnectJob?.cancel()
 
+        val owner = Any()
+        connection.owner = owner
         connection.job = scope.launch {
             var session: WebSocketSession? = null
+
+            // True once a newer launch or a retirement took this connection over. An obsolete
+            // reader must not report closure or failure: Nostr would mark the replacement's relay
+            // disconnected. Ownership is set before launch, so a stored session left behind by an
+            // unwinding older reader cannot make the current reader look obsolete.
+            fun superseded(): Boolean = connection.owner !== owner
+
             try {
                 println("KtorWebSocketClient: 🔌 Attempting connection to $url")
-                session = withTimeoutOrNull(15.seconds) {
-                    httpClient.webSocketSession(url)
-                }
-                if (session == null) {
-                    println("KtorWebSocketClient: ⏳ WebSocket connect timeout for $url")
-                    listener.onFailure(url, IllegalStateException("WebSocket connection timeout"))
-                    return@launch
-                }
+                routeProvider.useWebSocketRoute { client, route ->
+                    session = withTimeoutOrNull(15.seconds) {
+                        client.webSocketSession(url)
+                    }
+                    if (session == null) {
+                        println("KtorWebSocketClient: ⏳ WebSocket connect timeout for $url")
+                        if (!superseded()) {
+                            listener.onFailure(url, IllegalStateException("WebSocket connection timeout"))
+                        }
+                        return@useWebSocketRoute
+                    }
 
-                println("KtorWebSocketClient: ✅ WebSocket session established for $url")
-                connection.reconnectAttempts = 0
-                connection.session = session
-                listener.onOpen(url)
+                    val opened = session!!
+                    check(route.isCurrent()) { "WebSocket route was retired before session publication" }
+                    println("KtorWebSocketClient: ✅ WebSocket session established for $url")
+                    connection.reconnectAttempts = 0
+                    connection.session = opened
+                    connection.route = route
+                    listener.onOpen(url, route)
 
-                // Read messages until connection closes
-                for (frame in session.incoming) {
-                    if (!scope.isActive) break
+                    for (frame in opened.incoming) {
+                        if (!scope.isActive) break
 
-                    when (frame) {
-                        is Frame.Text -> {
-                            try {
-                                val messageText = frame.readText()
-//                                println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-//                                println("📥 KtorWebSocketClient RECEIVED MESSAGE")
-//                                println("   Relay URL: $url")
-//                                println("   Message length: ${messageText.length} chars")
-//                                println("   Message preview: ${messageText.take(100)}${if (messageText.length > 100) "..." else ""}")
-//                                println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-                                listener.onMessage(url, messageText)
-
-                                println("✅ KtorWebSocketClient: Message handler completed for $url, Message: ${logBody(messageText)}")
-                            } catch (e: Exception) {
-                                // Continue processing even if message handler fails
-                                println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                                println("❌ KtorWebSocketClient: Message processing error")
-                                println("   Relay URL: $url")
-                                println("   Error: ${e.message}")
-                                println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                                e.printStackTrace()
-                                listener.onFailure(url, e)
+                        when (frame) {
+                            is Frame.Text -> {
+                                try {
+                                    val messageText = frame.readText()
+                                    listener.onMessage(url, messageText)
+                                    println("✅ KtorWebSocketClient: Message handler completed for $url, Message: ${logBody(messageText)}")
+                                } catch (e: Exception) {
+                                    listener.onFailure(url, e)
+                                }
                             }
-                        }
 
-                        is Frame.Close -> {
-                            val closeReason = frame.readReason()
-                            val code = closeReason?.code?.toInt() ?: 1000
-                            val reason = closeReason?.message ?: "Unknown"
-                            println("KtorWebSocketClient: 🔌 Connection closing for $url: code=$code, reason=$reason")
-                            listener.onClosing(url, code, reason)
-                            listener.onClosed(url, code, reason)
-                            connection.session = null
-                            return@launch
-                        }
+                            is Frame.Close -> {
+                                val closeReason = frame.readReason()
+                                val code = closeReason?.code?.toInt() ?: 1000
+                                val reason = closeReason?.message ?: "Unknown"
+                                if (!superseded()) {
+                                    listener.onClosing(url, code, reason)
+                                    listener.onClosed(url, code, reason)
+                                }
+                                if (connection.session === opened) {
+                                    connection.session = null
+                                    connection.route = null
+                                }
+                                return@useWebSocketRoute
+                            }
 
-                        else -> {
-                            // Ignore other frame types (binary, ping, pong, etc.)
+                            else -> Unit
                         }
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 println("KtorWebSocketClient: ❌ Connection failed for $url: ${e.message}")
                 println("KtorWebSocketClient: Exception type: ${e::class.simpleName}")
                 e.printStackTrace()
-                connection.session = null
+                // This reader may have been retired while a replacement was connecting. Never
+                // erase that replacement merely because the old route's teardown later failed.
+                if (superseded()) {
+                    println("KtorWebSocketClient: ignoring failure from a superseded reader for $url")
+                    return@launch
+                }
+                if (connection.session === session) {
+                    connection.session = null
+                    connection.route = null
+                }
                 listener.onFailure(url, e)
             } finally {
-                if (session != null && connection.session != session) {
-                    session?.close(CloseReason(1000, "Session closed"))
-                }
-                if (connection.session == session) {
+                if (connection.session === session) {
                     connection.session = null
+                    connection.route = null
+                }
+                // A cancelled reader does not cancel Ktor's client-owned websocket job. Always
+                // close the owned session before returning the route lease, including cancellation.
+                session?.let { opened ->
+                    runCatching { opened.close(CloseReason(1000, "Session closed")) }
                 }
             }
 
@@ -178,6 +219,7 @@ internal class KtorWebSocketClient(
         maxBackoffMs: Long,
         backoffMultiplier: Double
     ) {
+        if (connection.reconnectJob?.isActive == true) return
         connection.reconnectAttempts++
 
         // Calculate backoff delay with exponential growth
@@ -233,6 +275,17 @@ internal class KtorWebSocketClient(
                 return
             }
 
+            if (connection.route?.isCurrent() != true) {
+                println("KtorWebSocketClient.send refused: route for $url was retired")
+                try {
+                    session.close(CloseReason(1000, "Route retired"))
+                } catch (_: Exception) {
+                    // The cancelled reader also closes its owned session in its finally block.
+                }
+                retireConnection(connection)
+                return
+            }
+
             session.send(Frame.Text(message))
 
 //            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -246,7 +299,30 @@ internal class KtorWebSocketClient(
             println("   Error: ${e.message}")
             println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             e.printStackTrace()
-            activeConnections[url]?.session = null
+            activeConnections[url]?.let(::retireConnection)
+        }
+    }
+
+    /** Cancels exactly the reader that owns this stale session, never another relay's reader. */
+    private fun retireConnection(connection: WebSocketConnection) {
+        connection.owner = null
+        connection.session = null
+        connection.route = null
+        connection.reconnectJob?.cancel()
+        connection.reconnectJob = null
+        val reader = connection.job
+        connection.job = null
+        reader?.cancel()
+        connection.reconnectPolicy?.let { policy ->
+            scheduleReconnection(
+                url = connection.url,
+                listener = policy.listener,
+                connection = connection,
+                maxReconnectAttempts = policy.maxReconnectAttempts,
+                initialBackoffMs = policy.initialBackoffMs,
+                maxBackoffMs = policy.maxBackoffMs,
+                backoffMultiplier = policy.backoffMultiplier,
+            )
         }
     }
 
@@ -255,8 +331,8 @@ internal class KtorWebSocketClient(
      */
     suspend fun disconnect(url: String) {
         val connection = activeConnections.remove(url) ?: return
-        connection.job?.cancel()
-        connection.reconnectJob?.cancel()
+        connection.owner = null
+        connection.reconnectJob?.cancelAndJoin()
 
         try {
             /*
@@ -269,6 +345,8 @@ internal class KtorWebSocketClient(
             // Already closed, or the session never opened.
         } finally {
             connection.session = null
+            connection.route = null
+            connection.job?.cancelAndJoin()
         }
     }
 
@@ -276,7 +354,8 @@ internal class KtorWebSocketClient(
      * Check if connected to a WebSocket URL.
      */
     fun isConnected(url: String): Boolean {
-        return activeConnections[url]?.session?.isActive == true
+        val connection = activeConnections[url] ?: return false
+        return connection.session?.isActive == true && connection.route?.isCurrent() == true
     }
 
     /**

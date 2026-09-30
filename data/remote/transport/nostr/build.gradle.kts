@@ -86,6 +86,8 @@ kotlin {
             dependencies {
                 implementation("org.jetbrains.kotlin:kotlin-test")
                 implementation("org.jetbrains.kotlin:kotlin-test-junit")
+                implementation(project(":data:remote:tor"))
+                implementation("io.mockk:mockk:1.14.7")
 
             }
         }

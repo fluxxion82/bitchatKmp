@@ -35,7 +35,9 @@ class TorRepo(
     private val engineSupportsTorProxy: Boolean = httpEngineSupportsTorProxy,
 ) : TorRepository {
     @Volatile
-    private var externalLogLine: String? = null
+    private var externalLogLine: RouteEvidence? = null
+
+    private data class RouteEvidence(val line: String, val generation: Long)
 
     /**
      * True when this process tried to honour a stored ON and Tor did not come up.
@@ -58,7 +60,15 @@ class TorRepo(
     init {
         coroutineScopeFacade.applicationScope.launch {
             torManager.statusFlow
-                .collect {
+                .collect { status ->
+                    // Relay callbacks are best-effort and are deliberately suppressed during
+                    // cancellation. Native route retirement is authoritative, so clear any
+                    // previously published "Tor connection established" evidence here too.
+                    if (status.state != TorState.RUNNING ||
+                        externalLogLine?.generation != status.routeGeneration
+                    ) {
+                        externalLogLine = null
+                    }
                     torEventBus.update(TorEvent.StatusChanged)
                 }
         }
@@ -142,7 +152,10 @@ class TorRepo(
             // relay lines keep arriving while Tor is down because traffic falls back to direct.
             status
         } else {
-            status.copy(lastLogLine = externalLogLine ?: status.lastLogLine)
+            val evidence = externalLogLine?.takeIf {
+                status.state == TorState.RUNNING && it.generation == status.routeGeneration
+            }
+            status.copy(lastLogLine = evidence?.line ?: status.lastLogLine)
         }
     }
 
@@ -171,7 +184,7 @@ class TorRepo(
     }
 
     fun recordExternalLogLine(line: String) {
-        externalLogLine = line
+        externalLogLine = RouteEvidence(line, torManager.statusFlow.value.routeGeneration)
         coroutineScopeFacade.applicationScope.launch {
             torEventBus.update(TorEvent.StatusChanged)
         }

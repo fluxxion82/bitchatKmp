@@ -7,5 +7,7 @@ data class TorStatus(
     val lastLogLine: String = "",
     val state: TorState = TorState.OFF,
     val socksPort: Int = 9050,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    /** Native listener generation; zero means no route is currently owned. */
+    val routeGeneration: Long = 0,
 )

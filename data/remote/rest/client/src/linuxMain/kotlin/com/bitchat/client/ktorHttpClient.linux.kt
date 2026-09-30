@@ -1,8 +1,9 @@
 package com.bitchat.client
 
 import com.bitchat.tor.TorManager
+import com.bitchat.client.curl.Curl
+import com.bitchat.client.curl.CurlClientEngineConfig
 import io.ktor.client.engine.*
-import io.ktor.client.engine.curl.*
 import kotlin.time.Duration
 
 /**
@@ -23,14 +24,14 @@ private object LinuxCurl : HttpClientEngineFactory<CurlClientEngineConfig> {
 }
 
 actual fun getEngine(isDebug: Boolean, torManager: TorManager?): HttpClientEngineFactory<*> {
-    // Curl engine supports TLS on Native (CIO doesn't)
-    // Use custom factory with CA path configured for Linux
-    // TODO: Add SOCKS proxy support for Tor when needed
+    // Curl engine supports TLS on Native (CIO doesn't). LinuxCurl is an in-repo fork of Ktor
+    // Curl 3.3.3 that clears CURLOPT_NOPROXY on every easy handle.
     return LinuxCurl
 }
 
-/** [LinuxCurl] is not given a SOCKS proxy, so nothing ever leaves via Tor. */
-actual val httpEngineSupportsTorProxy: Boolean = false
+// LinuxCurl routes through Arti with socks5h:// (remote DNS) and a forced empty CURLOPT_NOPROXY,
+// so NO_PROXY in the environment cannot send a Tor request direct.
+actual val httpEngineSupportsTorProxy: Boolean = true
 
 /** No pings: the Curl engine calls an incoming PONG a Ping, so ours are never answered. */
 actual val websocketPingInterval: Duration? = null

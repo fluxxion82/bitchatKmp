@@ -10,6 +10,7 @@ class DisableTor(
     private val torRepository: TorRepository,
     private val requestedIntent: MutableRequestedTorIntent,
     private val torEventBus: TorEventBus,
+    private val routeLifecycle: TorRouteLifecycle? = null,
 ) : Usecase<Unit, Unit> {
 
     override suspend fun invoke(param: Unit) {
@@ -18,8 +19,16 @@ class DisableTor(
          * asks, not when a stop that may block finally returns -- and it must work even when Tor
          * never started, which on a platform with no library is every time.
          */
-        requestedIntent.set(TorMode.OFF)
-        torEventBus.update(TorEvent.ModeChanged)
-        torRepository.disable()
+        if (routeLifecycle != null) {
+            routeLifecycle.transition(waitForDirectRetirements = false) {
+                torRepository.disable()
+                requestedIntent.set(TorMode.OFF)
+                torEventBus.update(TorEvent.ModeChanged)
+            }
+        } else {
+            requestedIntent.set(TorMode.OFF)
+            torEventBus.update(TorEvent.ModeChanged)
+            torRepository.disable()
+        }
     }
 }

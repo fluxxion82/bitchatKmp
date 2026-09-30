@@ -29,8 +29,10 @@ const val SECOND_MILLISECONDS = 1000L
 fun ktorWebSocketHttpClient(
     torManager: TorManager? = null,
     engine: HttpClientEngineFactory<*> = getEngine(getKoin().get<AppInformation>().debug, torManager),
+    proxy: ProxyConfig? = null,
 ): HttpClient {
     return HttpClient(engine) {
+        engine { this.proxy = proxy }
         install(Logging) {
             logger = NetworkLogger()
             level = networkLogLevel()
@@ -53,8 +55,10 @@ fun ktorHttpClient(
     interceptors: List<(HttpRequestBuilder) -> Unit>,
     torManager: TorManager? = null,
     engine: HttpClientEngineFactory<*> = getEngine(getKoin().get<AppInformation>().debug, torManager),
+    proxy: ProxyConfig? = null,
 ): HttpClient {
     return HttpClient(engine) {
+        engine { this.proxy = proxy }
         install(ContentNegotiation) {
             json(
                 json = kotlinx.serialization.json.Json {

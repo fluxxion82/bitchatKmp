@@ -2,29 +2,30 @@ package com.bitchat.client.di
 
 import com.bitchat.client.BaseApiClient
 import com.bitchat.client.NostrGeoRelayClient
-import com.bitchat.client.HttpEngineProvider
-import com.bitchat.client.getEngine
-import com.bitchat.client.ktorHttpClient
-import com.bitchat.client.ktorWebSocketHttpClient
 import com.bitchat.client.model.ClientType
-import com.bitchat.domain.initialization.models.AppInformation
 import com.bitchat.client.model.RetryConfig
+import com.bitchat.client.RouteAwareClientProvider
+import com.bitchat.client.WebSocketRouteProvider
 import com.bitchat.client.websocket.NostrWebSocketClient
+import com.bitchat.domain.tor.TorRouteLifecycle
 import org.koin.dsl.module
+import org.koin.dsl.binds
 
 val clientModule = module {
     single {
+        RouteAwareClientProvider(
+            appInformation = get(),
+            requestedIntent = getOrNull(),
+            torManager = getOrNull(),
+        )
+    } binds arrayOf(TorRouteLifecycle::class, WebSocketRouteProvider::class)
+
+    single {
         NostrGeoRelayClient(
             baseApiClient = BaseApiClient(
-                client = ktorHttpClient(
-                    clientType = ClientType.NOSTR,
-                    interceptors = listOf(),
-                    torManager = getOrNull(),
-                    // Present only where a platform has registered one; elsewhere the default
-                    // engine is used and nothing about routing changes.
-                    engine = getOrNull<HttpEngineProvider>()?.engine()
-                        ?: getEngine(get<AppInformation>().debug, getOrNull()),
-                ),
+                routeProvider = get(),
+                clientType = ClientType.NOSTR,
+                interceptors = listOf(),
                 retryConfig = RetryConfig()
             ),
         )
@@ -32,11 +33,7 @@ val clientModule = module {
 
     single {
         NostrWebSocketClient(
-            httpClient = ktorWebSocketHttpClient(
-                torManager = getOrNull(),
-                engine = getOrNull<HttpEngineProvider>()?.engine()
-                    ?: getEngine(get<AppInformation>().debug, getOrNull()),
-            )
+            routeProvider = get(),
         )
     }
 }

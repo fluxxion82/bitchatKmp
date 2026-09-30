@@ -3,10 +3,10 @@ package com.bitchat.tor
 import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.domain.tor.model.TorState
 import com.bitchat.domain.tor.model.TorStatus
-import com.bitchat.tor.native.arti_initialize
+import com.bitchat.tor.native.arti_set_status_callback
 import com.bitchat.tor.native.arti_set_log_callback
-import com.bitchat.tor.native.arti_start_socks_proxy
-import com.bitchat.tor.native.arti_stop
+import com.bitchat.tor.native.arti_start
+import com.bitchat.tor.native.arti_stop_generation
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.CFunction
 import kotlinx.cinterop.CPointer
@@ -18,190 +18,129 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.Volatile
 
-/**
- * Linux implementation of TorManager using Arti (Rust Tor client).
- *
- * This implementation uses the cross-compiled Arti library for linuxArm64.
- * The library provides a SOCKS5 proxy for Tor connections.
- *
- * Build the native library first:
- *   ./scripts/build-native-linux-arm64.sh
- */
+@Volatile
+private var activeTorManager: TorManager? = null
+
+@OptIn(ExperimentalForeignApi::class)
+private fun nativeStatusCallback(state: Int, port: Int, generation: ULong, message: CPointer<ByteVar>?) {
+    activeTorManager?.handleStatus(state, port, generation, message?.toKString().orEmpty())
+}
+
+@OptIn(ExperimentalForeignApi::class)
+private fun nativeLogCallback(message: CPointer<ByteVar>?) {
+    println("TorManager: ${message?.toKString().orEmpty()}")
+}
+
+/** Linux Arti manager. Native callbacks are generation-tagged; their message pointer is copied here. */
 @OptIn(ExperimentalForeignApi::class)
 actual class TorManager actual constructor(
-    private val dataDir: String
+    private val dataDir: String,
 ) {
-    // Initialize with STARTING state to avoid showing "disconnected" before native Tor reports actual status
-    // This prevents the race condition where UI checks status before native logs arrive
-    private val _statusFlow = MutableStateFlow(
-        TorStatus(
-            mode = TorMode.ON,  // Assume Tor is starting until confirmed otherwise
-            running = false,  // Not confirmed running yet
-            bootstrapPercent = 0,
-            lastLogLine = "Waiting for Tor status...",
-            state = TorState.STARTING,  // Show as starting/initializing
-            socksPort = DEFAULT_SOCKS_PORT
-        )
-    )
-
+    private val lifecycle = Mutex()
+    private val _statusFlow = MutableStateFlow(TorStatus(socksPort = 0))
     actual val statusFlow: StateFlow<TorStatus> = _statusFlow.asStateFlow()
 
-    @Volatile
-    private var initialized = false
-
-    @Volatile
-    private var currentPort = DEFAULT_SOCKS_PORT
+    @Volatile private var activeGeneration = 0UL
+    @Volatile private var stopping = false
+    @Volatile private var currentPort: Int? = null
 
     init {
-        currentInstance = this
-
-        try {
-            arti_set_log_callback(logCallback)
-            println("$TAG: Log callback set")
-        } catch (e: Exception) {
-            println("$TAG: Failed to set log callback: ${e.message}")
-        }
+        activeTorManager = this
+        arti_set_status_callback(statusCallback)
+        arti_set_log_callback(logCallback)
     }
 
-    actual fun getSocksProxyAddress(): Pair<String, Int>? {
-        return if (isProxyReady()) {
-            Pair("127.0.0.1", currentPort)
-        } else {
-            null
-        }
-    }
+    actual val isAvailable: Boolean get() = true
+
+    actual fun getSocksProxyAddress(): Pair<String, Int>? = currentPort
+        ?.takeIf { isProxyReady() }
+        ?.let { "127.0.0.1" to it }
 
     actual fun isProxyReady(): Boolean {
         val status = _statusFlow.value
-        return status.mode != TorMode.OFF &&
-                status.running &&
-                status.bootstrapPercent >= 100 &&
-                status.state == TorState.RUNNING
+        return status.state == TorState.RUNNING && status.running && currentPort != null
     }
 
-    /**
-     * Always true: Arti is statically linked into this binary, so there is no library-missing
-     * case to report. Tor can still fail to *start*, which shows up in [statusFlow] instead.
-     */
-    actual val isAvailable: Boolean
-        get() = true
-
-    actual suspend fun start() {
-        if (!initialized) {
-            println("$TAG: Initializing Arti...")
-            val result = arti_initialize(dataDir)
-
-            if (result != 0) {
-                println("$TAG: Initialization failed: $result")
-                _statusFlow.update { it.copy(state = TorState.ERROR, errorMessage = "Init failed: $result") }
-                return
-            }
-
-            initialized = true
-        }
-
-        println("$TAG: Starting SOCKS proxy on port $currentPort...")
-        _statusFlow.update { it.copy(mode = TorMode.ON, state = TorState.STARTING) }
-
-        val result = arti_start_socks_proxy(currentPort)
-
+    actual suspend fun start() = lifecycle.withLock {
+        stopping = false
+        activeGeneration += 1UL
+        currentPort = null
+        _statusFlow.value = TorStatus(
+            mode = TorMode.ON,
+            state = TorState.STARTING,
+            lastLogLine = "Starting Arti",
+            socksPort = 0,
+            routeGeneration = activeGeneration.toLong(),
+        )
+        val result = arti_start(dataDir, 0, activeGeneration)
         if (result != 0) {
-            println("$TAG: Start proxy failed: $result")
-            _statusFlow.update { it.copy(state = TorState.ERROR, errorMessage = "Start failed: $result") }
+            nativeError(activeGeneration, "Arti start call failed: $result")
         }
     }
 
-    actual suspend fun stop() {
-        println("$TAG: Stopping Tor...")
-        _statusFlow.update { it.copy(state = TorState.STOPPING) }
-
-        arti_stop()
-
-        _statusFlow.update {
-            it.copy(
-                mode = TorMode.OFF,
-                running = false,
-                bootstrapPercent = 0,
-                state = TorState.OFF
-            )
+    actual suspend fun stop() = lifecycle.withLock {
+        val generation = activeGeneration
+        stopping = true
+        currentPort = null
+        _statusFlow.update { it.copy(running = false, bootstrapPercent = 0, state = TorState.STOPPING, socksPort = 0, routeGeneration = 0) }
+        val result = arti_stop_generation(generation)
+        if (result != 0) {
+            nativeError(generation, "Arti stop call failed: $result")
+        } else {
+            _statusFlow.value = TorStatus(socksPort = 0)
         }
+        activeGeneration += 1UL
+        stopping = false
     }
 
     actual fun destroy() {
-        currentInstance = null
+        if (activeTorManager === this) activeTorManager = null
     }
 
-    private fun handleLogLine(line: String) {
-        println("$TAG: Arti: $line")
-
-        _statusFlow.update { it.copy(lastLogLine = line) }
-
-        when {
-            line.contains("AMEx: state changed to Initialized", ignoreCase = true) ||
-                    line.contains("AMEx: state changed to Starting", ignoreCase = true) -> {
-                println("$TAG: Tor state -> STARTING")
-                _statusFlow.update { it.copy(state = TorState.STARTING) }
+    internal fun handleStatus(state: Int, port: Int, generation: ULong, message: String) {
+        if (generation != activeGeneration) return
+        if (stopping && state != STATUS_STOPPED) return
+        when (state) {
+            STATUS_INITIALIZING -> _statusFlow.update { it.copy(state = TorState.STARTING, lastLogLine = message) }
+            STATUS_SOCKS_LISTENING -> {
+                if (port <= 0) return
+                currentPort = port
+                _statusFlow.update { it.copy(state = TorState.BOOTSTRAPPING, socksPort = port, lastLogLine = message) }
             }
-
-            line.contains("Sufficiently bootstrapped; system SOCKS now functional", ignoreCase = true) -> {
-                println("$TAG: Tor bootstrap -> 75% (SOCKS functional)")
+            STATUS_READY -> {
+                val boundPort = currentPort ?: return
                 _statusFlow.update {
-                    it.copy(
-                        bootstrapPercent = 75,
-                        state = TorState.BOOTSTRAPPING
-                    )
+                    it.copy(mode = TorMode.ON, running = true, bootstrapPercent = 100, state = TorState.RUNNING, socksPort = boundPort, lastLogLine = message, errorMessage = null, routeGeneration = generation.toLong())
                 }
             }
-
-            line.contains("We have found that guard [scrubbed] is usable", ignoreCase = true) -> {
-                println("$TAG: Tor bootstrap -> 100% (RUNNING)")
-                _statusFlow.update {
-                    it.copy(
-                        bootstrapPercent = 100,
-                        state = TorState.RUNNING,
-                        running = true
-                    )
-                }
+            STATUS_STOPPED -> {
+                currentPort = null
+                _statusFlow.value = TorStatus(socksPort = 0, lastLogLine = message)
             }
-
-            line.contains("AMEx: state changed to Stopping", ignoreCase = true) -> {
-                println("$TAG: Tor state -> STOPPING")
-                _statusFlow.update { it.copy(state = TorState.STOPPING, running = false) }
-            }
-
-            line.contains("AMEx: state changed to Stopped", ignoreCase = true) -> {
-                println("$TAG: Tor state -> OFF (stopped)")
-                _statusFlow.update {
-                    it.copy(
-                        mode = TorMode.OFF,
-                        state = TorState.OFF,
-                        running = false,
-                        bootstrapPercent = 0
-                    )
-                }
-            }
-
-            line.contains("ERROR", ignoreCase = true) -> {
-                println("$TAG: Tor ERROR: $line")
-                _statusFlow.update { it.copy(state = TorState.ERROR, errorMessage = line) }
-            }
+            STATUS_ERROR -> nativeError(generation, message)
         }
     }
 
+    private fun nativeError(generation: ULong, message: String) {
+        if (generation != activeGeneration) return
+        currentPort = null
+        _statusFlow.value = TorStatus(mode = TorMode.OFF, state = TorState.ERROR, socksPort = 0, lastLogLine = message, errorMessage = message, routeGeneration = 0)
+    }
+
     companion object {
-        private const val TAG = "TorManager"
-        private const val DEFAULT_SOCKS_PORT = 9050
+        private const val STATUS_INITIALIZING = 1
+        private const val STATUS_SOCKS_LISTENING = 2
+        private const val STATUS_READY = 3
+        private const val STATUS_STOPPED = 4
+        private const val STATUS_ERROR = 5
 
+        private val statusCallback: CPointer<CFunction<(Int, Int, ULong, CPointer<ByteVar>?) -> Unit>> =
+            staticCFunction(::nativeStatusCallback).reinterpret()
         private val logCallback: CPointer<CFunction<(CPointer<ByteVar>?) -> Unit>> =
-            staticCFunction { messagePtr: CPointer<ByteVar>? ->
-                if (messagePtr != null) {
-                    val message = messagePtr.toKString()
-                    currentInstance?.handleLogLine(message)
-                }
-            }.reinterpret()
-
-        private var currentInstance: TorManager? = null
+            staticCFunction(::nativeLogCallback).reinterpret()
     }
 }

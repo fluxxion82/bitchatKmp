@@ -1,414 +1,556 @@
+use anyhow::{anyhow, Result};
+use arti_client::config::TorClientConfigBuilder;
+use arti_client::TorClient;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
-use std::sync::{Arc, Mutex, Once};
 use std::path::PathBuf;
-use anyhow::Result;
-
-use arti_client::TorClient;
-use arti_client::config::TorClientConfigBuilder;
+use std::sync::{Arc, Mutex, OnceLock};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
+use tokio::time::{timeout, Duration};
 use tor_rtcompat::PreferredRuntime;
 
-// ============================================================================
-// Global State
-// ============================================================================
+const STATUS_INITIALIZING: c_int = 1;
+const STATUS_SOCKS_LISTENING: c_int = 2;
+const STATUS_READY: c_int = 3;
+const STATUS_STOPPED: c_int = 4;
+const STATUS_ERROR: c_int = 5;
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Global Arti client instance
-static ARTI_CLIENT: Mutex<Option<Arc<TorClient<PreferredRuntime>>>> = Mutex::new(None);
+type StatusCallback = extern "C" fn(c_int, c_int, u64, *const c_char);
+type LogCallback = extern "C" fn(*const c_char);
 
-/// Global Tokio runtime (must persist for Arti to work)
-static TOKIO_RUNTIME: Mutex<Option<tokio::runtime::Runtime>> = Mutex::new(None);
-
-/// Global log callback
-static LOG_CALLBACK: Mutex<Option<extern "C" fn(*const c_char)>> = Mutex::new(None);
-
-/// Handle to SOCKS server task (for graceful shutdown)
-static SOCKS_TASK: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
-
-/// Initialization flag
-static INIT_ONCE: Once = Once::new();
-
-// ============================================================================
-// Logging Integration
-// ============================================================================
-
-/// Send log message to callback
-fn send_log(message: &str) {
-    let callback_opt = LOG_CALLBACK.lock().unwrap();
-    if let Some(callback) = *callback_opt {
-        if let Ok(c_message) = CString::new(message) {
-            callback(c_message.as_ptr());
-        }
-    }
+struct NativeState {
+    runtime: Arc<tokio::runtime::Runtime>,
+    generation: u64,
+    client: Option<Arc<TorClient<PreferredRuntime>>>,
+    bootstrap: Option<JoinHandle<()>>,
+    listener: Option<JoinHandle<()>>,
+    children: Vec<JoinHandle<()>>,
+    // Aborted children remain owned here until a later stop/start observes their completion.
+    draining: Vec<JoinHandle<()>>,
 }
 
-/// Macro for logging
-macro_rules! log_info {
-    ($($arg:tt)*) => {{
-        let msg = format!($($arg)*);
-        send_log(&msg);
-    }};
-}
+static STATE: OnceLock<Mutex<NativeState>> = OnceLock::new();
+static STATUS_CALLBACK: Mutex<Option<StatusCallback>> = Mutex::new(None);
+static LOG_CALLBACK: Mutex<Option<LogCallback>> = Mutex::new(None);
+static LIFECYCLE: Mutex<()> = Mutex::new(());
+// Native callbacks for one generation are serialized. A terminal callback invalidates the
+// generation while holding this lock, so READY cannot be published after ERROR.
+static PUBLICATIONS: Mutex<()> = Mutex::new(());
 
-macro_rules! log_error {
-    ($($arg:tt)*) => {{
-        let msg = format!("ERROR: {}", format!($($arg)*));
-        send_log(&msg);
-    }};
-}
-
-// ============================================================================
-// C FFI Functions
-// ============================================================================
-
-/// Get Arti version string
-#[no_mangle]
-pub extern "C" fn arti_get_version() -> *const c_char {
-    static VERSION: Once = Once::new();
-    static mut VERSION_STRING: Option<CString> = None;
-
-    VERSION.call_once(|| {
-        let version = format!("Arti {} (custom build with rustls)", env!("CARGO_PKG_VERSION"));
-        unsafe {
-            VERSION_STRING = CString::new(version).ok();
-        }
-    });
-
-    unsafe {
-        VERSION_STRING.as_ref()
-            .map(|s| s.as_ptr())
-            .unwrap_or(std::ptr::null())
-    }
-}
-
-/// Set log callback for Arti logs
-#[no_mangle]
-pub extern "C" fn arti_set_log_callback(callback: extern "C" fn(*const c_char)) {
-    *LOG_CALLBACK.lock().unwrap() = Some(callback);
-    log_info!("Log callback registered");
-}
-
-/// Initialize Arti runtime
-#[no_mangle]
-pub extern "C" fn arti_initialize(data_dir: *const c_char) -> c_int {
-    if data_dir.is_null() {
-        log_error!("data_dir is null");
-        return -1;
-    }
-
-    let data_dir_str = unsafe {
-        match CStr::from_ptr(data_dir).to_str() {
-            Ok(s) => s.to_string(),
-            Err(e) => {
-                log_error!("Failed to convert data_dir: {:?}", e);
-                return -1;
-            }
-        }
-    };
-
-    log_info!("AMEx: state changed to Initialized");
-    log_info!("Initializing Arti with data directory: {}", data_dir_str);
-
-    // Initialize Tokio runtime (once)
-    INIT_ONCE.call_once(|| {
-        match tokio::runtime::Builder::new_multi_thread()
+fn state() -> &'static Mutex<NativeState> {
+    STATE.get_or_init(|| {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-        {
-            Ok(rt) => {
-                log_info!("Tokio runtime created successfully");
-                *TOKIO_RUNTIME.lock().unwrap() = Some(rt);
-            }
-            Err(e) => {
-                log_error!("Failed to create Tokio runtime: {:?}", e);
-            }
-        }
-    });
+            .expect("Tokio runtime creation failed");
+        Mutex::new(NativeState {
+            runtime: Arc::new(runtime),
+            generation: 0,
+            client: None,
+            bootstrap: None,
+            listener: None,
+            children: Vec::new(),
+            draining: Vec::new(),
+        })
+    })
+}
 
-    // Check if runtime exists
-    let runtime_guard = TOKIO_RUNTIME.lock().unwrap();
-    let runtime = match runtime_guard.as_ref() {
-        Some(rt) => rt,
-        None => {
-            log_error!("Tokio runtime not initialized");
-            return -2;
-        }
-    };
-
-    // Create config with explicit Linux paths
-    let data_path = PathBuf::from(data_dir_str);
-    let cache_dir = data_path.join("cache");
-    let state_dir = data_path.join("state");
-
-    // Create directories if they don't exist
-    std::fs::create_dir_all(&cache_dir).ok();
-    std::fs::create_dir_all(&state_dir).ok();
-
-    let result: Result<()> = runtime.block_on(async {
-        log_info!("Creating Arti client...");
-        log_info!("Cache dir: {:?}", cache_dir);
-        log_info!("State dir: {:?}", state_dir);
-
-        // Create config with Linux-specific directories
-        let config = TorClientConfigBuilder::from_directories(state_dir, cache_dir)
-            .build()?;
-
-        // Create client with Linux-specific config
-        let client = TorClient::create_bootstrapped(config).await?;
-
-        log_info!("Arti client created successfully");
-
-        // Store client globally
-        *ARTI_CLIENT.lock().unwrap() = Some(Arc::new(client));
-
-        Ok(())
-    });
-
-    match result {
-        Ok(_) => {
-            log_info!("Arti initialized successfully");
-            0
-        }
-        Err(e) => {
-            log_error!("Failed to initialize Arti: {:?}", e);
-            -3
+fn report(status: c_int, port: c_int, generation: u64, message: &str) {
+    let callback = *STATUS_CALLBACK
+        .lock()
+        .expect("status callback mutex poisoned");
+    if let Some(callback) = callback {
+        if let Ok(message) = CString::new(message) {
+            callback(status, port, generation, message.as_ptr());
         }
     }
 }
 
-/// Start SOCKS proxy on specified port
-#[no_mangle]
-pub extern "C" fn arti_start_socks_proxy(port: c_int) -> c_int {
-    log_info!("AMEx: state changed to Starting");
-    log_info!("Starting SOCKS proxy on port {}", port);
-
-    // Stop any existing SOCKS server first
-    if let Some(handle) = SOCKS_TASK.lock().unwrap().take() {
-        log_info!("Aborting previous SOCKS server task");
-        handle.abort();
+fn log(message: &str) {
+    let callback = *LOG_CALLBACK.lock().expect("log callback mutex poisoned");
+    if let Some(callback) = callback {
+        if let Ok(message) = CString::new(message) {
+            callback(message.as_ptr());
+        }
     }
+}
 
-    let client_guard = ARTI_CLIENT.lock().unwrap();
-    let client = match client_guard.as_ref() {
-        Some(c) => Arc::clone(c),
-        None => {
-            log_error!("Arti client not initialized - call arti_initialize() first");
-            return -1;
-        }
-    };
-    drop(client_guard);
+fn is_current(generation: u64) -> bool {
+    state()
+        .lock()
+        .map(|state| state.generation == generation)
+        .unwrap_or(false)
+}
 
-    let runtime_guard = TOKIO_RUNTIME.lock().unwrap();
-    let runtime = match runtime_guard.as_ref() {
-        Some(rt) => rt,
-        None => {
-            log_error!("Tokio runtime not initialized");
-            return -2;
-        }
-    };
+fn reap_finished_children(children: &mut Vec<JoinHandle<()>>) {
+    children.retain(|task| !task.is_finished());
+}
 
-    // Try to bind IMMEDIATELY to detect port conflicts before returning
-    let addr = format!("127.0.0.1:{}", port);
+fn report_current(status: c_int, port: c_int, generation: u64, message: &str) -> bool {
+    let _publication = PUBLICATIONS.lock().expect("publication mutex poisoned");
+    if !is_current(generation) {
+        return false;
+    }
+    report(status, port, generation, message);
+    true
+}
 
-    // Use block_on to synchronously attempt binding
-    let bind_result = runtime.block_on(async {
-        tokio::net::TcpListener::bind(&addr).await
-    });
-
-    let listener = match bind_result {
-        Ok(l) => {
-            log_info!("SOCKS proxy bound to {}", addr);
-            l
-        }
-        Err(e) => {
-            log_error!("Failed to bind SOCKS proxy to {}: {:?}", addr, e);
-            return -3;
-        }
-    };
-
-    // Now spawn the background task with the already-bound listener
-    let handle = runtime.spawn(async move {
-        log_info!("SOCKS proxy listening on {}", addr);
-        log_info!("Sufficiently bootstrapped; system SOCKS now functional");
-
-        // Signal bootstrap completion
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        log_info!("We have found that guard [scrubbed] is usable.");
-
-        // Accept connections
-        loop {
-            match listener.accept().await {
-                Ok((stream, peer_addr)) => {
-                    log_info!("SOCKS connection from: {}", peer_addr);
-                    let client_clone = Arc::clone(&client);
-
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_socks_connection(stream, client_clone).await {
-                            log_error!("SOCKS connection error: {:?}", e);
-                        }
-                    });
-                }
-                Err(e) => {
-                    log_error!("Failed to accept SOCKS connection: {:?}", e);
-                    break;
-                }
+fn join_aborted_for(
+    runtime: Arc<tokio::runtime::Runtime>,
+    mut tasks: Vec<JoinHandle<()>>,
+    shutdown_timeout: Duration,
+) -> (bool, Vec<JoinHandle<()>>) {
+    for task in &tasks {
+        task.abort();
+    }
+    let completed = runtime.block_on(async {
+        timeout(shutdown_timeout, async {
+            for task in &mut tasks {
+                let _ = task.await;
             }
-        }
-
-        log_info!("SOCKS proxy task exiting");
+        })
+        .await
+        .is_ok()
     });
+    tasks.retain(|task| !task.is_finished());
+    (completed, tasks)
+}
 
-    // Store handle for cleanup
-    *SOCKS_TASK.lock().unwrap() = Some(handle);
+fn join_aborted(runtime: Arc<tokio::runtime::Runtime>, tasks: Vec<JoinHandle<()>>) -> bool {
+    join_aborted_for(runtime, tasks, SHUTDOWN_TIMEOUT).0
+}
 
-    log_info!("SOCKS proxy started on port {}", port);
+fn stop_locked(generation: u64) -> c_int {
+    // Detach under the state lock, then release it before joining. A worker can be waiting on
+    // this lock, so joining while it is held makes Tokio cancellation deadlock.
+    let (runtime, tasks, had_tasks) = {
+        let mut state = state().lock().expect("native state mutex poisoned");
+        let had_tasks = state.bootstrap.is_some() || state.listener.is_some() ||
+            !state.children.is_empty() || !state.draining.is_empty();
+        state.generation = 0;
+        state.client = None;
+        let mut tasks = Vec::new();
+        if let Some(task) = state.bootstrap.take() {
+            tasks.push(task);
+        }
+        if let Some(task) = state.listener.take() {
+            tasks.push(task);
+        }
+        tasks.append(&mut state.children);
+        tasks.append(&mut state.draining);
+        (Arc::clone(&state.runtime), tasks, had_tasks)
+    };
+    if !had_tasks {
+        return 0;
+    }
+    let (stopped, unfinished) = join_aborted_for(Arc::clone(&runtime), tasks, SHUTDOWN_TIMEOUT);
+    if !stopped {
+        state()
+            .lock()
+            .expect("native state mutex poisoned")
+            .draining
+            .extend(unfinished);
+        report(STATUS_ERROR, 0, generation, "Arti shutdown timed out");
+        return -3;
+    }
+    report(STATUS_STOPPED, 0, generation, "Arti stopped");
     0
 }
 
-/// Handle a single SOCKS connection
+async fn fail_listener(generation: u64, message: String) {
+    let _publication = PUBLICATIONS.lock().expect("publication mutex poisoned");
+    let mut state = state().lock().expect("native state mutex poisoned");
+    if state.generation != generation {
+        return;
+    }
+    state.generation = 0;
+    state.client = None;
+    let children = std::mem::take(&mut state.children);
+    // Do not hide child handles behind a drain owner: aborting that owner used to drop its handles
+    // before their aborts ran. State keeps every handle through stop and a timeout retry.
+    for task in &children {
+        task.abort();
+    }
+    state.draining.extend(children);
+    drop(state);
+    report(STATUS_ERROR, 0, generation, &message);
+}
+
+#[no_mangle]
+pub extern "C" fn arti_set_status_callback(callback: StatusCallback) {
+    *STATUS_CALLBACK
+        .lock()
+        .expect("status callback mutex poisoned") = Some(callback);
+}
+
+#[no_mangle]
+pub extern "C" fn arti_set_log_callback(callback: LogCallback) {
+    *LOG_CALLBACK.lock().expect("log callback mutex poisoned") = Some(callback);
+}
+
+#[no_mangle]
+pub extern "C" fn arti_start(
+    data_dir: *const c_char,
+    requested_port: c_int,
+    generation: u64,
+) -> c_int {
+    if data_dir.is_null() || requested_port < 0 || requested_port > u16::MAX as c_int {
+        return -1;
+    }
+    let data_dir = match unsafe { CStr::from_ptr(data_dir) }.to_str() {
+        Ok(value) => PathBuf::from(value),
+        Err(_) => return -2,
+    };
+    let _lifecycle = LIFECYCLE.lock().expect("lifecycle mutex poisoned");
+    if stop_locked(generation) != 0 {
+        return -3;
+    }
+    let runtime = {
+        let mut state = state().lock().expect("native state mutex poisoned");
+        state.generation = generation;
+        Arc::clone(&state.runtime)
+    };
+    report_current(STATUS_INITIALIZING, 0, generation, "Bootstrapping Arti");
+    let task = runtime.spawn(async move {
+        let cache_dir = data_dir.join("cache");
+        let state_dir = data_dir.join("state");
+        if let Err(error) =
+            std::fs::create_dir_all(&cache_dir).and_then(|_| std::fs::create_dir_all(&state_dir))
+        {
+            if is_current(generation) {
+                report_current(
+                    STATUS_ERROR,
+                    0,
+                    generation,
+                    &format!("Cannot create Arti directories: {error}"),
+                );
+            }
+            return;
+        }
+        let config = match TorClientConfigBuilder::from_directories(state_dir, cache_dir).build() {
+            Ok(config) => config,
+            Err(error) => {
+                if is_current(generation) {
+                    report_current(
+                        STATUS_ERROR,
+                        0,
+                        generation,
+                        &format!("Arti configuration failed: {error}"),
+                    );
+                }
+                return;
+            }
+        };
+        let client = match TorClient::create_bootstrapped(config).await {
+            Ok(client) => Arc::new(client),
+            Err(error) => {
+                if is_current(generation) {
+                    report_current(
+                        STATUS_ERROR,
+                        0,
+                        generation,
+                        &format!("Arti bootstrap failed: {error}"),
+                    );
+                }
+                return;
+            }
+        };
+        let listener =
+            match tokio::net::TcpListener::bind(("127.0.0.1", requested_port as u16)).await {
+                Ok(listener) => listener,
+                Err(error) => {
+                    if is_current(generation) {
+                        report_current(
+                            STATUS_ERROR,
+                            0,
+                            generation,
+                            &format!("SOCKS bind failed: {error}"),
+                        );
+                    }
+                    return;
+                }
+            };
+        let port = match listener.local_addr() {
+            Ok(address) => address.port() as c_int,
+            Err(error) => {
+                report_current(
+                    STATUS_ERROR,
+                    0,
+                    generation,
+                    &format!("SOCKS address failed: {error}"),
+                );
+                return;
+            }
+        };
+        let (listener_start, listener_ready) = oneshot::channel();
+        {
+            let mut native_state = state().lock().expect("native state mutex poisoned");
+            if native_state.generation != generation {
+                return;
+            }
+            native_state.client = Some(Arc::clone(&client));
+            let listener_task = tokio::spawn(async move {
+                if listener_ready.await.is_err() {
+                    return;
+                }
+                loop {
+                    let (stream, _) = match listener.accept().await {
+                        Ok(connection) => connection,
+                        Err(error) => {
+                            fail_listener(generation, format!("SOCKS accept failed: {error}")).await;
+                            return;
+                        }
+                    };
+                    let mut state = state().lock().expect("native state mutex poisoned");
+                    if state.generation != generation {
+                        return;
+                    }
+                    reap_finished_children(&mut state.children);
+                    let connection_client = Arc::clone(&client);
+                    let child = tokio::spawn(async move {
+                        let _ = handle_socks_connection(stream, connection_client).await;
+                    });
+                    state.children.push(child);
+                }
+            });
+            native_state.listener = Some(listener_task);
+        }
+        if !report_current(STATUS_SOCKS_LISTENING, port, generation, "SOCKS listener bound") ||
+            !report_current(STATUS_READY, port, generation, "Arti ready") {
+            return;
+        }
+        let _ = listener_start.send(());
+    });
+    let mut state = state().lock().expect("native state mutex poisoned");
+    if state.generation == generation {
+        state.bootstrap = Some(task);
+    } else {
+        task.abort();
+    }
+    drop(state);
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn arti_stop_generation(generation: u64) -> c_int {
+    let _lifecycle = LIFECYCLE.lock().expect("lifecycle mutex poisoned");
+    stop_locked(generation)
+}
+
+async fn read_socks_greeting<R: AsyncRead + Unpin>(stream: &mut R) -> Result<()> {
+    let mut greeting = [0_u8; 2];
+    stream.read_exact(&mut greeting).await?;
+    if greeting[0] != 5 || greeting[1] == 0 {
+        return Err(anyhow!("invalid SOCKS5 greeting"));
+    }
+    let mut methods = vec![0_u8; greeting[1] as usize];
+    stream.read_exact(&mut methods).await?;
+    if !methods.contains(&0) {
+        return Err(anyhow!("SOCKS5 client does not offer no-auth"));
+    }
+    Ok(())
+}
+
+async fn read_socks_connect_request<R: AsyncRead + Unpin>(stream: &mut R) -> Result<(String, u16)> {
+    let mut request = [0_u8; 4];
+    stream.read_exact(&mut request).await?;
+    if request[0] != 5 || request[1] != 1 || request[2] != 0 {
+        return Err(anyhow!("invalid SOCKS5 CONNECT request"));
+    }
+    match request[3] {
+        1 => {
+            let mut address = [0_u8; 6];
+            stream.read_exact(&mut address).await?;
+            Ok((
+                format!(
+                    "{}.{}.{}.{}",
+                    address[0], address[1], address[2], address[3]
+                ),
+                u16::from_be_bytes([address[4], address[5]]),
+            ))
+        }
+        3 => {
+            let mut length = [0_u8; 1];
+            stream.read_exact(&mut length).await?;
+            if length[0] == 0 {
+                return Err(anyhow!("empty SOCKS5 domain"));
+            }
+            let mut address = vec![0_u8; length[0] as usize + 2];
+            stream.read_exact(&mut address).await?;
+            let host = std::str::from_utf8(&address[..length[0] as usize])?.to_owned();
+            let port =
+                u16::from_be_bytes([address[length[0] as usize], address[length[0] as usize + 1]]);
+            Ok((host, port))
+        }
+        4 => {
+            let mut address = [0_u8; 18];
+            stream.read_exact(&mut address).await?;
+            let host =
+                std::net::Ipv6Addr::from(<[u8; 16]>::try_from(&address[..16]).unwrap()).to_string();
+            Ok((host, u16::from_be_bytes([address[16], address[17]])))
+        }
+        _ => Err(anyhow!("unsupported SOCKS5 address type")),
+    }
+}
+
 async fn handle_socks_connection(
     mut stream: tokio::net::TcpStream,
     client: Arc<TorClient<PreferredRuntime>>,
 ) -> Result<()> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    // Simple SOCKS5 handshake
-    let mut buf = [0u8; 512];
-
-    // Read version + methods
-    let n = stream.read(&mut buf).await?;
-    if n < 2 {
-        return Err(anyhow::anyhow!("Invalid SOCKS handshake"));
-    }
-
-    // Send "no auth required" response
-    stream.write_all(&[0x05, 0x00]).await?;
-
-    // Read request
-    let n = stream.read(&mut buf).await?;
-    if n < 10 {
-        return Err(anyhow::anyhow!("Invalid SOCKS request"));
-    }
-
-    // Parse SOCKS5 request
-    let version = buf[0];
-    let cmd = buf[1];
-    let atyp = buf[3];
-
-    if version != 0x05 {
-        return Err(anyhow::anyhow!("Unsupported SOCKS version: {}", version));
-    }
-
-    if cmd != 0x01 {
-        stream.write_all(&[0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
-        return Err(anyhow::anyhow!("Unsupported SOCKS command: {}", cmd));
-    }
-
-    // Parse target address and port
-    let (target_host, target_port) = match atyp {
-        0x01 => {
-            // IPv4
-            let ip = format!("{}.{}.{}.{}", buf[4], buf[5], buf[6], buf[7]);
-            let port = u16::from_be_bytes([buf[8], buf[9]]);
-            (ip, port)
-        }
-        0x03 => {
-            // Domain name
-            let len = buf[4] as usize;
-            if n < 5 + len + 2 {
-                return Err(anyhow::anyhow!("Invalid domain name length"));
-            }
-            let domain = String::from_utf8_lossy(&buf[5..5 + len]).to_string();
-            let port = u16::from_be_bytes([buf[5 + len], buf[5 + len + 1]]);
-            (domain, port)
-        }
-        0x04 => {
-            // IPv6
-            if n < 22 {
-                stream.write_all(&[0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
-                return Err(anyhow::anyhow!("Truncated IPv6 request"));
-            }
-            let ip = format!(
-                "{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}",
-                buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10], buf[11],
-                buf[12], buf[13], buf[14], buf[15], buf[16], buf[17], buf[18], buf[19]
-            );
-            let port = u16::from_be_bytes([buf[20], buf[21]]);
-            (ip, port)
-        }
-        _ => {
-            stream.write_all(&[0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
-            return Err(anyhow::anyhow!("Unsupported address type: {}", atyp));
-        }
-    };
-
-    log_info!("SOCKS5 CONNECT to {}:{}", target_host, target_port);
-
-    // Establish Tor connection
-    let tor_stream = match client.connect((target_host.as_str(), target_port)).await {
-        Ok(s) => s,
-        Err(e) => {
-            log_error!("Failed to connect through Tor: {:?}", e);
-            stream.write_all(&[0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
-            return Err(e.into());
-        }
-    };
-
-    log_info!("Tor connection established to {}:{}", target_host, target_port);
-
-    // Send SOCKS5 success response
-    stream.write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
-
-    // Bidirectional data forwarding
+    timeout(HANDSHAKE_TIMEOUT, read_socks_greeting(&mut stream)).await??;
+    stream.write_all(&[5, 0]).await?;
+    let (target_host, target_port) =
+        timeout(HANDSHAKE_TIMEOUT, read_socks_connect_request(&mut stream)).await??;
+    log(&format!("SOCKS5 CONNECT to {target_host}:{target_port}"));
+    let tor_stream = client.connect((target_host.as_str(), target_port)).await?;
+    log(&format!(
+        "Tor connection established to {target_host}:{target_port}"
+    ));
+    stream.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
     let (mut client_read, mut client_write) = stream.split();
     let (mut tor_read, mut tor_write) = tor_stream.split();
-
-    let client_to_tor = async {
-        tokio::io::copy(&mut client_read, &mut tor_write).await
-    };
-
-    let tor_to_client = async {
-        tokio::io::copy(&mut tor_read, &mut client_write).await
-    };
-
-    tokio::select! {
-        result = client_to_tor => {
-            if let Err(ref e) = result {
-                log_error!("Client->Tor copy error: {:?}", e);
-            }
-        }
-        result = tor_to_client => {
-            if let Err(ref e) = result {
-                log_error!("Tor->Client copy error: {:?}", e);
-            }
-        }
-    };
-
-    log_info!("SOCKS connection closed for {}:{}", target_host, target_port);
-
+    tokio::select! { _ = tokio::io::copy(&mut client_read, &mut tor_write) => {}, _ = tokio::io::copy(&mut tor_read, &mut client_write) => {} }
     Ok(())
 }
 
-/// Stop Arti and cleanup
-#[no_mangle]
-pub extern "C" fn arti_stop() -> c_int {
-    log_info!("AMEx: state changed to Stopping");
-    log_info!("Stopping Arti...");
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+    use tokio::io::AsyncWriteExt;
 
-    // Abort SOCKS proxy task
-    if let Some(handle) = SOCKS_TASK.lock().unwrap().take() {
-        log_info!("Aborting SOCKS server task");
-        handle.abort();
+    static TEST_SERIAL: StdMutex<()> = StdMutex::new(());
+    static TEST_STATUSES: StdMutex<Vec<c_int>> = StdMutex::new(Vec::new());
+
+    extern "C" fn record_status(status: c_int, _: c_int, _: u64, _: *const c_char) {
+        TEST_STATUSES.lock().unwrap().push(status);
     }
 
-    // Give the abort a moment to complete
-    if let Some(rt) = TOKIO_RUNTIME.lock().unwrap().as_ref() {
-        rt.block_on(async {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    #[tokio::test]
+    async fn reads_fragmented_domain_connect_request() {
+        let (mut writer, mut reader) = tokio::io::duplex(64);
+        let writer = tokio::spawn(async move {
+            for part in [
+                &[5, 1][..],
+                &[0],
+                &[5, 1, 0, 3, 11],
+                b"example.com",
+                &[1, 187],
+            ] {
+                writer.write_all(part).await.unwrap();
+            }
+        });
+        read_socks_greeting(&mut reader).await.unwrap();
+        assert_eq!(
+            read_socks_connect_request(&mut reader).await.unwrap(),
+            ("example.com".to_owned(), 443)
+        );
+        writer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_greeting_before_connecting() {
+        let (mut writer, mut reader) = tokio::io::duplex(16);
+        writer.write_all(&[4, 1, 0]).await.unwrap();
+        assert!(read_socks_greeting(&mut reader).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn reaps_finished_connection_tasks() {
+        let mut children = vec![tokio::spawn(async {})];
+        tokio::task::yield_now().await;
+
+        reap_finished_children(&mut children);
+
+        assert!(children.is_empty());
+    }
+
+    #[test]
+    fn shutdown_aborts_and_joins_a_detached_task() {
+        let runtime = Arc::clone(&state().lock().unwrap().runtime);
+        let task = runtime.spawn(async { std::future::pending::<()>().await });
+
+        assert!(join_aborted(runtime, vec![task]));
+    }
+
+    #[test]
+    fn shutdown_timeout_retains_unfinished_task_ownership() {
+        let runtime = Arc::clone(&state().lock().unwrap().runtime);
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+        let task = runtime.spawn(async move {
+            started_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+        });
+        started_rx.recv().unwrap();
+
+        let (stopped, unfinished) =
+            join_aborted_for(Arc::clone(&runtime), vec![task], Duration::from_millis(1));
+
+        assert!(!stopped);
+        assert_eq!(unfinished.len(), 1, "timeout dropped the old-generation handle");
+        runtime.block_on(async move {
+            for task in unfinished {
+                let _ = task.await;
+            }
         });
     }
 
-    log_info!("AMEx: state changed to Stopped");
-    log_info!("Arti stopped successfully");
+    #[test]
+    fn stop_aborts_children_owned_by_a_failed_listener_drain() {
+        let _serial = TEST_SERIAL.lock().unwrap();
+        let runtime = Arc::clone(&state().lock().unwrap().runtime);
+        let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let child_released = Arc::clone(&released);
+        let child_notify = Arc::clone(&notify);
+        let child = runtime.spawn(async move {
+            child_notify.notified().await;
+            child_released.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        {
+            let mut native = state().lock().unwrap();
+            native.generation = 92;
+            native.bootstrap = None;
+            native.listener = None;
+            native.children = vec![child];
+            native.draining.clear();
+        }
 
-    0
+        runtime.block_on(fail_listener(92, "synthetic accept failure".to_owned()));
+        assert_eq!(stop_locked(92), 0);
+        runtime.block_on(async {
+            notify.notify_waiters();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        });
+
+        assert!(!released.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn listener_error_is_terminal_for_its_generation() {
+        let _serial = TEST_SERIAL.lock().unwrap();
+        TEST_STATUSES.lock().unwrap().clear();
+        *STATUS_CALLBACK.lock().unwrap() = Some(record_status);
+        {
+            let mut native = state().lock().unwrap();
+            native.generation = 91;
+            native.client = None;
+            native.bootstrap = None;
+            native.listener = None;
+            native.children.clear();
+            native.draining.clear();
+        }
+
+        let runtime = Arc::clone(&state().lock().unwrap().runtime);
+        runtime.block_on(fail_listener(91, "synthetic accept failure".to_owned()));
+        assert!(!report_current(STATUS_READY, 1, 91, "must not resurrect"));
+        assert_eq!(*TEST_STATUSES.lock().unwrap(), vec![STATUS_ERROR]);
+
+        stop_locked(91);
+        *STATUS_CALLBACK.lock().unwrap() = None;
+    }
 }
