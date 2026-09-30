@@ -1,11 +1,10 @@
 package com.bitchat.embedded.di
 
-import com.bitchat.domain.initialization.AppInitializer
 import com.bitchat.domain.initialization.models.AppInformation
 import com.bitchat.domain.initialization.models.Version
 import com.bitchat.embedded.BuildIdentity
+import com.bitchat.repo.initialization.headlessUserStateModule
 import org.koin.core.module.Module
-import org.koin.dsl.bind
 import org.koin.dsl.module
 
 /** App information for the binary [identity] describes, with application id [appId]. */
@@ -23,11 +22,5 @@ fun buildConfigModule(identity: BuildIdentity, appId: String): Module = module {
         )
     }
 
-    // Auto-activate user state for embedded (no onboarding UI)
-    single {
-        EmbeddedUserStateInitializer(
-            userRepository = get(),
-            userEventBus = get(),
-        )
-    } bind AppInitializer::class
+    includes(headlessUserStateModule)
 }

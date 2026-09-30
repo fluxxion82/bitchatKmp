@@ -7,30 +7,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
-import com.bitchat.bluetooth.di.bluetoothModule
-import com.bitchat.client.di.clientModule
-import com.bitchat.desktop.net.desktopNetworkModule
 import com.bitchat.design.BitchatTheme
 import com.bitchat.desktop.ble.NativeBleLoader
-import com.bitchat.desktop.di.buildConfigModule
+import com.bitchat.desktop.di.desktopDataModules
 import com.bitchat.desktop.di.LoRaProtocolSelector
 import com.bitchat.desktop.location.NativeLocationLoader
 import com.bitchat.domain.app.model.AppTheme
 import com.bitchat.domain.base.LogPolicy
 import com.bitchat.domain.base.invoke
-import com.bitchat.domain.di.domainModule
 import com.bitchat.domain.initialization.InitializeApplication
-import com.bitchat.local.di.commonLocal
-import com.bitchat.local.di.localModule
-import com.bitchat.lora.bitchat.di.bitChatLoraModule
-import com.bitchat.lora.di.loraProtocolManagerModule
-import com.bitchat.lora.meshtastic.di.meshtasticLoraModule
-import com.bitchat.nostr.di.nostrModule
-import com.bitchat.repo.di.commonRepoModule
-import com.bitchat.repo.di.repoModule
 import com.bitchat.screens.BitchatGraph
-import com.bitchat.tor.di.torModule
-import com.bitchat.viewmodel.di.viewModelModule
 import com.bitchat.viewmodel.main.MainViewModel
 import kotlinx.coroutines.InternalCoroutinesApi
 import org.koin.core.component.KoinComponent
@@ -39,6 +25,7 @@ import org.koin.core.context.startKoin
 
 @OptIn(ExperimentalFoundationApi::class, InternalCoroutinesApi::class)
 fun main() {
+    SingleInstanceLock.acquireOrExit()
     // Message bodies stay out of the logs unless explicitly asked for.
     LogPolicy.configure(System.getenv(LogPolicy.ENV_VAR))
     application {
@@ -79,26 +66,7 @@ class App : KoinComponent {
         val initialProtocol = LoRaProtocolSelector.getPreferredProtocol()
 
         startKoin {
-            modules(
-                buildConfigModule,
-                domainModule,
-                commonLocal,
-                localModule,
-                clientModule,
-                // After clientModule: its clients resolve this engine optionally.
-                desktopNetworkModule,
-                commonRepoModule,
-                repoModule,
-                viewModelModule,
-                nostrModule,
-                bluetoothModule,
-                torModule,
-                // Load both LoRa protocol modules
-                bitChatLoraModule,
-                meshtasticLoraModule,
-                // Protocol manager for runtime switching
-                loraProtocolManagerModule(initialProtocol),
-            )
+            modules(desktopDataModules("com.bitchat.desktop", initialProtocol))
         }
     }
 }

@@ -322,14 +322,17 @@ No upstream PR has been opened against `labapart/gattlib` yet.
 
 ## 7. Mosaic
 
-**What:** Jake Wharton's Mosaic, a Compose-runtime terminal UI library. Used only by the terminal UI (`:presentation:tui`, `:apps:embedded-tui`), which exist only in the embedded profile. See `docs/plans/2026-09-26-mosaic-embedded-tui.md` (local, gitignored).
+**What:** Jake Wharton's Mosaic, a Compose-runtime terminal UI library. Used by the terminal UI (`:presentation:tui`, `:apps:embedded-tui`, and the desktop terminal UI `:apps:desktop-tui`). The embedded terminal UI exists only with `-Pembedded.enabled=true`; the desktop TUI exists only with `-Ptui.enabled=true` (mutually exclusive). See `docs/plans/2026-09-30-item1-desktop-tui.md` (local, gitignored).
 
 **Why a fork:** Upstream already publishes linuxArm64. The fork adds what the Orange Pi's Linux console needs, on top of the owner's `wasm-js` branch (wasmJs target, `mosaic-browser`/`mosaic-html`, render-only-when-dirty frames, which matter on a Cortex-A53):
 - `ESC [ [ A`..`E` parsed as F1-F5 (the Linux console's encoding; upstream reads them as the letters A-E).
 - Cursor hidden even when the terminal never answers DECRQM for mode 25 (the Linux console doesn't), restored on close.
 - Frames written to the tty instead of stdout, so app `println` logging (and a systemd `StandardOutput=journal`) cannot corrupt the screen.
+- For the JVM desktop TUI, JVM JNI bindings with Zig (bundled in `mosaic-tty-jvm`).
 
 **Repo & Branch:** [fluxxion82/mosaic](https://github.com/fluxxion82/mosaic) `embedded` (based on `wasm-js`). Unlike the other forks, the checkout lives beside the bitchat repo, at `workspace/multiplatform/mosaic-wasm`, not under `forks/`. The owner's sterlingdotcom site uses `wasm-js` as `0.19.0-wasm-SNAPSHOT`; the separate version keeps the two from overwriting each other in `~/.m2`.
+
+**JVM artifacts and desktop TUI:** The fork publishes JVM artifacts (`*-jvm:0.19.0-embedded-SNAPSHOT`, Java 11 class files, JVM JNI libmosaic bundled) used only by the desktop TUI. The `tui.enabled=true` profile adds `mavenLocal` restricted to group `com.jakewharton.mosaic` (flagless builds never touch `~/.m2`); `tui.enabled` and `embedded.enabled` together are rejected (see `settings.gradle.kts:45-50`).
 
 **Build & Publish:** needs JDK 23 (the default JDK 21 fails on the fork's `jvmJdk22` source set) and Zig 0.15 for the JVM JNI libraries.
 

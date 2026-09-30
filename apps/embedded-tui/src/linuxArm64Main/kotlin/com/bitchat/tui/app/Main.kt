@@ -1,13 +1,9 @@
 package com.bitchat.tui.app
 
-import androidx.compose.runtime.CompositionLocalProvider
 import com.bitchat.domain.base.LogPolicy
 import com.bitchat.domain.base.invoke
 import com.bitchat.embedded.BuildIdentity
-import com.bitchat.tui.LocalConsoleSafe
 import com.bitchat.tui.consoleSafeFor
-import com.jakewharton.mosaic.RenderMode
-import com.jakewharton.mosaic.runMosaic
 import kotlin.system.exitProcess
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -18,6 +14,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import platform.posix.getenv
+import platform.posix.fprintf
+import platform.posix.stderr
 
 /** This binary's identity; the name must match its base name in build.gradle.kts (and so its sidecar). */
 private val buildIdentity = BuildIdentity("bitchat-tui")
@@ -57,16 +55,11 @@ fun main(args: Array<String>) {
         }
     }
     runBlocking {
-        app.initializeApplication()
-        // Created once, outside the composition, so no recomposition can make a second set.
-        val viewModels = app.viewModels()
         println("Application initialized; starting the terminal UI (console-safe: $consoleSafe)")
-        // The alternate screen: the app owns the terminal, a frame may use every row, and only the
-        // cells that changed are sent, which is what makes it usable over a slow link.
-        runMosaic(renderMode = RenderMode.FullScreen) {
-            CompositionLocalProvider(LocalConsoleSafe provides consoleSafe) {
-                BitchatTui(viewModels, background, TuiLog.notice)
-            }
+        val interactive = runBitchatTui({ app.initializeApplication() }, app::viewModels, consoleSafe, background, TuiLog.notice)
+        if (!interactive) {
+            fprintf(stderr, "bitchat-tui needs an interactive terminal\\n")
+            exitProcess(2)
         }
     }
     // Mosaic returns on an unhandled Ctrl+C; the transports' threads would keep the process alive.

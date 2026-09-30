@@ -114,6 +114,22 @@ so each installer must be built on its target OS. `apps/desktop/README.md` has t
 runtime requirements (`rpm-build`, `mesa-libGL libX11 fontconfig`, `libsecret gnome-keyring`, XWayland,
 `-Dskiko.renderApi=SOFTWARE`).
 
+### Desktop terminal UI
+
+Build the desktop terminal UI with:
+```bash
+./gradlew -Pembedded.enabled=false -Ptui.enabled=true :apps:desktop-tui:installDist
+```
+
+Run the installed binary from a real terminal (not `./gradlew run`, as Mosaic opens the controlling tty):
+```bash
+apps/desktop-tui/build/install/bitchat-tui/bin/bitchat-tui
+```
+
+The terminal UI shares the desktop GUI's identity, preferences, and Tor state (same data layer). Only one bitchat desktop application (GUI or TUI) can run at a time (single-instance lock at `~/.bitchat/desktop.lock`). Logs are written to `~/.bitchat/desktop-tui.log` (mode 0600, rotated at 5 MB).
+
+Tor defaults ON when the bundled Arti library loads (in packaged distributions or `installDist`), and can be toggled in Settings. Use `bitchat-tui --version` to check the build. Verify with `scripts/verify.sh desktop-tui`.
+
 For iOS, open `apps/iosApp/iosApp.xcodeproj` in Xcode. The shared framework is `BitchatApp` from `:iosdi`; Xcode's build phase runs `./gradlew :iosdi:embedAndSignAppleFrameworkForXcode` itself. To build it by hand:
 ```bash
 ./gradlew :iosdi:linkDebugFrameworkIosSimulatorArm64  # simulator

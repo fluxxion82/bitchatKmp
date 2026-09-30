@@ -36,9 +36,28 @@ val embeddedEnabled = providers.gradleProperty("embedded.enabled")
     .orElse(false)
     .get()
 
+// Desktop terminal UI profile (opt-in, JVM only): adds :presentation:tui and :apps:desktop-tui and lets
+// the Mosaic fork resolve from mavenLocal. Unlike embedded.enabled it forces no fork versions.
+val tuiEnabled = providers.gradleProperty("tui.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+if (tuiEnabled && embeddedEnabled) {
+    throw GradleException(
+        "tui.enabled is the desktop profile; pass -Pembedded.enabled=false " +
+            "(embedded.enabled swaps the JVM graph to fork snapshots)"
+    )
+}
+
 dependencyResolutionManagement {
     @Suppress("UnstableApiUsage")
     repositories {
+        if (tuiEnabled) {
+            // Only the Mosaic fork comes from mavenLocal; everything else resolves as in a flagless build.
+            mavenLocal {
+                content { includeGroup("com.jakewharton.mosaic") }
+            }
+        }
         if (embeddedEnabled) {
             // mavenLocal first for forked libs (Koin, Compose with linuxArm64).
             // Skiko is NOT here: it resolves from mavenCentral (see docs/FORKED_LIBRARIES.md).
@@ -62,6 +81,7 @@ rootProject.name = "bitchatKmp"
 
 include(":apps:droid")
 include(":apps:desktop")
+include(":apps:desktop-common")
 include(":data:cache")
 include(":data:crypto")
 include(":data:local:platform")
@@ -90,4 +110,10 @@ if (embeddedEnabled) {
     include(":apps:embedded-common")
     include(":apps:embedded-tui")
     include(":presentation:tui")
+    include(":presentation:tui:binding")
+}
+if (tuiEnabled) {
+    include(":presentation:tui")
+    include(":presentation:tui:binding")
+    include(":apps:desktop-tui")
 }

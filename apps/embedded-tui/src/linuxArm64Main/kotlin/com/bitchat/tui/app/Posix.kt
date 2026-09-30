@@ -5,7 +5,6 @@ package com.bitchat.tui.app
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.setUnhandledExceptionHook
 import kotlin.system.exitProcess
-import kotlin.time.Instant
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
@@ -17,8 +16,6 @@ import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.toLocalDateTime
 import platform.posix.EEXIST
 import platform.posix.ENOENT
 import platform.posix.F_DUPFD_CLOEXEC
@@ -63,6 +60,13 @@ internal object TuiLog {
     /** A copy of the terminal, for the one line a fatal error leaves there; -1 when there is none. */
     private var terminal = -1
 
+    /** Which Java standard streams were terminals before redirection. */
+    private var redirectStdout = false
+    private var redirectStderr = false
+
+    /** A redirected descriptor used to measure and truncate the active log. */
+    private var logDescriptor = -1
+
     private val _notice = MutableStateFlow<String?>(null)
 
     /** Why output is being discarded, for the UI to show; null while all is well. */
@@ -74,7 +78,9 @@ internal object TuiLog {
      * so the terminal is still as the shell left it).
      */
     fun redirectIfTerminal() {
-        if (isatty(STDOUT_FILENO) != 1) return
+        redirectStdout = isatty(STDOUT_FILENO) == 1
+        redirectStderr = isatty(STDERR_FILENO) == 1
+        if (!redirectStdout && !redirectStderr) return
         terminal = fcntl(STDERR_FILENO, F_DUPFD_CLOEXEC, 3)
         reportFatalErrorsOnTheTerminal()
         val failure = openLog() ?: return
@@ -99,7 +105,7 @@ internal object TuiLog {
         val file = logFile ?: return
         val size = memScoped {
             val info = alloc<stat>()
-            if (fstat(STDOUT_FILENO, info.ptr) == 0) info.st_size else return
+            if (logDescriptor >= 0 && fstat(logDescriptor, info.ptr) == 0) info.st_size else return
         }
         if (size < MAX_BYTES) return
         val failure = rotate(file) ?: return
@@ -110,7 +116,7 @@ internal object TuiLog {
         }
         // Stdout and stderr still share one file (the old log, whatever it is called now): keep
         // it bounded by emptying it, and keep the path so the next check tries rotating again.
-        ftruncate(STDOUT_FILENO, 0)
+        ftruncate(logDescriptor, 0)
         _notice.value = "Log rotation failed ($failure); the log is emptied instead"
     }
 
@@ -148,12 +154,16 @@ internal object TuiLog {
         if (fd < 0) return "cannot open $file: ${lastError()}"
         try {
             if (create && fchmod(fd, 0x180u) != 0) return "cannot restrict $file to its owner: ${lastError()}"
-            if (dup2(fd, STDOUT_FILENO) < 0) return "cannot redirect stdout: ${lastError()}"
-            if (dup2(fd, STDERR_FILENO) < 0) return "cannot redirect stderr: ${lastError()}"
+            if (redirectStdout && dup2(fd, STDOUT_FILENO) < 0) return "cannot redirect stdout: ${lastError()}"
+            if (redirectStderr && dup2(fd, STDERR_FILENO) < 0) return "cannot redirect stderr: ${lastError()}"
             val target = identity(fd)
-            if (target == null || identity(STDOUT_FILENO) != target || identity(STDERR_FILENO) != target) {
+            if (target == null ||
+                (redirectStdout && identity(STDOUT_FILENO) != target) ||
+                (redirectStderr && identity(STDERR_FILENO) != target)
+            ) {
                 return "stdout or stderr does not point at $file"
             }
+            logDescriptor = if (redirectStdout) STDOUT_FILENO else STDERR_FILENO
             return null
         } finally {
             if (fd > STDERR_FILENO) close(fd)
@@ -191,19 +201,4 @@ internal object TuiLog {
     }
 
     private fun lastError(): String = strerror(errno)?.toKString() ?: "error $errno"
-}
-
-/** The size in bytes of the file at [path], or null if it cannot be read. */
-internal fun fileSize(path: String): Long? = memScoped {
-    val info = alloc<stat>()
-    if (stat(path, info.ptr) == 0) info.st_size else null
-}
-
-/** The zone of this device, read once, when first needed (not while setting up output: it opens a file). */
-private val localZone by lazy { TimeZone.currentSystemDefault() }
-
-/** A message time as `HH:mm` in the device's zone. A function, so it is a stable chat cache key. */
-internal fun localClockTime(instant: Instant): String {
-    val time = instant.toLocalDateTime(localZone)
-    return time.hour.toString().padStart(2, '0') + ":" + time.minute.toString().padStart(2, '0')
 }

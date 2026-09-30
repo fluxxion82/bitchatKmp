@@ -20,6 +20,7 @@ kotlin {
         named("linuxArm64Main") {
             dependencies {
                 implementation(project(":domain"))
+                implementation(project(":data:repo"))
                 implementation(project(":data:remote:transport:lora"))
                 // Explicit linuxarm64 artifact to bypass multiplatform module resolution (as in :apps:embedded).
                 implementation("io.insert-koin:koin-core-linuxarm64:$koinVersion")

@@ -2,14 +2,15 @@ package com.bitchat.desktop.di
 
 import com.bitchat.domain.initialization.models.AppInformation
 import com.bitchat.domain.initialization.models.Version
+import org.koin.core.module.Module
 import org.koin.dsl.module
 
-val buildConfigModule = module {
+fun desktopBuildConfigModule(appId: String): Module = module {
     single {
         AppInformation(
             version = "1.0.0".toVersion(),
             versionCode = 1,
-            id = "com.bitchat.desktop",
+            id = appId,
             debug = true,
         )
     }

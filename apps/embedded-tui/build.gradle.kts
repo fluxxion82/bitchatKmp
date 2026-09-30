@@ -3,13 +3,13 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
-// The bitchat terminal UI for the Orange Pi: the :presentation:tui screens on Mosaic, bound to the
-// same view models and data layer as the Compose app (:apps:embedded), without Compose UI, Skiko
-// or the DRM/GBM/EGL stack. Included only in the embedded profile (see settings.gradle.kts).
-
 val koinVersion = providers.gradleProperty("embedded.koinForkVersion")
     .orElse("4.2.2")
     .get()
+
+// The bitchat terminal UI for the Orange Pi: the :presentation:tui screens on Mosaic, bound to the
+// same view models and data layer as the Compose app (:apps:embedded), without Compose UI, Skiko
+// or the DRM/GBM/EGL stack. Included only in the embedded profile (see settings.gradle.kts).
 
 kotlin {
     linuxArm64 {
@@ -28,20 +28,12 @@ kotlin {
     sourceSets {
         named("linuxArm64Main") {
             dependencies {
-                implementation(libs.mosaic.runtime)
                 implementation(libs.kotlinx.coroutines.core)
-                implementation(libs.kotlinx.datetime)
-                // Explicit linuxarm64 artifact to bypass multiplatform module resolution (as in :apps:embedded).
                 implementation("io.insert-koin:koin-core-linuxarm64:$koinVersion")
-                // The view models extend androidx.lifecycle.ViewModel; :presentation:viewmodel keeps
-                // lifecycle as an implementation dependency, so the binding needs it to compile.
-                implementation(libs.lifecycle.viewmodel)
 
                 implementation(project(":apps:embedded-common"))
                 implementation(project(":presentation:tui"))
-                implementation(project(":presentation:viewmodel"))
-                implementation(project(":presentation:viewvo"))
-                implementation(project(":domain"))
+                implementation(project(":presentation:tui:binding"))
 
                 // The data layer, as in :apps:embedded.
                 implementation(project(":data:crypto"))

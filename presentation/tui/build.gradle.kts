@@ -5,8 +5,13 @@ plugins {
 
 version = "0.0.1"
 
-// Mosaic composables for the embedded terminal UI. The module is included only when
-// embedded.enabled=true (Mosaic resolves from mavenLocal), so linuxArm64 needs no extra gate.
+val embeddedEnabled = providers.gradleProperty("embedded.enabled")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+
+// Mosaic composables for the terminal UIs. The module is included only when embedded.enabled=true or
+// tui.enabled=true (Mosaic resolves from mavenLocal); linuxArm64 is declared only for the embedded profile.
 // It takes plain state and lambdas, never ViewModels or Koin, so every screen is tested on the JVM.
 //
 // Terminal width assumptions (by design; see sanitizePeerText in PeerText.kt):
@@ -19,7 +24,9 @@ version = "0.0.1"
 kotlin {
     applyDefaultHierarchyTemplate()
     jvm()
-    linuxArm64()
+    if (embeddedEnabled) {
+        linuxArm64()
+    }
 
     sourceSets {
         val commonMain by getting {

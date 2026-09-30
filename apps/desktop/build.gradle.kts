@@ -112,6 +112,7 @@ val isArm = arch.contains("aarch64") || arch.contains("arm64")
 
 dependencies {
     implementation(compose.desktop.currentOs)
+    implementation(project(":apps:desktop-common"))
     // The app picks the SLF4J backend, not the libraries. :data:remote:transport:bluetooth brings
     // dbus-java, which logs through SLF4J and is silent without a binding on the classpath.
     runtimeOnly(libs.logback.classic)
