@@ -8,6 +8,7 @@ import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.domain.user.eventbus.UserEventBus
 import com.bitchat.domain.user.repository.UserRepository
+import com.bitchat.bluetooth.service.BluetoothMeshService
 import com.bitchat.local.prefs.LoRaPreferences
 import com.bitchat.local.prefs.UserPreferences
 import com.bitchat.lora.LoRaProtocol
@@ -49,8 +50,9 @@ class LoRaSavedConfigTest {
             every { getTxPower() } returns LoRaTxPower.LOW
         }
         val users = mockk<UserRepository> { coEvery { getUserState() } returns UserState.Active(ActiveState.Settings) }
+        val mesh = mockk<BluetoothMeshService> { every { myPeerID } returns "0123456789abcdef" }
         val events = mockk<UserEventBus> { every { events() } returns emptyFlow() }
-        LoRaAppInitializer(manager, users, preferences, events, backgroundScope).initialize()
+        LoRaAppInitializer(manager, users, preferences, events, mesh, backgroundScope).initialize()
         runCurrent()
         assertTrue(configs.isEmpty())
 

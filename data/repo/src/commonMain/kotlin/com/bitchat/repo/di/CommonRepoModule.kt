@@ -136,6 +136,7 @@ val commonRepoModule = module {
             userRepository = get(),
             loraPreferences = getOrNull(),
             userEventBus = get(),
+            bluetoothMeshService = get(),
             scope = get<CoroutineScopeFacade>().applicationScope,
         )
     } bind AppInitializer::class

@@ -1,8 +1,10 @@
 package com.bitchat.repo.di
 
+import com.bitchat.bluetooth.service.BluetoothMeshService
 import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.initialization.AppInitializer
 import com.bitchat.domain.user.eventbus.UserEventBus
+import com.bitchat.domain.user.model.AppUser
 import com.bitchat.domain.user.model.UserEvent
 import com.bitchat.domain.user.repository.UserRepository
 import com.bitchat.local.prefs.LoRaPreferences
@@ -37,6 +39,7 @@ class LoRaAppInitializer(
     private val userRepository: UserRepository,
     private val loraPreferences: LoRaPreferences?,
     private val userEventBus: UserEventBus,
+    private val bluetoothMeshService: BluetoothMeshService,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
 ) : AppInitializer {
 
@@ -57,7 +60,13 @@ class LoRaAppInitializer(
         // Subscribe before the initial attempt so an Active transition cannot be missed.
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             userEventBus.events().collect { event ->
-                if (event is UserEvent.StateChanged) tryStartLoRa()
+                when (event) {
+                    UserEvent.StateChanged -> tryStartLoRa()
+                    UserEvent.NicknameUpdated,
+                    UserEvent.ProfileUpdated,
+                    is UserEvent.LoginChanged -> syncLocalIdentity()
+                    is UserEvent.FavoriteStatusChanged -> Unit
+                }
             }
         }
         scope.launch { tryStartLoRa() }
@@ -76,6 +85,7 @@ class LoRaAppInitializer(
             // radio must not restart on ordinary Settings/Chat/Locations navigation.
             // Explicit user selections/retries call the manager independently.
             bootstrapAttempted = true
+            syncLocalIdentity()
             if (loraTransport?.isReady == true) return@withLock
             val config = loraPreferences?.toLoRaConfiguration() ?: LoRaConfig.US_915
             println("LoRaAppInitializer: Starting saved LoRa selection (region=${loraPreferences?.getLoRaRegion()}, txPower=${loraPreferences?.getTxPower()})")
@@ -89,6 +99,16 @@ class LoRaAppInitializer(
             throw cancelled
         } catch (error: Exception) {
             println("LoRaAppInitializer: Error starting LoRa: ${error.message}")
+        }
+    }
+
+    /** Uses the persistent BLE identity, which is also the BitChat protocol's 8-byte sender ID. */
+    private suspend fun syncLocalIdentity() {
+        val transport = loraTransport ?: return
+        transport.deviceId = bluetoothMeshService.myPeerID
+        transport.nickname = when (val user = userRepository.getAppUser()) {
+            is AppUser.ActiveAnonymous -> user.name
+            AppUser.Anonymous -> "anon"
         }
     }
 
