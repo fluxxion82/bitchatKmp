@@ -1,13 +1,19 @@
 package com.bitchat.local.tor
 
+import com.bitchat.domain.tor.RequestedTorIntent
+import com.bitchat.domain.tor.TorCapability
 import com.bitchat.domain.tor.model.TorMode
+import com.bitchat.local.di.commonLocal
+import com.bitchat.local.di.localModule
 import com.bitchat.local.prefs.impl.LocalTorPreferences
-import com.bitchat.local.prefs.platformDefaultTorMode
 import com.russhwolf.settings.PropertiesSettings
 import com.russhwolf.settings.Settings
 import java.util.Properties
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import org.koin.core.context.startKoin
+import org.koin.core.context.stopKoin
+import org.koin.dsl.module
 
 class RequestedTorIntentTest {
 
@@ -18,29 +24,34 @@ class RequestedTorIntentTest {
     }
 
     private fun prefs(factory: Factory, default: TorMode) =
-        LocalTorPreferences(settingsFactory = factory, defaultMode = default)
+        LocalTorPreferences(settingsFactory = factory, defaultMode = { default })
 
     @Test
-    fun `a fresh install on a platform that cannot proxy reads off`() {
-        // The trap: an absent key used to read ON, on platforms whose HTTP engine cannot route
-        // through a SOCKS proxy, so a fresh install had Nostr gated off by a choice nobody made.
-        assertEquals(TorMode.OFF, prefs(Factory(), TorMode.OFF).getTorMode())
-    }
-
-    @Test
-    fun `this platform default is off, since its engine cannot proxy`() {
-        // Desktop, Linux (embedded) and Apple all default to OFF for the same reason; only Android,
-        // whose engine does honour a proxy, still starts protected. This is the one asserted here.
-        assertEquals(TorMode.OFF, platformDefaultTorMode)
-    }
-
-    @Test
-    fun `a fresh Android install still reads on`() {
+    fun `absent key with a capable platform reads on`() {
         assertEquals(TorMode.ON, prefs(Factory(), TorMode.ON).getTorMode())
     }
 
     @Test
-    fun `an explicitly stored ON survives a platform default of off`() {
+    fun `absent key with an incapable platform reads off`() {
+        assertEquals(TorMode.OFF, prefs(Factory(), TorMode.OFF).getTorMode())
+    }
+
+    @Test
+    fun `absent key without a capability binding reads off`() {
+        withGraph(capability = null) { intent ->
+            assertEquals(TorMode.OFF, intent.current)
+        }
+    }
+
+    @Test
+    fun `a fresh Koin store with a capable platform reads on`() {
+        withGraph(capability = TorCapability { true }) { intent ->
+            assertEquals(TorMode.ON, intent.current)
+        }
+    }
+
+    @Test
+    fun `a stored ON survives an incapable platform`() {
         val factory = Factory()
         factory.put("tor_mode", TorMode.ON.name)
 
@@ -48,7 +59,7 @@ class RequestedTorIntentTest {
     }
 
     @Test
-    fun `an explicitly stored OFF survives a platform default of on`() {
+    fun `a stored OFF survives a capable platform`() {
         val factory = Factory()
         factory.put("tor_mode", TorMode.OFF.name)
 
@@ -56,12 +67,19 @@ class RequestedTorIntentTest {
     }
 
     @Test
-    fun `a corrupted value falls back to the platform default, not to on`() {
-        // Reading ON here would let a bad value recreate the trap on desktop.
+    fun `a corrupted value falls back to the capability default`() {
         val factory = Factory()
         factory.put("tor_mode", "MAYBE")
 
         assertEquals(TorMode.OFF, prefs(factory, TorMode.OFF).getTorMode())
+    }
+
+    @Test
+    fun `a corrupted value falls back to an on capability default`() {
+        val factory = Factory()
+        factory.put("tor_mode", "MAYBE")
+
+        assertEquals(TorMode.ON, prefs(factory, TorMode.ON).getTorMode())
     }
 
     @Test
@@ -107,5 +125,23 @@ class RequestedTorIntentTest {
         prefs(factory, TorMode.OFF).setTorMode(TorMode.ON)
 
         assertEquals(TorMode.ON, intent.current)
+    }
+
+    private fun withGraph(
+        capability: TorCapability?,
+        block: (RequestedTorIntent) -> Unit,
+    ) {
+        val overrides = module {
+            single<Settings.Factory> { Factory() }
+            if (capability != null) {
+                single<TorCapability> { capability }
+            }
+        }
+        val koin = startKoin { modules(commonLocal, localModule, overrides) }.koin
+        try {
+            block(koin.get())
+        } finally {
+            stopKoin()
+        }
     }
 }

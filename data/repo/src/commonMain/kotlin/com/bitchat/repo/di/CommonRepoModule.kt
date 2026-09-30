@@ -3,6 +3,7 @@ package com.bitchat.repo.di
 import com.bitchat.cache.di.GEOHASH_ALIAS_CACHE
 import com.bitchat.cache.di.GEOHASH_CONVERSATION_CACHE
 import com.bitchat.cache.di.RELAY_INFO_CACHE
+import com.bitchat.client.httpEngineSupportsTorProxy
 import com.bitchat.domain.app.repository.AppRepository
 import com.bitchat.domain.base.CoroutineScopeFacade
 import com.bitchat.domain.chat.repository.ChatRepository
@@ -10,6 +11,7 @@ import com.bitchat.domain.initialization.AppInitializer
 import com.bitchat.domain.location.repository.LocationRepository
 import com.bitchat.domain.lora.repository.LoRaSettingsRepository
 import com.bitchat.domain.nostr.repository.NostrRepository
+import com.bitchat.domain.tor.TorCapability
 import com.bitchat.domain.tor.repository.TorRepository
 import com.bitchat.domain.user.repository.BlockListRepository
 import com.bitchat.domain.user.repository.UserRepository
@@ -26,12 +28,20 @@ import com.bitchat.repo.repositories.UserRepo
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.repo.tor.TorRelayLogSink
 import com.bitchat.repo.tor.TorRelayProxyStatus
+import com.bitchat.repo.tor.PlatformTorCapability
+import com.bitchat.tor.TorManager
 import org.koin.core.qualifier.named
 import org.koin.dsl.bind
 import org.koin.dsl.module
 
 val commonRepoModule = module {
     includes(repoModule)
+    single<TorCapability> {
+        PlatformTorCapability(
+            engineSupportsTorProxy = httpEngineSupportsTorProxy,
+            isTorAvailable = { getOrNull<TorManager>()?.isAvailable },
+        )
+    }
     single<AppRepository> {
         AppRepo(
             coroutinesContextFacade = get(),

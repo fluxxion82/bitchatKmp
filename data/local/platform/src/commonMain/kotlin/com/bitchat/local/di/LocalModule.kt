@@ -14,6 +14,8 @@ import com.bitchat.local.prefs.LoRaPreferences
 import com.bitchat.local.prefs.SecureIdentityPreferences
 import com.bitchat.domain.tor.MutableRequestedTorIntent
 import com.bitchat.domain.tor.RequestedTorIntent
+import com.bitchat.domain.tor.TorCapability
+import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.local.prefs.TorPreferences
 import com.bitchat.local.prefs.UserPreferences
 import com.bitchat.local.prefs.impl.LocalAppPreferences
@@ -57,7 +59,14 @@ val commonLocal = module {
     single<GeohashPreferences> { LocalGeohashPreferences(settingsFactory = get()) }
     single<ChannelPreferences> { LocalChannelPreferences(settingsFactory = get()) }
     single<BookmarkPreferences> { LocalBookmarkPreferences(settingsFactory = get()) }
-    single<TorPreferences> { LocalTorPreferences(settingsFactory = get()) }
+    single<TorPreferences> {
+        LocalTorPreferences(
+            settingsFactory = get(),
+            defaultMode = {
+                if (getOrNull<TorCapability>()?.canRouteTraffic() == true) TorMode.ON else TorMode.OFF
+            },
+        )
+    }
 
     /*
      * Eager: routing has to be able to read the requested intent synchronously, and application
