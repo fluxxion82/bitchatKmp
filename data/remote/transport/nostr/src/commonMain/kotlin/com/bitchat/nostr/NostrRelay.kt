@@ -1,5 +1,6 @@
 package com.bitchat.nostr
 
+import com.bitchat.domain.base.logBody
 import com.bitchat.cache.Cache
 import com.bitchat.client.websocket.NostrWebSocketClient
 import com.bitchat.client.websocket.NostrWebSocketListener
@@ -480,7 +481,7 @@ class NostrRelay(
                         println("Subscription: ${response.subscriptionId}")
                         val geohashTag = response.event.tags.find { it.firstOrNull() == "g" }?.getOrNull(1)
                         println("Geohash event - tag: $geohashTag")
-                        println("Content preview: ${response.event.content.take(50)}${if (response.event.content.length > 50) "..." else ""}")
+                        println("Content: ${logBody(response.event.content, 50)}")
                         println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                     }
 
@@ -752,7 +753,7 @@ class NostrRelay(
         println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         println("📤 NostrRelay.sendChannelCreation")
         println("   Event ID: ${event.id}")
-        println("   Content: ${event.content.take(50)}...")
+        println("   Content: ${logBody(event.content, 50)}")
         println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         sendEvent(event, relayUrls ?: DEFAULT_RELAYS)
     }

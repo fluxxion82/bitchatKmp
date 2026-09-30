@@ -6,6 +6,14 @@ import com.bitchat.domain.chat.model.CommandContext
 import com.bitchat.domain.chat.model.CommandResult
 import com.bitchat.domain.chat.model.failure.CommandFailure
 
+/**
+ * Reads a typed line as a chat command.
+ *
+ * Which commands take a nickname as their first argument is stated once, as the `syntax` of each
+ * entry in `presentation:viewvo`'s `CommandSuggestions.kt`; the input's completion list derives
+ * from it (`takesNicknameFirst`). Changing a command's first argument here means changing that
+ * syntax with it, or the list will offer people to a command that wants a channel.
+ */
 class ProcessChatCommand : Usecase<ProcessChatCommand.ChatCommandRequest, CommandResult> {
     data class ChatCommandRequest(
         val input: String,
@@ -13,16 +21,7 @@ class ProcessChatCommand : Usecase<ProcessChatCommand.ChatCommandRequest, Comman
     )
 
     override suspend fun invoke(param: ChatCommandRequest): CommandResult {
-        val trimmed = param.input.trim()
-        if (trimmed.isEmpty() || !trimmed.startsWith("/")) {
-            return CommandResult.NotACommand
-        }
-
-        val parts = trimmed.split(Regex("\\s+"))
-        if (parts.isEmpty()) return CommandResult.NotACommand
-
-        val command = parts.first().lowercase()
-        val target = parts.getOrNull(1)?.removePrefix("@")?.trim().orEmpty()
+        val (parts, command, target) = commandParts(param.input) ?: return CommandResult.NotACommand
         val item = parts.drop(2).joinToString(" ").trim()
 
         fun requireTarget(): String? = target.ifBlank { null }
@@ -80,4 +79,25 @@ class ProcessChatCommand : Usecase<ProcessChatCommand.ChatCommandRequest, Comman
             else -> CommandResult.NotACommand
         }
     }
+}
+
+/** A command line split as [ProcessChatCommand] reads it: its words, the lowercased command, the target. */
+internal data class CommandParts(val parts: List<String>, val command: String, val target: String)
+
+internal fun commandParts(input: String): CommandParts? {
+    val trimmed = input.trim()
+    if (trimmed.isEmpty() || !trimmed.startsWith("/")) return null
+    val parts = trimmed.split(Regex("\\s+"))
+    if (parts.isEmpty()) return null
+    return CommandParts(parts, parts.first().lowercase(), parts.getOrNull(1)?.removePrefix("@")?.trim().orEmpty())
+}
+
+/**
+ * The nickname a `/m` or `/msg` line is addressed to, read exactly as [ProcessChatCommand] reads
+ * it (so `@bob` is `bob`); null for any other line or a missing target.
+ */
+fun messageCommandTarget(input: String): String? {
+    val parts = commandParts(input) ?: return null
+    if (parts.command != "/m" && parts.command != "/msg") return null
+    return parts.target.ifBlank { null }
 }

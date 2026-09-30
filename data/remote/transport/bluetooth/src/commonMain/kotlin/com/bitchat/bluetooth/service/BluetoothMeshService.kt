@@ -1,5 +1,6 @@
 package com.bitchat.bluetooth.service
 
+import com.bitchat.domain.base.logPath
 import com.bitchat.api.dto.mapper.toWireFormat
 import com.bitchat.bluetooth.facade.CryptoSigningFacade
 import com.bitchat.bluetooth.facade.NoiseEncryptionFacade
@@ -313,7 +314,7 @@ class BluetoothMeshService(
             }
 
             override fun onFileReceived(peerID: String, filePacket: BitchatFilePacket, isBroadcast: Boolean) {
-                logInfo("BluetoothMeshService", "📎 File received from $peerID: ${filePacket.fileName}")
+                logInfo("BluetoothMeshService", "📎 File received from $peerID: ${logPath(filePacket.fileName)}")
                 delegate?.didReceiveFile(peerID, filePacket, isBroadcast)
             }
         }
@@ -875,11 +876,11 @@ class BluetoothMeshService(
     fun sendFileBroadcast(file: BitchatFilePacket) {
         serviceScope.launch {
             try {
-                logInfo("BluetoothMeshService", "📎 Broadcasting file: ${file.fileName} (${file.fileSize} bytes)")
+                logInfo("BluetoothMeshService", "📎 Broadcasting file: ${logPath(file.fileName)} (${file.fileSize} bytes)")
 
                 val payload = file.toWireFormat()
                 if (payload == null) {
-                    logError("BluetoothMeshService", "Failed to encode file for broadcast: ${file.fileName}")
+                    logError("BluetoothMeshService", "Failed to encode file for broadcast: ${logPath(file.fileName)}")
                     return@launch
                 }
 
@@ -899,7 +900,7 @@ class BluetoothMeshService(
                 )
 
                 broadcastPacket(packet)
-                logInfo("BluetoothMeshService", "✅ File broadcast sent: ${file.fileName}")
+                logInfo("BluetoothMeshService", "✅ File broadcast sent: ${logPath(file.fileName)}")
 
             } catch (e: Exception) {
                 logError("BluetoothMeshService", "Error broadcasting file: ${e.message}")
@@ -918,12 +919,12 @@ class BluetoothMeshService(
                     return@launch
                 }
 
-                logInfo("BluetoothMeshService", "📎 Sending private file to $recipientPeerID: ${file.fileName} (${file.fileSize} bytes)")
+                logInfo("BluetoothMeshService", "📎 Sending private file to $recipientPeerID: ${logPath(file.fileName)} (${file.fileSize} bytes)")
 
                 // Encode file to TLV
                 val fileData = file.toWireFormat()
                 if (fileData == null) {
-                    logError("BluetoothMeshService", "Failed to encode file for private transfer: ${file.fileName}")
+                    logError("BluetoothMeshService", "Failed to encode file for private transfer: ${logPath(file.fileName)}")
                     return@launch
                 }
 
@@ -957,7 +958,7 @@ class BluetoothMeshService(
                 )
 
                 broadcastPacket(packet)
-                logInfo("BluetoothMeshService", "✅ Private file sent to $recipientPeerID: ${file.fileName}")
+                logInfo("BluetoothMeshService", "✅ Private file sent to $recipientPeerID: ${logPath(file.fileName)}")
 
             } catch (e: Exception) {
                 logError("BluetoothMeshService", "Error sending private file: ${e.message}")

@@ -199,6 +199,58 @@ class TorReadyGateTest {
         )
     }
 
+    // The gate in front of every relay connection: whether traffic may go out at all.
+
+    private val ready = TorStatus(state = TorState.RUNNING, running = true, bootstrapPercent = 100)
+    private val broken = TorStatus(state = TorState.ERROR, errorMessage = "guard unusable")
+
+    @Test
+    fun `a build that cannot proxy refuses the traffic of a user who asked for tor`() = runTest {
+        // The Pi and iOS. Dialling a relay directly would hand it the IP address alongside the
+        // identity pubkey the subscriptions carry: asking for Tor is asking for that not to happen.
+        val up = managerWith(ready, proxyReady = true)
+        val down = managerWith(broken)
+        for (manager in listOf(up, down)) {
+            val start = testScheduler.currentTime
+            assertFalse(
+                torGateAllowsTraffic(manager, torRequested = true, engineSupportsTorProxy = false, log = {}),
+                "whatever Tor itself is doing, it cannot carry this",
+            )
+            assertNoWait(start)
+        }
+    }
+
+    @Test
+    fun `a build that cannot proxy sends for a user who did not ask for tor`() = runTest {
+        val start = testScheduler.currentTime
+        assertTrue(
+            torGateAllowsTraffic(managerWith(broken), torRequested = false, engineSupportsTorProxy = false, log = {}),
+            "nobody asked for it to be hidden",
+        )
+        assertNoWait(start)
+    }
+
+    @Test
+    fun `where tor works, a ready tor lets traffic through`() = runTest {
+        val manager = managerWith(ready, proxyReady = true)
+        assertTrue(torGateAllowsTraffic(manager, torRequested = true, engineSupportsTorProxy = true, log = {}))
+    }
+
+    @Test
+    fun `where tor works, tor asked for and not ready still blocks`() = runTest {
+        val manager = managerWith(broken)
+        assertFalse(
+            torGateAllowsTraffic(manager, torRequested = true, engineSupportsTorProxy = true, log = {}),
+            "the user asked for Tor and it can be had here: sending in the clear would betray that",
+        )
+    }
+
+    @Test
+    fun `where tor works, traffic goes out when tor was never asked for`() = runTest {
+        val manager = managerWith(broken)
+        assertTrue(torGateAllowsTraffic(manager, torRequested = false, engineSupportsTorProxy = true, log = {}))
+    }
+
     private fun TestScope.assertNoWait(startMillis: Long) {
         val waited = testScheduler.currentTime - startMillis
         assertTrue(waited < 1_000, "the send path must not stall, waited $waited ms")

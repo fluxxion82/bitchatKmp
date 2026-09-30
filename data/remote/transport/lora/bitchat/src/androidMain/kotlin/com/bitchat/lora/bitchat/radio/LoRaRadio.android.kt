@@ -1,5 +1,6 @@
 package com.bitchat.lora.bitchat.radio
 
+import com.bitchat.domain.base.logBytes
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -567,8 +568,7 @@ actual class LoRaRadio : KoinComponent {
                     val chunk = String(buffer, 0, read)
                     totalBuffer.append(chunk)
                     // Log raw bytes for debugging
-                    val hexBytes = buffer.take(read).joinToString(" ") { "%02X".format(it) }
-                    LoRaLogger.d(LoRaTags.AT_CMD, "Raw bytes ($read): $hexBytes")
+                    LoRaLogger.d(LoRaTags.AT_CMD, "Raw bytes ($read): ${logBytes(read) { buffer.take(read).joinToString(" ") { "%02X".format(it) } }}")
                 }
                 if (totalBuffer.contains("\n") || totalBuffer.contains("OK")) break
                 Thread.sleep(50)
@@ -670,8 +670,7 @@ actual class LoRaRadio : KoinComponent {
             override fun onNewData(data: ByteArray) {
                 if (data.isEmpty()) return
 
-                val hexPreview = data.take(20).joinToString(" ") { "%02X".format(it) }
-                LoRaLogger.d(LoRaTags.RADIO, "Transparent RX: ${data.size} bytes - $hexPreview...")
+                LoRaLogger.d(LoRaTags.RADIO, "Transparent RX: ${data.size} bytes - ${logBytes(data) { data.take(20).joinToString(" ") { "%02X".format(it) } + "..." }}")
 
                 // In transparent mode, each received chunk is a packet
                 // RSSI/SNR not available in this mode

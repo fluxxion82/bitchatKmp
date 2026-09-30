@@ -80,4 +80,13 @@ class ProcessChatCommandTest {
         val command = assertIs<ChatCommand.Who>(parsed.command)
         assertEquals(ChatCommand.Who(null), command)
     }
+
+    @Test
+    fun messageCommandTargetReadsMsgLinesLikeTheCommand() {
+        kotlin.test.assertEquals("bob", com.bitchat.domain.chat.messageCommandTarget("/msg bob hi there"))
+        kotlin.test.assertEquals("bob", com.bitchat.domain.chat.messageCommandTarget("  /M @bob"))
+        kotlin.test.assertEquals(null, com.bitchat.domain.chat.messageCommandTarget("/msg"))
+        kotlin.test.assertEquals(null, com.bitchat.domain.chat.messageCommandTarget("/who bob"))
+        kotlin.test.assertEquals(null, com.bitchat.domain.chat.messageCommandTarget("msg bob"))
+    }
 }

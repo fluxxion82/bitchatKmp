@@ -41,6 +41,8 @@ kotlin {
                 // Depend on parent lora module for shared interfaces
                 implementation(project(":data:remote:transport:lora"))
                 implementation(project(":data:remote:transport"))
+                // LogPolicy / logBody: message bodies stay out of logs unless opted in
+                implementation(project(":domain"))
 
                 implementation(libs.koin.core)
                 implementation(libs.kotlinx.coroutines.core)

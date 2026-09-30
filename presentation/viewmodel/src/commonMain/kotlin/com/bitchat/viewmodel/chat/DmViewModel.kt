@@ -2,8 +2,6 @@ package com.bitchat.viewmodel.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.bitchat.domain.app.model.ActiveState
-import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.base.invoke
 import com.bitchat.domain.chat.MarkPrivateChatRead
 import com.bitchat.domain.chat.ObserveLatestUnreadPrivatePeer
@@ -12,8 +10,9 @@ import com.bitchat.domain.chat.ObserveSelectedPrivatePeer
 import com.bitchat.domain.chat.ObserveUnreadPrivatePeers
 import com.bitchat.domain.chat.SendMessage
 import com.bitchat.domain.user.GetUserNickname
-import com.bitchat.domain.user.GetUserState
+import com.bitchat.domain.location.model.Channel
 import com.bitchat.viewvo.chat.DmState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,7 +27,6 @@ class DmViewModel(
     private val observeSelectedPrivatePeer: ObserveSelectedPrivatePeer,
     private val markPrivateChatRead: MarkPrivateChatRead,
     private val sendMessage: SendMessage,
-    private val getUserState: GetUserState,
     private val getUserNickname: GetUserNickname
 ) : ViewModel() {
 
@@ -68,45 +66,55 @@ class DmViewModel(
         _state.update { it.copy(messageInput = text) }
     }
 
-    fun sendMessage(recipientNickname: String) {
-        val content = _state.value.messageInput.trim()
-        if (content.isEmpty()) return
-
+    /**
+     * Sends [text] to [channel], the DM the caller is showing, captured when the user pressed send.
+     * The destination is never looked up later (the active chat can change in between, and a DM
+     * line must not go to whatever chat is active by then), so this is the only way to send.
+     * Anything but a mesh or Nostr DM (null, the mesh, a location or named channel, any Meshtastic
+     * channel) is refused at once with an error and nothing is sent. Returns whether the line was
+     * taken, so the caller keeps its draft when it was not. Leaves [DmState.messageInput] alone.
+     */
+    fun sendTo(channel: Channel?, text: String): Boolean {
+        val content = text.trim()
+        if (content.isEmpty()) return false
+        refusal(channel)?.let { reason ->
+            _state.update { it.copy(errorMessage = reason) }
+            return false
+        }
+        val destination = channel ?: return false
         _state.update { it.copy(isSending = true) }
+        viewModelScope.launch { send(content, destination) }
+        return true
+    }
 
-        viewModelScope.launch {
-            try {
-                val channel = when (val userState = getUserState(Unit)) {
-                    is UserState.Active -> when (val active = userState.activeState) {
-                        is ActiveState.Chat -> active.channel
-                        else -> {
-                            _state.update { it.copy(isSending = false) }
-                            return@launch
-                        }
-                    }
-
-                    else -> {
-                        _state.update { it.copy(isSending = false) }
-                        return@launch
-                    }
-                }
-
-                val sender = getUserNickname(Unit).first()
-
-                sendMessage(
-                    SendMessage.Params(
-                        content = content,
-                        channel = channel,
-                        sender = sender
-                    )
+    private suspend fun send(content: String, channel: Channel) {
+        try {
+            val sender = getUserNickname(Unit).first()
+            sendMessage(
+                SendMessage.Params(
+                    content = content,
+                    channel = channel,
+                    sender = sender
                 )
-                _state.update { it.copy(isSending = false, messageInput = "") }
-            } catch (e: Exception) {
-                _state.update {
-                    it.copy(isSending = false, errorMessage = "Failed to send: ${e.message}")
-                }
+            )
+            _state.update { it.copy(isSending = false) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _state.update {
+                it.copy(isSending = false, errorMessage = "Failed to send: ${e.message}")
             }
         }
+    }
+
+    /** Why a DM line must not be sent to [channel], or null when it may. */
+    private fun refusal(channel: Channel?): String? = when (channel) {
+        null -> "Not sent: no private conversation is open"
+        is Channel.MeshDM, is Channel.NostrDM -> null
+        // ChatRepo sends Meshtastic text as a broadcast whatever the node: refused until LoRa DMs exist.
+        is Channel.Meshtastic ->
+            if (channel.nodeNum != null) "Not sent: LoRa DMs are not supported yet" else "Not sent: not a private conversation"
+        Channel.Mesh, is Channel.Location, is Channel.NamedChannel -> "Not sent: not a private conversation"
     }
 
     fun clearError() {

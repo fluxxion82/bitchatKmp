@@ -4,21 +4,22 @@ import com.bitchat.domain.initialization.AppInitializer
 import com.bitchat.domain.initialization.models.AppInformation
 import com.bitchat.domain.initialization.models.Version
 import com.bitchat.embedded.BuildIdentity
-import com.bitchat.embedded.EmbeddedBuildInfo
+import org.koin.core.module.Module
 import org.koin.dsl.bind
 import org.koin.dsl.module
 
-val buildConfigModule = module {
+/** App information for the binary [identity] describes, with application id [appId]. */
+fun buildConfigModule(identity: BuildIdentity, appId: String): Module = module {
     single {
         AppInformation(
             version = Version(
-                name = EmbeddedBuildInfo.VERSION,
-                build = BuildIdentity.shortSha,
-                additionalInfo = BuildIdentity.line,
+                name = identity.version,
+                build = identity.shortSha,
+                additionalInfo = identity.line,
             ),
             versionCode = 1,
-            id = "com.bitchat.embedded",
-            debug = BuildIdentity.isDebug,
+            id = appId,
+            debug = identity.isDebug,
         )
     }
 

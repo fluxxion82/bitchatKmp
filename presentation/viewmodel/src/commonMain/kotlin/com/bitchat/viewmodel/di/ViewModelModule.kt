@@ -41,6 +41,8 @@ val viewModelModule = module {
             markPrivateChatRead = get(),
             clearAllData = get(),
             observeLoRaPeers = get(),
+            clearSelectedPrivatePeer = get(),
+            resolveChatFallback = get(),
         )
     }
     viewModel {
@@ -88,6 +90,8 @@ val viewModelModule = module {
             joinChannel = get(),
             setChannelPassword = get(),
             clearMessages = get(),
+            resolveChatFallback = get(),
+            chatNotices = get(),
         )
     }
     viewModel {
@@ -98,7 +102,6 @@ val viewModelModule = module {
             observeSelectedPrivatePeer = get(),
             markPrivateChatRead = get(),
             sendMessage = get(),
-            getUserState = get(),
             getUserNickname = get()
         )
     }
@@ -148,13 +151,16 @@ val viewModelModule = module {
         )
     }
 
-    viewModel {
+    // The geohash is optional: without one the notes are the building the device stands in, which
+    // is what the Compose apps ask for. A host with no location source passes a channel's instead.
+    viewModel { (geohash: String?) ->
         LocationNotesViewModel(
             observeNotes = get(),
             sendNote = get(),
             getUserNickname = get(),
             getLocationGeohash = get(),
             resolveLocationName = get(),
+            geohash = geohash,
         )
     }
 }

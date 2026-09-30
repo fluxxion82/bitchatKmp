@@ -1,5 +1,6 @@
 package com.bitchat.nostr
 
+import com.bitchat.domain.base.logBody
 import com.bitchat.crypto.Cryptography
 import com.bitchat.nostr.model.NostrEvent
 import com.bitchat.nostr.model.NostrIdentity
@@ -183,7 +184,7 @@ class NostrClient(
             println("   Nickname: ${nickname ?: "none"}")
             println("   Teleported: $teleported")
             println("   Content length: ${content.length}")
-            println("   Content preview: ${content.take(50)}${if (content.length > 50) "..." else ""}")
+            println("   Content: ${logBody(content, 50)}")
             println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
             val tags = mutableListOf<List<String>>()

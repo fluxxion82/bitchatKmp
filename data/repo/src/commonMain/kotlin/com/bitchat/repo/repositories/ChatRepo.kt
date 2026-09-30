@@ -2,6 +2,11 @@
 
 package com.bitchat.repo.repositories
 
+import com.bitchat.domain.base.logStackTrace
+import com.bitchat.domain.base.logError
+import com.bitchat.domain.base.logPath
+import com.bitchat.domain.base.logBytes
+import com.bitchat.domain.base.logBody
 import com.bitchat.api.dto.chat.ReadReceipt
 import com.bitchat.api.dto.mapper.toBitchatPacket
 import com.bitchat.api.dto.protocol.MessageType
@@ -65,7 +70,7 @@ import com.bitchat.repo.lora.toLoRaConfiguration
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.LoRaProtocolManager
 import com.bitchat.lora.LoRaProtocolType
-import com.bitchat.repo.tor.awaitTorReady
+import com.bitchat.repo.tor.torGateAllowsTraffic
 import com.bitchat.domain.tor.RequestedTorIntent
 import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.tor.TorManager
@@ -493,7 +498,7 @@ class ChatRepo(
                 println("   Geohash: $geohash")
                 println("   Nickname: $nickname")
                 println("   Content length: ${content.length}")
-                println("   Content preview: ${content.take(50)}...")
+                println("   Content: ${logBody(content, 50)}")
                 println("   Message type: $messageType")
                 println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
@@ -622,7 +627,7 @@ class ChatRepo(
             println("📨 ChatRepo.sendMeshMessage STARTED")
             println("   Nickname: $nickname")
             println("   Content length: ${content.length}")
-            println("   Content preview: ${content.take(50)}...")
+            println("   Content: ${logBody(content, 50)}")
             println("   Message type: $messageType")
             println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
@@ -683,11 +688,11 @@ class ChatRepo(
                             val firstBytes = preparedImage.bytes.take(10).joinToString(" ") { byte ->
                                 (byte.toInt() and 0xFF).toString(16).padStart(2, '0').uppercase()
                             }
-                            println("📎 ChatRepo: Image first bytes: $firstBytes")
+                            println("📎 ChatRepo: Image first bytes: ${logBytes(10) { firstBytes }}")
                             mesh.sendFileBroadcast(filePacket)
-                            println("📎 ChatRepo: Compressed image broadcast sent: ${preparedImage.fileName} (${preparedImage.bytes.size} bytes, ${preparedImage.mimeType})")
+                            println("📎 ChatRepo: Compressed image broadcast sent: ${logPath(preparedImage.fileName)} (${preparedImage.bytes.size} bytes, ${preparedImage.mimeType})")
                         } else {
-                            println("❌ ChatRepo: Failed to compress image for BLE transfer: $content")
+                            println("❌ ChatRepo: Failed to compress image for BLE transfer: ${logPath(content)}")
                         }
                     }
                     BitchatMessageType.Audio -> {
@@ -703,9 +708,9 @@ class ChatRepo(
                                 content = fileBytes
                             )
                             mesh.sendFileBroadcast(filePacket)
-                            println("📎 ChatRepo: Audio file broadcast sent: $fileName (${fileBytes.size} bytes)")
+                            println("📎 ChatRepo: Audio file broadcast sent: ${logPath(fileName)} (${fileBytes.size} bytes)")
                         } else {
-                            println("❌ ChatRepo: Failed to read audio file: $content")
+                            println("❌ ChatRepo: Failed to read audio file: ${logPath(content)}")
                         }
                     }
                     else -> {
@@ -715,7 +720,7 @@ class ChatRepo(
                     }
                 }
             } catch (e: Exception) {
-                println("⚠️ ChatRepo: BLE send failed: ${e.message}")
+                println("⚠️ ChatRepo: BLE send failed: ${logError(e)}")
                 // Don't fail if BLE fails - LoRa may have succeeded
             }
 
@@ -748,7 +753,7 @@ class ChatRepo(
             println("📡 ChatRepo.sendMeshtasticMessage STARTED")
             println("   Nickname: $nickname")
             println("   Content length: ${content.length}")
-            println("   Content preview: ${content.take(50)}...")
+            println("   Content: ${logBody(content, 50)}")
             println("   Message type: $messageType")
             println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
@@ -815,7 +820,7 @@ class ChatRepo(
             println("   Geohash: $geohash")
             println("   Event ID: ${event.id.take(16)}...")
             println("   Event kind: ${event.kind}")
-            println("   Content preview: ${event.content.take(50)}...")
+            println("   Content: ${logBody(event.content, 50)}")
             println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
             // ENSURE flow exists for this geohash - prevent messages from being lost
@@ -1191,11 +1196,17 @@ class ChatRepo(
         recipientNickname: String,
     ): Unit = sendPrivate(content, toPeerID, recipientNickname, BitchatMessageType.Message)
 
+    /**
+     * [route] is the DM this line was sent in, when the caller knows it (sendMessage does). Without
+     * it the active chat is read here, which may already be another conversation by the time this
+     * runs: a line typed in one DM must not go out through another.
+     */
     private suspend fun sendPrivate(
         content: String,
         toPeerID: String,
         recipientNickname: String,
-        messageType: BitchatMessageType
+        messageType: BitchatMessageType,
+        route: Channel? = null,
     ): Unit = withContext(coroutinesContextFacade.io) {
         val senderName = when (val user = userPreferences.getAppUser()) {
             is AppUser.ActiveAnonymous -> user.name
@@ -1216,7 +1227,7 @@ class ChatRepo(
         )
         addPrivateMessage(toPeerID, localMessage, markUnread = false, sendReadReceipt = false)
 
-        val currentChannel = userPreferences.getUserState()
+        val currentChannel = route ?: userPreferences.getUserState()
             ?.let { it as? UserState.Active }
             ?.activeState?.let { it as? ActiveState.Chat }
             ?.channel
@@ -1246,11 +1257,11 @@ class ChatRepo(
                                 val firstBytes = preparedImage.bytes.take(10).joinToString(" ") { byte ->
                                     (byte.toInt() and 0xFF).toString(16).padStart(2, '0').uppercase()
                                 }
-                                println("📎 ChatRepo: Private image first bytes: $firstBytes")
+                                println("📎 ChatRepo: Private image first bytes: ${logBytes(10) { firstBytes }}")
                                 mesh.sendFilePrivate(toPeerID, filePacket)
-                                println("📎 ChatRepo: Private compressed image sent to $toPeerID: ${preparedImage.fileName} (${preparedImage.bytes.size} bytes, ${preparedImage.mimeType})")
+                                println("📎 ChatRepo: Private compressed image sent to $toPeerID: ${logPath(preparedImage.fileName)} (${preparedImage.bytes.size} bytes, ${preparedImage.mimeType})")
                             } else {
-                                println("❌ ChatRepo: Failed to compress image for BLE transfer: $content")
+                                println("❌ ChatRepo: Failed to compress image for BLE transfer: ${logPath(content)}")
                             }
                         }
 
@@ -1267,9 +1278,9 @@ class ChatRepo(
                                     content = fileBytes
                                 )
                                 mesh.sendFilePrivate(toPeerID, filePacket)
-                                println("📎 ChatRepo: Private audio file sent to $toPeerID: $fileName (${fileBytes.size} bytes)")
+                                println("📎 ChatRepo: Private audio file sent to $toPeerID: ${logPath(fileName)} (${fileBytes.size} bytes)")
                             } else {
-                                println("❌ ChatRepo: Failed to read audio file: $content")
+                                println("❌ ChatRepo: Failed to read audio file: ${logPath(content)}")
                             }
                         }
 
@@ -1704,7 +1715,8 @@ class ChatRepo(
                     content = content,
                     toPeerID = channel.peerID,
                     recipientNickname = "",
-                    messageType = messageType
+                    messageType = messageType,
+                    route = channel,
                 )
             }
 
@@ -1714,7 +1726,8 @@ class ChatRepo(
                     content = content,
                     toPeerID = channel.peerID,
                     recipientNickname = "",
-                    messageType = messageType
+                    messageType = messageType,
+                    route = channel,
                 )
             }
 
@@ -1723,6 +1736,8 @@ class ChatRepo(
             }
 
             is Channel.Meshtastic -> {
+                // sendMeshtasticMessage broadcasts to every node: a line meant for one node must not go out.
+                if (channel.nodeNum != null) throw UnsupportedOperationException("LoRa DMs are not supported yet")
                 sendMeshtasticMessage(content, sender, messageType)
             }
         }
@@ -1864,23 +1879,14 @@ class ChatRepo(
     }
 
     /**
-     * Waits for Tor when it is coming up, and reports whether it is safe to send.
-     *
-     * The result used to be discarded, which was harmless only while nothing enforced the policy:
-     * traffic simply went out direct. Under enforcement it means walking into a request the engine
-     * will refuse anyway -- and paying the wait first. When Tor is not requested this still
-     * answers true regardless of readiness, so nothing changes for a user who never asked for it.
-     *
-     * @return true when the caller may proceed.
+     * Whether this request may go out: see the shared [torGateAllowsTraffic]. Waits for a Tor that
+     * is coming up, blocks when one was asked for and cannot be had, and allows the request on a
+     * build whose engine could never have proxied it in the first place.
      */
-    private suspend fun torGateAllowsTraffic(): Boolean {
-        val ready = awaitTorReady(torManager) { println("ChatRepo: $it") }
-        if (ready) return true
-        if (requestedTorIntent?.current != TorMode.ON) return true
-
-        println("ChatRepo: Tor is requested but not ready - not attempting this request")
-        return false
-    }
+    private suspend fun torGateAllowsTraffic(): Boolean = torGateAllowsTraffic(
+        torManager = torManager,
+        torRequested = requestedTorIntent?.current == TorMode.ON,
+    ) { println("ChatRepo: $it") }
 
     @OptIn(FlowPreview::class)
     private fun observeTorReadyAndEstablishConnections() {
@@ -1974,7 +1980,7 @@ class ChatRepo(
     private suspend fun handleLoRaPacket(packetBytes: ByteArray) = withContext(coroutinesContextFacade.io) {
         try {
             val packetString = packetBytes.decodeToString()
-            println("📻 ChatRepo: Received LoRa packet: $packetString")
+            println("📻 ChatRepo: Received LoRa packet: ${logBody(packetString)}")
 
             // Parse "nickname:content" format
             val colonIndex = packetString.indexOf(':')
@@ -1986,7 +1992,7 @@ class ChatRepo(
             val nickname = packetString.substring(0, colonIndex)
             val content = packetString.substring(colonIndex + 1)
 
-            println("📻 ChatRepo: LoRa message from '$nickname': $content")
+            println("📻 ChatRepo: LoRa message from '$nickname': ${logBody(content)}")
 
             // Create message for mesh channel
             val messageID = "lora-${Clock.System.now().toEpochMilliseconds()}"
@@ -2017,7 +2023,7 @@ class ChatRepo(
 
     override fun didReceiveMessage(message: BitchatMessage) {
         coroutineScopeFacade.applicationScope.launch {
-            println("Bluetooth: Received message from ${message.sender} (${message.senderPeerID}): ${message.content}")
+            println("Bluetooth: Received ${if (message.isPrivate) "private " else ""}message ${message.id} from ${message.sender} (${message.senderPeerID}): ${logBody(message.content)}")
 
             message.senderPeerID?.let { peerID ->
                 if (blockListPreferences.isMeshUserBlocked(peerID)) {
@@ -2188,7 +2194,7 @@ class ChatRepo(
                 val firstBytes = filePacket.content.take(10).joinToString(" ") { byte ->
                     (byte.toInt() and 0xFF).toString(16).padStart(2, '0').uppercase()
                 }
-                println("ChatRepo: Received file first bytes: $firstBytes")
+                println("ChatRepo: Received file first bytes: ${logBytes(10) { firstBytes }}")
 
                 val messageType = when {
                     filePacket.mimeType.startsWith("image/") -> BitchatMessageType.Image
@@ -2204,7 +2210,7 @@ class ChatRepo(
 
                 val localPath = saveFileToLocal(filePacket.content, filePacket.fileName, subDir)
                 if (localPath == null) {
-                    println("❌ ChatRepo: Failed to save received file: ${filePacket.fileName}")
+                    println("❌ ChatRepo: Failed to save received file: ${logPath(filePacket.fileName)}")
                     return@launch
                 }
 
@@ -2233,8 +2239,8 @@ class ChatRepo(
                     println("ChatRepo: Added file message to private DM with $peerID")
                 }
             } catch (e: Exception) {
-                println("ChatRepo: Error handling received file: ${e.message}")
-                e.printStackTrace()
+                println("ChatRepo: Error handling received file: ${logError(e)}")
+                logStackTrace(e)
             }
         }
     }

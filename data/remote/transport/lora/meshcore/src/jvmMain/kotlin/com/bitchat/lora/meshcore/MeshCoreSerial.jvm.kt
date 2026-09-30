@@ -1,5 +1,6 @@
 package com.bitchat.lora.meshcore
 
+import com.bitchat.domain.base.logBytes
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -101,8 +102,7 @@ actual class MeshCoreSerial actual constructor() {
         return try {
             val frame = buildFrame(data)
 
-            val hexBytes = frame.joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
-            println("📤 MeshCoreSerial: Sending frame: $hexBytes")
+            println("📤 MeshCoreSerial: Sending frame: ${logBytes(frame) { frame.joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') } }}")
 
             sock.getOutputStream().write(frame)
             sock.getOutputStream().flush()

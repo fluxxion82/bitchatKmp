@@ -1,5 +1,6 @@
 package com.bitchat.lora.meshtastic
 
+import com.bitchat.domain.base.logBytes
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.IntVar
 import kotlinx.cinterop.alloc
@@ -229,8 +230,7 @@ actual class MeshtasticSerial {
             val framed = buildFrame(data)
 
             // Log the exact bytes being sent
-            val hexBytes = framed.joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
-            println("📤 MeshtasticSerial: Sending frame: $hexBytes")
+            println("📤 MeshtasticSerial: Sending frame: ${logBytes(framed) { framed.joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') } }}")
 
             val written = write(socketFd, framed.refTo(0), framed.size.convert())
             if (written < 0) {
@@ -315,9 +315,9 @@ actual class MeshtasticSerial {
                     }
 
                     // Log received bytes for debugging
-                    val hexBytes = (0 until bytesRead.toInt())
-                        .joinToString(" ") { (buffer[it].toInt() and 0xFF).toString(16).padStart(2, '0') }
-                    println("📥 MeshtasticSerial: Received ${bytesRead} bytes: $hexBytes")
+                    println("📥 MeshtasticSerial: Received ${bytesRead} bytes: ${logBytes(bytesRead.toInt()) {
+                        (0 until bytesRead.toInt()).joinToString(" ") { (buffer[it].toInt() and 0xFF).toString(16).padStart(2, '0') }
+                    }}")
 
                     // Process all bytes read
                     for (i in 0 until bytesRead.toInt()) {

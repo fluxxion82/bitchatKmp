@@ -4,6 +4,8 @@ import com.bitchat.tor.TorManager
 import io.ktor.client.engine.*
 import io.ktor.client.engine.okhttp.*
 import java.io.IOException
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ProxySelector
@@ -68,3 +70,6 @@ private class TrustAllCerts : X509TrustManager {
 
 /** OkHttp is configured with a Tor-aware `ProxySelector` above. */
 actual val httpEngineSupportsTorProxy: Boolean = true
+
+/** OkHttp labels PONG correctly, so pings keep an idle relay session alive. */
+actual val websocketPingInterval: Duration? = 30.seconds

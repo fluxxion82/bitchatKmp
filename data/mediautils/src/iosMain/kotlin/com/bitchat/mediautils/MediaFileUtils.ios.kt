@@ -1,5 +1,7 @@
 package com.bitchat.mediautils
 
+import com.bitchat.domain.base.logError
+import com.bitchat.domain.base.logPath
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.useContents
@@ -44,7 +46,7 @@ actual suspend fun readFileBytes(path: String): ByteArray? = withContext(Dispatc
         }
         bytes
     } catch (e: Exception) {
-        println("MediaFileUtils iOS: Error reading file: ${e.message}")
+        println("MediaFileUtils iOS: Error reading file: ${logError(e)}")
         null
     }
 }
@@ -95,21 +97,21 @@ actual suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: S
         if (success) {
             // Verify the file was saved correctly
             if (!fileManager.fileExistsAtPath(filePath)) {
-                println("MediaFileUtils iOS: ERROR - File does not exist after write: $filePath")
+                println("MediaFileUtils iOS: ERROR - File does not exist after write: ${logPath(filePath)}")
                 return@withContext null
             }
 
             val attributes = fileManager.attributesOfItemAtPath(filePath, null)
             val savedSize = (attributes?.get("NSFileSize") as? Number)?.toLong() ?: -1
 
-            println("MediaFileUtils iOS: Saved file to $filePath ($savedSize bytes, expected ${bytes.size})")
+            println("MediaFileUtils iOS: Saved file to ${logPath(filePath)} ($savedSize bytes, expected ${bytes.size})")
             filePath
         } else {
-            println("MediaFileUtils iOS: Failed to write file to $filePath")
+            println("MediaFileUtils iOS: Failed to write file to ${logPath(filePath)}")
             null
         }
     } catch (e: Exception) {
-        println("MediaFileUtils iOS: Error saving file: ${e.message}")
+        println("MediaFileUtils iOS: Error saving file: ${logError(e)}")
         null
     }
 }
@@ -229,7 +231,7 @@ actual suspend fun compressImageForTransfer(path: String, maxSizeBytes: Int): Pr
             fileName = targetName
         )
     } catch (e: Exception) {
-        println("MediaFileUtils iOS: Error compressing image: ${e.message}")
+        println("MediaFileUtils iOS: Error compressing image: ${logError(e)}")
         null
     }
 }

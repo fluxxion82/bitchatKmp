@@ -43,6 +43,8 @@ kotlin {
                 implementation(project(":data:crypto"))
                 implementation(project(":data:noise"))
                 implementation(project(":data:remote:transport"))
+                // LogPolicy / logBody: message bodies stay out of logs unless opted in
+                implementation(project(":domain"))
 
                 implementation(libs.koin.core)
                 implementation(libs.kotlinx.coroutines.core)

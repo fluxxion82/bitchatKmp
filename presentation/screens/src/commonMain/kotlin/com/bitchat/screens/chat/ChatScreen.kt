@@ -11,7 +11,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import com.bitchat.design.chat.ChatContent
-import com.bitchat.design.chat.channelCommandSuggestions
+import com.bitchat.viewvo.chat.channelCommandSuggestions
+import com.bitchat.viewvo.chat.matching
 import com.bitchat.design.mapper.toMessage
 import com.bitchat.design.util.buildMentionInsertionText
 import com.bitchat.domain.location.model.Channel
@@ -23,7 +24,7 @@ fun ChatScreen(
     viewModel: ChatViewModel,
     dmViewModel: DmViewModel,
     selectedPrivatePeer: String?,
-    peerNicknames: Map<String, String>
+    selectedChannel: Channel? = null,
 ) {
     val state by viewModel.state.collectAsState()
     val dmState by dmViewModel.state.collectAsState()
@@ -49,8 +50,8 @@ fun ChatScreen(
     }
 
     LaunchedEffect(state.pendingCommandFailure) {
-        state.pendingCommandFailure?.let { failure ->
-            viewModel.postSystemMessage(failure.toMessage())
+        state.pendingCommandFailure?.let { pending ->
+            viewModel.postCommandFailure(pending, pending.failure.toMessage())
         }
     }
 
@@ -60,21 +61,14 @@ fun ChatScreen(
 
     val commandSuggestions by remember(messageText.text, availableCommands) {
         derivedStateOf {
-            val input = messageText.text
-            if (!input.startsWith("/")) {
-                emptyList()
-            } else {
-                val lowered = input.lowercase()
-                availableCommands.filter { command ->
-                    command.command.startsWith(lowered) ||
-                            command.aliases.any { alias -> alias.startsWith(lowered) }
-                }.sortedBy { it.command }
-            }
+            availableCommands.matching(messageText.text)
         }
     }
     val isLocationChannel = !isPrivateChat && state.selectedLocationChannel is Channel.Location
     val dmMessages = selectedPrivatePeer?.let { dmState.privateChats[it] }.orEmpty()
-    val recipientNickname = selectedPrivatePeer?.let { peerNicknames[it] ?: it.take(12) }
+    // The DM on screen, sent to directly: the active chat is read later, in another coroutine, and
+    // may by then be a public channel.
+    val dmChannel = privateChannelFor(selectedChannel, selectedPrivatePeer)
 
     ChatContent(
         messages = if (isPrivateChat) dmMessages else state.messages,
@@ -91,11 +85,18 @@ fun ChatScreen(
         onSendMessage = {
             if (messageText.text.trim().isNotEmpty()) {
                 if (isPrivateChat) {
-                    dmViewModel.sendMessage(recipientNickname ?: selectedPrivatePeer)
+                    // The DM on screen, captured now. A LoRa node DM or a header caught mid-change
+                    // is refused at once, with an error, and the draft stays.
+                    if (dmViewModel.sendTo(dmChannel, messageText.text)) {
+                        dmViewModel.updateMessageInput("")
+                        messageText = TextFieldValue("")
+                    }
                 } else {
-                    viewModel.sendMessage()
+                    // Refused (the user's data is being wiped): the draft stays, with an error.
+                    if (viewModel.sendMessage()) {
+                        messageText = TextFieldValue("")
+                    }
                 }
-                messageText = TextFieldValue("")
             }
         },
         onSendVoiceNote = { peer, channel, filePath ->
@@ -136,4 +137,16 @@ fun ChatScreen(
         },
         selectedPrivatePeer = selectedPrivatePeer
     )
+}
+
+/**
+ * [selectedChannel] when it is the private chat with [privatePeer] (a mesh or Nostr DM, or a
+ * Meshtastic node, which the view model refuses), else null (refused as well).
+ */
+internal fun privateChannelFor(selectedChannel: Channel?, privatePeer: String?): Channel? = when {
+    privatePeer == null -> null
+    selectedChannel is Channel.MeshDM && selectedChannel.peerID == privatePeer -> selectedChannel
+    selectedChannel is Channel.NostrDM && selectedChannel.peerID == privatePeer -> selectedChannel
+    selectedChannel is Channel.Meshtastic && selectedChannel.nodeNum?.toString(16)?.padStart(8, '0') == privatePeer -> selectedChannel
+    else -> null
 }

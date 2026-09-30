@@ -1,5 +1,6 @@
 package com.bitchat.mediautils
 
+import com.bitchat.domain.base.logError
 import com.bitchat.mediautils.model.FilterOptions
 import kotlinx.cinterop.CValue
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -224,7 +225,7 @@ fun generateThumbnailFromVideoBytes(
             }
         }
     } catch (e: Exception) {
-        println("Error generating thumbnail: ${e.message}")
+        println("Error generating thumbnail: ${logError(e)}")
         null
     }
 }

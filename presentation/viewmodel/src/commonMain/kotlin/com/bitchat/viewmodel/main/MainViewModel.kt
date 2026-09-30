@@ -10,6 +10,8 @@ import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.base.invoke
 import com.bitchat.domain.chat.GetJoinedChannels
 import com.bitchat.domain.chat.LeaveChannel
+import com.bitchat.domain.chat.ClearSelectedPrivatePeer
+import com.bitchat.domain.chat.ResolveChatFallback
 import com.bitchat.domain.chat.MarkPrivateChatRead
 import com.bitchat.domain.chat.ObserveLoRaPeers
 import com.bitchat.domain.chat.ObserveLatestUnreadPrivatePeer
@@ -48,6 +50,7 @@ import com.bitchat.viewmodel.navigation.PermissionsRequest
 import com.bitchat.viewmodel.navigation.Settings
 import com.bitchat.viewmodel.navigation.toNavigationString
 import com.bitchat.viewvo.chat.HeaderState
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -84,8 +87,13 @@ class MainViewModel(
     private val markPrivateChatRead: MarkPrivateChatRead,
     private val clearAllData: ClearAllData,
     private val observeLoRaPeers: ObserveLoRaPeers,
+    private val clearSelectedPrivatePeer: ClearSelectedPrivatePeer,
+    private val resolveChatFallback: ResolveChatFallback,
 ) : ViewModel() {
     val navigation = Channel<MainNavigation>(Channel.RENDEZVOUS)
+
+    /** DM switches, in call order and never cut halfway (see [OrderedTransitions]). */
+    private val dmSwitches = OrderedTransitions(viewModelScope)
 
     val appTheme = MutableStateFlow(AppTheme.SYSTEM)
 
@@ -359,7 +367,8 @@ class MainViewModel(
         }
     }
 
-    fun goBack() {
+    /** Returns the job doing it, so a caller can order its next request after this one. */
+    fun goBack(): Job =
         viewModelScope.launch {
             when (val userState = getUserState()) {
                 UserState.PermissionsRequired,
@@ -373,12 +382,12 @@ class MainViewModel(
                             when (val channel = activeState.channel) {
                                 is BitchatChannel.Location -> navigation.send(Back)
                                 BitchatChannel.Mesh -> navigation.send(Back)
-                                is BitchatChannel.NamedChannel -> {
-                                    val previous = activeState.previousChannel
-                                    saveUserStateAction(
-                                        com.bitchat.domain.user.model.UserStateAction.Chat(previous ?: BitchatChannel.Mesh)
-                                    )
-                                }
+                                is BitchatChannel.NamedChannel -> saveUserStateAction(
+                                    // Back stays in the channel: it goes where the user came from,
+                                    // as /leave and the leave button do (see ResolveChatFallback).
+                                    // Null names no channel, so the chat in view is the one left.
+                                    UserStateAction.Chat(resolveChatFallback(null))
+                                )
 
                                 is BitchatChannel.MeshDM -> {
                                     println("private mesh dm, peer id: ${channel.peerID}")
@@ -433,7 +442,31 @@ class MainViewModel(
                 }
             }
         }
-    }
+
+    /**
+     * Leaves the DM with [peerID] if that is the active chat, as [goBack] does (to the mesh, or a
+     * Nostr DM's previous channel when that is not itself a DM); any other chat is left alone,
+     * where [goBack] would move a named channel. When the active chat is not a DM but [peerID] is
+     * still the selected private peer (a switch left half applied), clears that selection, so its
+     * DMs stop counting as read. Applied after any DM switch asked for before it, never cut
+     * halfway; returns the job doing it.
+     */
+    fun leaveDm(peerID: String): Job =
+        dmSwitches.submit {
+            val active = (getUserState() as? UserState.Active)?.activeState as? ActiveState.Chat
+            when (val channel = active?.channel) {
+                is BitchatChannel.MeshDM -> if (channel.peerID == peerID) {
+                    markPrivateChatRead(channel.peerID)
+                    saveUserStateAction(UserStateAction.Chat(BitchatChannel.Mesh))
+                }
+                is BitchatChannel.NostrDM -> if (channel.peerID == peerID) {
+                    markPrivateChatRead(channel.peerID)
+                    val previous = active.previousChannel?.takeUnless { it is BitchatChannel.MeshDM || it is BitchatChannel.NostrDM }
+                    saveUserStateAction(UserStateAction.Chat(previous ?: BitchatChannel.Mesh))
+                }
+                else -> clearSelectedPrivatePeer(peerID)
+            }
+        }
 
     fun updateNickname(newNickname: String) {
         viewModelScope.launch {
@@ -464,7 +497,7 @@ class MainViewModel(
 
     fun leaveNamedChannel(channelName: String) {
         viewModelScope.launch {
-            val fallbackChannel = resolvePreviousOrDefaultChannel()
+            val fallbackChannel = resolveChatFallback(BitchatChannel.NamedChannel(channelName))
             leaveChannel(channelName)
             saveUserStateAction(
                 UserStateAction.Chat(fallbackChannel)
@@ -480,8 +513,12 @@ class MainViewModel(
         }
     }
 
-    fun startGeohashDM(person: GeoPerson, sourceGeohash: String?) {
-        viewModelScope.launch {
+    /**
+     * Returns the job doing it: joined, the DM is the active chat (completed exceptionally if it
+     * failed). Applied after any DM switch asked for before it, and never cut halfway.
+     */
+    fun startGeohashDM(person: GeoPerson, sourceGeohash: String?): Job =
+        dmSwitches.submit {
             saveUserStateAction(
                 UserStateAction.NostrDM(
                     fullPubkey = person.id,
@@ -490,10 +527,13 @@ class MainViewModel(
                 )
             )
         }
-    }
 
-    fun startMeshDM(peerID: String, nickname: String) {
-        viewModelScope.launch {
+    /**
+     * Returns the job doing it: joined, the DM is the active chat (completed exceptionally if it
+     * failed). Applied after any DM switch asked for before it, and never cut halfway.
+     */
+    fun startMeshDM(peerID: String, nickname: String): Job =
+        dmSwitches.submit {
             _headerState.update {
                 it.copy(
                     peerNicknames = it.peerNicknames + (peerID to nickname)
@@ -507,7 +547,6 @@ class MainViewModel(
                 )
             )
         }
-    }
 
     fun showAppInfo() {
         viewModelScope.launch {
@@ -525,15 +564,6 @@ class MainViewModel(
         viewModelScope.launch {
             saveUserStateAction(UserStateAction.LocationNotes)
         }
-    }
-
-    private suspend fun resolvePreviousOrDefaultChannel(): BitchatChannel {
-        val userState = getUserState()
-        val previous = (userState as? UserState.Active)
-            ?.activeState
-            ?.let { it as? ActiveState.Chat }
-            ?.previousChannel
-        return previous ?: BitchatChannel.Mesh
     }
 
     fun openLatestUnreadDM() {
@@ -594,8 +624,17 @@ class MainViewModel(
             ?: _headerState.value.geohashPeople.firstOrNull { it.id == peerID }?.displayName
     }
 
+    /** The wipe under way, if any. */
+    private var wipe: Job? = null
+
+    /**
+     * Wipes the user's data and starts again. Does nothing while a wipe is already running: a
+     * second one would have the first to finish admit work again while stores were still being
+     * cleared (see `ChatNotices.reset`), and a triple click is easy to repeat.
+     */
     fun handleTripleClick() {
-        viewModelScope.launch {
+        if (wipe?.isActive == true) return
+        wipe = viewModelScope.launch {
             clearAllData()
             goToNextStep()
         }

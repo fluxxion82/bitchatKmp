@@ -2,6 +2,7 @@
 
 package com.bitchat.noise
 
+import com.bitchat.domain.base.logBytes
 import kotlinx.cinterop.COpaque
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.CPointerVar
@@ -314,10 +315,10 @@ actual class NoiseSession actual constructor(
 
                 // Log received message for debugging interop
                 println("[NoiseSession-Native] 📥 Received handshake message (${message.size} bytes):")
-                println("[NoiseSession-Native]    Hex: ${message.toHexString()}")
-                println("[NoiseSession-Native]    e (32): ${message.take(32).toByteArray().toHexString()}")
+                println("[NoiseSession-Native]    Hex: ${logBytes(message) { message.toHexString() }}")
+                println("[NoiseSession-Native]    e (32): ${logBytes(minOf(32, message.size)) { message.take(32).toByteArray().toHexString() }}")
                 if (message.size > 32) {
-                    println("[NoiseSession-Native]    encrypted_s (${message.size - 32}): ${message.drop(32).toByteArray().toHexString()}")
+                    println("[NoiseSession-Native]    encrypted_s (${message.size - 32}): ${logBytes(message.size - 32) { message.drop(32).toByteArray().toHexString() }}")
                 }
 
                 // Read the incoming handshake message

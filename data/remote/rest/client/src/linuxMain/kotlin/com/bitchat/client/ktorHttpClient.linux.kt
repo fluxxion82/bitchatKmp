@@ -3,6 +3,7 @@ package com.bitchat.client
 import com.bitchat.tor.TorManager
 import io.ktor.client.engine.*
 import io.ktor.client.engine.curl.*
+import kotlin.time.Duration
 
 /**
  * Custom Curl engine factory that configures CA certificates for Linux.
@@ -30,3 +31,6 @@ actual fun getEngine(isDebug: Boolean, torManager: TorManager?): HttpClientEngin
 
 /** [LinuxCurl] is not given a SOCKS proxy, so nothing ever leaves via Tor. */
 actual val httpEngineSupportsTorProxy: Boolean = false
+
+/** No pings: the Curl engine calls an incoming PONG a Ping, so ours are never answered. */
+actual val websocketPingInterval: Duration? = null

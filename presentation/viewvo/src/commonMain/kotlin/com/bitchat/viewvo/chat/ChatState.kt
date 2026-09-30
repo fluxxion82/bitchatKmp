@@ -36,5 +36,18 @@ data class ChatState(
     val peerFingerprints: Map<String, String> = emptyMap(),
     val peerSessionStates: Map<String, String> = emptyMap(),
     val geohashPeople: List<GeoPerson> = emptyList(),
-    val pendingCommandFailure: com.bitchat.domain.chat.model.failure.CommandFailure? = null
+    val pendingCommandFailure: PendingCommandFailure? = null
+)
+
+/**
+ * A slash command that could not be run, the chat it was typed in, and the state of the feedback
+ * store the command ran under. Both are carried with it because the screen turns the failure into
+ * a line of its own, a frame or more later, by which time the user may be looking at another
+ * conversation, or have wiped their data: the epoch is the one the command began with, not one
+ * read again afterwards, so feedback for a command that straddled the wipe is dropped.
+ */
+data class PendingCommandFailure(
+    val failure: com.bitchat.domain.chat.model.failure.CommandFailure,
+    val channel: Channel,
+    val epoch: com.bitchat.domain.chat.ChatNotices.Epoch? = null,
 )

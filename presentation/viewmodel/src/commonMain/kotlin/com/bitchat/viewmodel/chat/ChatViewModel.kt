@@ -1,11 +1,17 @@
 package com.bitchat.viewmodel.chat
 
+import com.bitchat.domain.base.logPath
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bitchat.domain.app.model.ActiveState
 import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.base.invoke
 import com.bitchat.domain.base.model.Outcome
+import com.bitchat.domain.chat.ChatNotices
+import com.bitchat.domain.chat.ResolveChatFallback
+import com.bitchat.domain.chat.conversationKey
+import com.bitchat.domain.chat.isSameConversation
+import com.bitchat.domain.chat.mergeNotices
 import com.bitchat.domain.chat.ClearMessages
 import com.bitchat.domain.chat.GetAvailableNamedChannels
 import com.bitchat.domain.chat.GetChannelKeyCommitment
@@ -37,17 +43,22 @@ import com.bitchat.domain.user.model.BlockType
 import com.bitchat.domain.user.model.UserStateAction
 import com.bitchat.mediautils.resolveMediaToLocalPath
 import com.bitchat.viewvo.chat.ChatState
+import com.bitchat.viewvo.chat.PendingCommandFailure
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -73,6 +84,8 @@ class ChatViewModel(
     private val joinChannel: JoinChannel,
     private val setChannelPassword: SetChannelPassword,
     private val clearMessages: ClearMessages,
+    private val resolveChatFallback: ResolveChatFallback,
+    private val chatNotices: ChatNotices,
 ) : ViewModel() {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -81,8 +94,11 @@ class ChatViewModel(
 
     init {
         viewModelScope.launch {
+            // Every ChannelChanged is handled, even two in a row: SaveUserStateAction announces a
+            // switch before it saves the new user state and again after, and the state read for
+            // the first can still be the old one. Dropping repeats (as distinctUntilChanged did)
+            // left the list on the old channel while the header and sends had moved on.
             chatEventBus.events()
-                .distinctUntilChanged()
                 .onStart { emit(com.bitchat.domain.chat.model.ChatEvent.ChannelChanged) }
                 .collect { event ->
                     when (event) {
@@ -126,7 +142,11 @@ class ChatViewModel(
             _currentChannel
                 .flatMapLatest { channel ->
                     if (channel != null) {
-                        observeChannelMessages(channel)
+                        // Command feedback lives in ChatNotices, for the life of the app rather
+                        // than of this screen, and is merged into the chat it belongs to.
+                        combine(observeChannelMessages(channel), chatNotices.notices) { messages, lines ->
+                            mergeNotices(messages, lines.of(channel.conversationKey()))
+                        }
                     } else {
                         flowOf(emptyList())
                     }
@@ -153,13 +173,25 @@ class ChatViewModel(
         _state.update { it.copy(messageInput = text) }
     }
 
-    fun sendMessage() {
+    /**
+     * Sends the line being typed, and answers whether it was taken. A caller clears its editor
+     * only when it was: nothing may run against stores the wipe has only half cleared, and a line
+     * refused for that would otherwise be lost between the editor and here. The refusal itself is
+     * on [ChatState.errorMessage], where a refused DM leaves one too.
+     */
+    fun sendMessage(): Boolean {
         val content = _state.value.messageInput.trim()
-        if (content.isEmpty()) return
+        if (content.isEmpty()) return false
+        if (chatNotices.resetting) {
+            _state.update { it.copy(errorMessage = DATA_BEING_CLEARED) }
+            return false
+        }
 
         println("📤 ChatViewModel: sendMessage() called with content length=${content.length}")
 
-        viewModelScope.launch {
+        // The command answers under the identity it was asked by: a wipe part way through drops
+        // whatever it would have filed (see ChatNotices.Epoch).
+        viewModelScope.launch(chatNotices.epoch()) {
             try {
                 val userState = getUserState()
                 println("📤 ChatViewModel: userState=$userState")
@@ -205,7 +237,10 @@ class ChatViewModel(
                 val processedContent = when (commandResult) {
                     CommandResult.NotACommand -> content
                     is CommandResult.Invalid -> {
-                        _state.update { it.copy(pendingCommandFailure = commandResult.failure) }
+                        // This coroutine's own epoch, the one it started with, not a fresh read:
+                        // a reset during the suspensions above must not be papered over here.
+                        val epoch = currentCoroutineContext()[ChatNotices.Epoch]
+                        _state.update { it.copy(pendingCommandFailure = PendingCommandFailure(commandResult.failure, channel, epoch)) }
                         return@launch
                     }
 
@@ -237,13 +272,13 @@ class ChatViewModel(
                         }
 
                         is ChatCommand.Unblock -> {
-                            handleUnblockCommand(command.target)
+                            handleUnblockCommand(command.target, channel)
                             _state.update { it.copy(messageInput = "") }
                             return@launch
                         }
 
                         is ChatCommand.Join -> {
-                            handleJoinCommand(command.channel)
+                            handleJoinCommand(command.channel, channel)
                             _state.update { it.copy(messageInput = "") }
                             return@launch
                         }
@@ -261,7 +296,7 @@ class ChatViewModel(
                         }
 
                         ChatCommand.List, ChatCommand.Channels -> {
-                            handleListCommand()
+                            handleListCommand(channel)
                             _state.update { it.copy(messageInput = "") }
                             return@launch
                         }
@@ -285,7 +320,7 @@ class ChatViewModel(
                         }
 
                         ChatCommand.Save, is ChatCommand.Transfer -> {
-                            addSystemMessage("command not implemented yet")
+                            addSystemMessage("command not implemented yet", channel = channel)
                             _state.update { it.copy(messageInput = "") }
                             return@launch
                         }
@@ -315,6 +350,7 @@ class ChatViewModel(
                 }
             }
         }
+        return true
     }
 
     fun clearError() {
@@ -329,7 +365,7 @@ class ChatViewModel(
             } else {
                 "blocked users: ${blocked.joinToString(", ") { it.nickname ?: it.identifier.take(16) }}"
             }
-            addSystemMessage(message)
+            addSystemMessage(message, channel = channel)
             return
         }
 
@@ -344,9 +380,9 @@ class ChatViewModel(
 
                 if (pubkey != null) {
                     blockUser(BlockUser.Request(pubkey, target, BlockType.GEOHASH))
-                    addSystemMessage("blocked user $target")
+                    addSystemMessage("blocked user $target", channel = channel)
                 } else {
-                    addSystemMessage("user $target not found")
+                    addSystemMessage("user $target not found", channel = channel)
                 }
             }
 
@@ -356,19 +392,19 @@ class ChatViewModel(
 
                 if (peer != null) {
                     blockUser(BlockUser.Request(peer.id, target, BlockType.MESH))
-                    addSystemMessage("blocked user $target")
+                    addSystemMessage("blocked user $target", channel = channel)
                 } else {
-                    addSystemMessage("user $target not found")
+                    addSystemMessage("user $target not found", channel = channel)
                 }
             }
 
             else -> {
-                addSystemMessage("blocking not supported in this channel")
+                addSystemMessage("blocking not supported in this channel", channel = channel)
             }
         }
     }
 
-    private suspend fun handleUnblockCommand(target: String) {
+    private suspend fun handleUnblockCommand(target: String, typedIn: Channel) {
         val blocked = getBlockedUsers()
         val blockedUser = blocked.find { user ->
             user.nickname?.equals(target, ignoreCase = true) == true ||
@@ -377,13 +413,19 @@ class ChatViewModel(
 
         if (blockedUser != null) {
             unblockUser(UnblockUser.Request(blockedUser.identifier, blockedUser.blockType))
-            addSystemMessage("unblocked user $target")
+            addSystemMessage("unblocked user $target", channel = typedIn)
         } else {
-            addSystemMessage("user $target not in block list")
+            addSystemMessage("user $target not in block list", channel = typedIn)
         }
     }
 
-    private fun addSystemMessage(content: String) {
+    /**
+     * Shows [content] as a system line in [channel]'s messages, where it stays, in time order,
+     * across updates of that chat and switches away and back. [channel] is the chat the command
+     * was typed in or the one it is about, never "whatever is on screen now": a command suspends,
+     * and the user can move to another chat while it runs.
+     */
+    private suspend fun addSystemMessage(content: String, channel: Channel) {
         val systemMessage = BitchatMessage(
             id = Uuid.random().toString(),
             sender = "system",
@@ -393,21 +435,40 @@ class ChatViewModel(
             isPrivate = false,
             senderPeerID = null
         )
-        _state.update { currentState ->
-            currentState.copy(messages = currentState.messages + systemMessage)
-        }
+        chatNotices.add(channel, systemMessage, notBefore = newestMoment(channel))
     }
+
+    /**
+     * The newest moment in [channel]'s conversation, so a line filed for it goes below what is
+     * already there whatever timestamps those messages carry. Always [channel]'s own conversation,
+     * never the one on screen: `/j` files its "joined channel" line for the channel it is about,
+     * and the user may be looking at a third chat by the time a command finishes. The chat on
+     * screen is read from the state the screen already holds, since it has the notices merged in.
+     */
+    private suspend fun newestMoment(channel: Channel): Instant? =
+        if (_currentChannel.value?.isSameConversation(channel) == true) {
+            _state.value.messages.maxOfOrNull { it.timestamp }
+        } else {
+            observeChannelMessages(channel).first().maxOfOrNull { it.timestamp }
+        }
 
     fun clearPendingCommandFailure() {
         _state.update { it.copy(pendingCommandFailure = null) }
     }
 
-    fun postSystemMessage(message: String) {
-        addSystemMessage(message)
+    /**
+     * Shows [message] for [pending] as a system line in the chat the command was typed in, and
+     * takes the failure off the state. The screen turns a failure into its message a frame or
+     * more later, so the line must never land in whatever chat is on screen by then; a failure
+     * the view model has already replaced or cleared is dropped.
+     */
+    fun postCommandFailure(pending: PendingCommandFailure, message: String) {
+        if (_state.value.pendingCommandFailure != pending) return
         clearPendingCommandFailure()
+        viewModelScope.launch(pending.epoch ?: EmptyCoroutineContext) { addSystemMessage(message, pending.channel) }
     }
 
-    private suspend fun handleJoinCommand(channelName: String) {
+    private suspend fun handleJoinCommand(channelName: String, typedIn: Channel) {
         when (val result = joinChannel(JoinChannel.Params(channelName = channelName))) {
             is Outcome.Success -> {
                 val msg = if (result.value.isNewChannel) {
@@ -415,7 +476,7 @@ class ChatViewModel(
                 } else {
                     "joined channel ${result.value.channelInfo.name}"
                 }
-                addSystemMessage(msg)
+                addSystemMessage(msg, channel = Channel.NamedChannel(result.value.channelInfo.name))
                 saveUserStateAction(
                     UserStateAction.Chat(Channel.NamedChannel(result.value.channelInfo.name))
                 )
@@ -427,7 +488,7 @@ class ChatViewModel(
                     is ChannelFailure.AlreadyJoined -> "already in channel"
                     else -> result.message
                 }
-                addSystemMessage(msg)
+                addSystemMessage(msg, channel = typedIn)
             }
         }
     }
@@ -436,24 +497,15 @@ class ChatViewModel(
         val targetChannel = channelName ?: when (currentChannel) {
             is Channel.NamedChannel -> currentChannel.channelName
             else -> {
-                addSystemMessage("not in a named channel")
+                addSystemMessage("not in a named channel", channel = currentChannel)
                 return
             }
         }
 
         leaveChannel(targetChannel)
-        addSystemMessage("left channel $targetChannel")
-        val fallback = resolvePreviousOrDefaultChannel()
+        val fallback = resolveChatFallback(Channel.NamedChannel(targetChannel))
+        addSystemMessage("left channel $targetChannel", channel = fallback)
         saveUserStateAction(UserStateAction.Chat(fallback))
-    }
-
-    private suspend fun resolvePreviousOrDefaultChannel(): Channel {
-        val userState = getUserState()
-        val previous = (userState as? UserState.Active)
-            ?.activeState
-            ?.let { it as? ActiveState.Chat }
-            ?.previousChannel
-        return previous ?: Channel.Mesh
     }
 
     private suspend fun handlePassCommand(
@@ -464,14 +516,14 @@ class ChatViewModel(
         val channelName = when (currentChannel) {
             is Channel.NamedChannel -> currentChannel.channelName
             else -> {
-                addSystemMessage("not in a named channel")
+                addSystemMessage("not in a named channel", channel = currentChannel)
                 return
             }
         }
 
         val password = newPassword ?: currentPassword
         if (password == null) {
-            addSystemMessage("usage: /pass <password> or /pass <current> <new>")
+            addSystemMessage("usage: /pass <password> or /pass <current> <new>", channel = currentChannel)
             return
         }
 
@@ -491,7 +543,7 @@ class ChatViewModel(
                     val isNew = getChannelKeyCommitment(channelName) == null
                     if (isNew) "password set - you are now the owner" else "ownership verified"
                 }
-                addSystemMessage(msg)
+                addSystemMessage(msg, channel = currentChannel)
             }
 
             is Outcome.Error -> {
@@ -502,21 +554,21 @@ class ChatViewModel(
                     is ChannelFailure.ChannelNotFound -> "channel not found"
                     else -> result.message
                 }
-                addSystemMessage(msg)
+                addSystemMessage(msg, channel = currentChannel)
             }
         }
     }
 
-    private suspend fun handleListCommand() {
+    private suspend fun handleListCommand(typedIn: Channel) {
         val channels = getAvailableNamedChannels()
         if (channels.isEmpty()) {
-            addSystemMessage("no channels available")
+            addSystemMessage("no channels available", channel = typedIn)
         } else {
             val channelList = channels.joinToString(", ") { channel ->
                 val protection = if (channel.isProtected) " [protected]" else ""
                 "${channel.name}$protection (${channel.memberCount})"
             }
-            addSystemMessage("channels: $channelList")
+            addSystemMessage("channels: $channelList", channel = typedIn)
         }
     }
 
@@ -526,9 +578,9 @@ class ChatViewModel(
             is Channel.Location -> {
                 val participants = getGeohashParticipants(currentChannel.geohash)
                 if (participants.isEmpty()) {
-                    addSystemMessage("no participants")
+                    addSystemMessage("no participants", channel = currentChannel)
                 } else {
-                    addSystemMessage("participants: ${participants.values.joinToString(", ")}")
+                    addSystemMessage("participants: ${participants.values.joinToString(", ")}", channel = currentChannel)
                 }
                 return
             }
@@ -536,36 +588,36 @@ class ChatViewModel(
             is Channel.Mesh -> {
                 val peers = getMeshPeers()
                 if (peers.isEmpty()) {
-                    addSystemMessage("no peers connected")
+                    addSystemMessage("no peers connected", channel = currentChannel)
                 } else {
-                    addSystemMessage("peers: ${peers.joinToString(", ") { it.displayName }}")
+                    addSystemMessage("peers: ${peers.joinToString(", ") { it.displayName }}", channel = currentChannel)
                 }
                 return
             }
 
             else -> {
-                addSystemMessage("not in a channel")
+                addSystemMessage("not in a channel", channel = currentChannel)
                 return
             }
         }
 
         val members = getChannelMembers(targetChannel)
         if (members.isEmpty()) {
-            addSystemMessage("no members in $targetChannel")
+            addSystemMessage("no members in $targetChannel", channel = currentChannel)
         } else {
-            addSystemMessage("members of $targetChannel: ${members.joinToString(", ") { it.nickname }}")
+            addSystemMessage("members of $targetChannel: ${members.joinToString(", ") { it.nickname }}", channel = currentChannel)
         }
     }
 
     private suspend fun handleMessageCommand(target: String, message: String?, currentChannel: Channel) {
         when (currentChannel) {
-            is Channel.Mesh, is Channel.MeshDM -> handleMeshMessageCommand(target, message)
+            is Channel.Mesh, is Channel.MeshDM -> handleMeshMessageCommand(target, message, currentChannel)
             is Channel.Location -> handleLocationMessageCommand(target, message, currentChannel)
-            else -> addSystemMessage("direct messages are only supported from mesh or location channels")
+            else -> addSystemMessage("direct messages are only supported from mesh or location channels", channel = currentChannel)
         }
     }
 
-    private suspend fun handleMeshMessageCommand(target: String, message: String?) {
+    private suspend fun handleMeshMessageCommand(target: String, message: String?, typedIn: Channel) {
         val peers = getMeshPeers(Unit)
         val peer = peers.find { p ->
             p.displayName.equals(target, ignoreCase = true) ||
@@ -573,7 +625,7 @@ class ChatViewModel(
         }
 
         if (peer == null) {
-            addSystemMessage("user $target not found")
+            addSystemMessage("user $target not found", channel = typedIn)
             return
         }
 
@@ -589,7 +641,7 @@ class ChatViewModel(
                 )
             )
         } else {
-            addSystemMessage("started private chat with ${peer.displayName}")
+            addSystemMessage("started private chat with ${peer.displayName}", channel = typedIn)
         }
     }
 
@@ -601,7 +653,7 @@ class ChatViewModel(
         }
 
         if (entry == null) {
-            addSystemMessage("user $target not found")
+            addSystemMessage("user $target not found", channel = currentChannel)
             return
         }
 
@@ -627,16 +679,16 @@ class ChatViewModel(
                 )
             )
         } else {
-            addSystemMessage("started private chat with $displayName")
+            addSystemMessage("started private chat with $displayName", channel = currentChannel)
         }
     }
 
     private suspend fun clearConversation(channel: Channel) {
         try {
-            clearMessages(ClearMessages.Params(channel))
+            clearMessages(ClearMessages.Params(channel)) // Drops the channel's notices too.
             _state.update { it.copy(messages = emptyList()) }
         } catch (e: Exception) {
-            addSystemMessage("failed to clear: ${e.message}")
+            addSystemMessage("failed to clear: ${e.message}", channel = channel)
         }
     }
 
@@ -650,7 +702,7 @@ class ChatViewModel(
                 }
 
                 val nickname = _state.value.nickname
-                println("ChatViewModel: sendVoiceNote channel=$channel filePath=$filePath")
+                println("ChatViewModel: sendVoiceNote channel=$channel filePath=${logPath(filePath)}")
                 _state.update { it.copy(isSending = true) }
 
                 sendMessage(
@@ -684,7 +736,7 @@ class ChatViewModel(
                 }
 
                 val nickname = _state.value.nickname
-                println("ChatViewModel: sendImageNote channel=$channel filePath=$filePath")
+                println("ChatViewModel: sendImageNote channel=$channel filePath=${logPath(filePath)}")
                 _state.update { it.copy(isSending = true) }
 
                 val localPath = resolveMediaToLocalPath(filePath)
@@ -694,7 +746,7 @@ class ChatViewModel(
                     }
                     return@launch
                 }
-                println("ChatViewModel: resolved image path: $localPath")
+                println("ChatViewModel: resolved image path: ${logPath(localPath)}")
 
                 sendMessage(
                     SendMessage.Params(
@@ -742,3 +794,6 @@ class ChatViewModel(
         }
     }
 }
+
+/** What a line refused while the user's data is being wiped is answered with. */
+const val DATA_BEING_CLEARED = "data is being cleared, try again"

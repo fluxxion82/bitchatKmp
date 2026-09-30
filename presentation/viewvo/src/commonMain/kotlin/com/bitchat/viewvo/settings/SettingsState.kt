@@ -51,6 +51,19 @@ data class SettingsState(
      */
     val torNetworkEnabled: Boolean
         get() = requestedTorMode == TorMode.ON && torAvailability != TorAvailability.NO_PROXY_SUPPORT
+
+    /**
+     * The user's stored choice is ON on a build whose HTTP engine cannot route through a proxy: Tor
+     * is not protecting anything, and the gate is refusing every relay connection, so geohash
+     * channels and Nostr DMs are dead until the user turns it off.
+     *
+     * [torNetworkEnabled] is deliberately false in this state, which is what made the switch both
+     * unchecked and disabled: there was then nothing on screen a user could act on, and turning Tor
+     * off was impossible from inside the app. Any Tor control must treat this as "on, and the only
+     * move is off".
+     */
+    val torBlocksNostr: Boolean
+        get() = requestedTorMode == TorMode.ON && torAvailability == TorAvailability.NO_PROXY_SUPPORT
 }
 
 enum class ThemePreference {

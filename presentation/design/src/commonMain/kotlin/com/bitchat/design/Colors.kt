@@ -3,31 +3,34 @@ package com.bitchat.design
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
+import com.bitchat.viewvo.theme.DarkPalette
+import com.bitchat.viewvo.theme.LightPalette
 
+// The values come from presentation:viewvo, so the terminal UI draws bitchat in the same colours.
 internal val DarkColorScheme = darkColorScheme(
-    primary = Color(0xFF39FF14),
-    onPrimary = Color.Black,
-    secondary = Color(0xFF2ECB10),
-    onSecondary = Color.Black,
-    background = Color.Black,
-    onBackground = Color(0xFF39FF14),
-    surface = Color(0xFF111111),
-    onSurface = Color(0xFF39FF14),
-    error = Color(0xFFFF5555),
-    onError = Color.Black
+    primary = Color(DarkPalette.primary),
+    onPrimary = Color(DarkPalette.onPrimary),
+    secondary = Color(DarkPalette.secondary),
+    onSecondary = Color(DarkPalette.onSecondary),
+    background = Color(DarkPalette.background),
+    onBackground = Color(DarkPalette.onBackground),
+    surface = Color(DarkPalette.surface),
+    onSurface = Color(DarkPalette.onSurface),
+    error = Color(DarkPalette.error),
+    onError = Color(DarkPalette.onError)
 )
 
 internal val LightColorScheme = lightColorScheme(
-    primary = Color(0xFF008000),
-    onPrimary = Color.White,
-    secondary = Color(0xFF006600),
-    onSecondary = Color.White,
-    background = Color.White,
-    onBackground = Color(0xFF008000),
-    surface = Color(0xFFF8F8F8),
-    onSurface = Color(0xFF008000),
-    error = Color(0xFFCC0000),
-    onError = Color.White
+    primary = Color(LightPalette.primary),
+    onPrimary = Color(LightPalette.onPrimary),
+    secondary = Color(LightPalette.secondary),
+    onSecondary = Color(LightPalette.onSecondary),
+    background = Color(LightPalette.background),
+    onBackground = Color(LightPalette.onBackground),
+    surface = Color(LightPalette.surface),
+    onSurface = Color(LightPalette.onSurface),
+    error = Color(LightPalette.error),
+    onError = Color(LightPalette.onError)
 )
 
 fun currentBackgroundColor(isDarkTheme: Boolean): Color {

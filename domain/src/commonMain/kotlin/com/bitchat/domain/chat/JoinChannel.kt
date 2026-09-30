@@ -122,7 +122,4 @@ class JoinChannel(
         }
     }
 
-    private fun normalizeChannelName(name: String): String {
-        return if (name.startsWith("#")) name else "#$name"
-    }
 }

@@ -19,6 +19,14 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/**
+ * The notes left at one place.
+ *
+ * [geohash] names that place. Left out, it is the building the device is standing in, which is
+ * what the Compose apps show and needs a location fix at [GeohashChannelLevel.BUILDING]; a host
+ * with no location source at all (the Pi) never gets one, so it passes the channel the user has
+ * joined instead and the notes are that channel's.
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 class LocationNotesViewModel(
     private val observeNotes: ObserveNotes,
@@ -26,6 +34,7 @@ class LocationNotesViewModel(
     private val getUserNickname: GetUserNickname,
     private val getLocationGeohash: GetLocationGeohash,
     private val resolveLocationName: ResolveLocationName,
+    private val geohash: String? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LocationNotesState())
@@ -52,15 +61,13 @@ class LocationNotesViewModel(
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
             try {
-                val geohash = getLocationGeohash(GeohashChannelLevel.BUILDING)
-                val locationName = resolveLocationName(
-                    ResolveLocationName.Params(geohash, GeohashChannelLevel.BUILDING)
-                )
-
+                val level = if (geohash == null) GeohashChannelLevel.BUILDING else geohashLevel(geohash)
+                val geohash = geohash ?: getLocationGeohash(GeohashChannelLevel.BUILDING)
+                // The place is known now: start listening, and take notes, before asking a
+                // geocoder what it is called. A note typed meanwhile is not refused for nothing.
                 _currentGeohash.value = geohash
-                _state.update {
-                    it.copy(geohash = geohash, locationName = locationName)
-                }
+                _state.update { it.copy(geohash = geohash) }
+                _state.update { it.copy(locationName = resolveLocationName(ResolveLocationName.Params(geohash, level))) }
             } catch (e: Exception) {
                 _state.update {
                     it.copy(
@@ -76,10 +83,18 @@ class LocationNotesViewModel(
         _state.update { it.copy(inputText = text) }
     }
 
-    fun onSendNote() {
+    /**
+     * Posts what has been typed, and answers whether it was taken. A caller clears its editor only
+     * when it was: the place is resolved in the background, so a note typed in the first moments
+     * would otherwise be dropped between the prompt and here.
+     */
+    fun onSendNote(): Boolean {
         val content = _state.value.inputText.trim()
-        val geohash = _currentGeohash.value ?: return
-        if (content.isEmpty()) return
+        if (content.isEmpty()) return false
+        val geohash = _currentGeohash.value ?: run {
+            _state.update { it.copy(errorMessage = NOT_READY_YET) }
+            return false
+        }
 
         viewModelScope.launch {
             _state.update { it.copy(isSending = true) }
@@ -102,5 +117,14 @@ class LocationNotesViewModel(
                 }
             }
         }
+        return true
     }
 }
+
+/** What a note refused before the place is known is answered with. */
+const val NOT_READY_YET = "still finding this place, try again"
+
+/** The level a geohash of this length names, for looking its place name up. */
+private fun geohashLevel(geohash: String): GeohashChannelLevel =
+    GeohashChannelLevel.entries.minByOrNull { kotlin.math.abs(it.precision - geohash.length) }
+        ?: GeohashChannelLevel.BUILDING

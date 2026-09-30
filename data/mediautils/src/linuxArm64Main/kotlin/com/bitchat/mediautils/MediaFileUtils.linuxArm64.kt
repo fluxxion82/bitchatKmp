@@ -1,5 +1,7 @@
 package com.bitchat.mediautils
 
+import com.bitchat.domain.base.logPath
+import com.bitchat.domain.base.logError
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.convert
@@ -54,7 +56,7 @@ actual suspend fun readFileBytes(path: String): ByteArray? = withContext(Dispatc
         fclose(file)
         bytes
     } catch (e: Exception) {
-        println("MediaFileUtils linuxArm64: Error reading file: ${e.message}")
+        println("MediaFileUtils linuxArm64: Error reading file: ${logError(e)}")
         null
     }
 }
@@ -95,10 +97,10 @@ actual suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: S
         }
         fclose(file)
 
-        println("MediaFileUtils linuxArm64: Saved file to $outputPath")
+        println("MediaFileUtils linuxArm64: Saved file to ${logPath(outputPath)}")
         outputPath
     } catch (e: Exception) {
-        println("MediaFileUtils linuxArm64: Error saving file: ${e.message}")
+        println("MediaFileUtils linuxArm64: Error saving file: ${logError(e)}")
         null
     }
 }
@@ -136,7 +138,7 @@ actual suspend fun compressImageForTransfer(path: String, maxSizeBytes: Int): Pr
         println("MediaFileUtils linuxArm64: Image too large (${bytes.size} bytes) and compression not supported")
         null
     } catch (e: Exception) {
-        println("MediaFileUtils linuxArm64: Error processing image: ${e.message}")
+        println("MediaFileUtils linuxArm64: Error processing image: ${logError(e)}")
         null
     }
 }

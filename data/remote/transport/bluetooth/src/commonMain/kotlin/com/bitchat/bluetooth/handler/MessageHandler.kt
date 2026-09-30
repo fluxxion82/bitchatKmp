@@ -1,5 +1,7 @@
 package com.bitchat.bluetooth.handler
 
+import com.bitchat.domain.base.logPath
+import com.bitchat.domain.base.logBody
 import com.bitchat.api.dto.mapper.toBitchatFilePacket
 import com.bitchat.bluetooth.facade.CryptoSigningFacade
 import com.bitchat.bluetooth.manager.PeerManager
@@ -170,7 +172,7 @@ class MessageHandler(
             return
         }
 
-        logInfo("MessageHandler", "📎 File: ${filePacket.fileName} (${filePacket.fileSize} bytes, ${filePacket.mimeType})")
+        logInfo("MessageHandler", "📎 File: ${logPath(filePacket.fileName)} (${filePacket.fileSize} bytes, ${filePacket.mimeType})")
 
         val isBroadcast = packet.recipientID == null || packet.recipientID.contentEquals(SpecialRecipients.BROADCAST)
         delegate?.onFileReceived(peerID, filePacket, isBroadcast = isBroadcast)
@@ -189,7 +191,7 @@ class MessageHandler(
                 NoisePayloadType.PRIVATE_MESSAGE -> {
                     val privateMessage = PrivateMessagePacket.decode(noisePayload.data)
                     if (privateMessage != null) {
-                        println("✅ Decrypted message from $peerID: ${privateMessage.content.take(50)}")
+                        println("✅ Decrypted message from $peerID: ${logBody(privateMessage.content, 50)}")
                         delegate?.onEncryptedMessageReceived(peerID, privateMessage.content)
                     } else {
                         println("❌ Failed to parse PrivateMessagePacket from $peerID")
@@ -209,7 +211,7 @@ class MessageHandler(
                 NoisePayloadType.FILE_TRANSFER -> {
                     val filePacket = noisePayload.data.toBitchatFilePacket()
                     if (filePacket != null) {
-                        logInfo("MessageHandler", "📎 Received encrypted file from $peerID: ${filePacket.fileName} (${filePacket.fileSize} bytes)")
+                        logInfo("MessageHandler", "📎 Received encrypted file from $peerID: ${logPath(filePacket.fileName)} (${filePacket.fileSize} bytes)")
                         delegate?.onFileReceived(peerID, filePacket, isBroadcast = false)
                     } else {
                         logError("MessageHandler", "❌ Failed to decode encrypted file from $peerID")

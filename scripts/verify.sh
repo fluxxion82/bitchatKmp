@@ -6,6 +6,7 @@
 #   scripts/verify.sh android    # :apps:droid:assembleDebug
 #   scripts/verify.sh ios        # :iosdi debug frameworks for iosSimulatorArm64 and iosArm64 (the only iOS targets)
 #   scripts/verify.sh embedded   # -Pembedded.enabled=true linuxArm64 link + compose resources
+#   scripts/verify.sh tui        # -Pembedded.enabled=true :presentation:tui JVM tests + linuxArm64 compile + TUI link
 #   scripts/verify.sh full       # all of the above (desktop packaging included)
 #
 # Env: WARN=1 adds --warning-mode all; GRADLE_ARGS adds arbitrary flags.
@@ -35,7 +36,8 @@ case "$MODE" in
   android)  gradle :apps:droid:assembleDebug ;;
   ios)      gradle :iosdi:linkDebugFrameworkIosSimulatorArm64 :iosdi:linkDebugFrameworkIosArm64 ;;
   embedded) gradle_embedded :apps:embedded:linkDebugExecutableLinuxArm64 ;;
-  full)     for m in desktop android ios embedded; do "$SELF" "$m"; done ;;
-  *) echo "usage: $0 [quick|desktop|android|ios|embedded|full]" >&2; exit 2 ;;
+  tui)      gradle_embedded :presentation:tui:jvmTest :presentation:tui:compileKotlinLinuxArm64 :apps:embedded-tui:linkDebugExecutableLinuxArm64 ;;
+  full)     for m in desktop android ios embedded tui; do "$SELF" "$m"; done ;;
+  *) echo "usage: $0 [quick|desktop|android|ios|embedded|tui|full]" >&2; exit 2 ;;
 esac
 echo "verify.sh $MODE: OK"

@@ -1,5 +1,8 @@
 package com.bitchat.mediautils
 
+import com.bitchat.domain.base.logStackTrace
+import com.bitchat.domain.base.logError
+import com.bitchat.domain.base.logPath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.awt.image.BufferedImage
@@ -34,12 +37,12 @@ actual suspend fun readFileBytes(path: String): ByteArray? = withContext(Dispatc
         if (file.exists() && file.isFile) {
             file.readBytes()
         } else {
-            println("MediaFileUtils Desktop: File does not exist or is not a file: $path")
+            println("MediaFileUtils Desktop: File does not exist or is not a file: ${logPath(path)}")
             null
         }
     } catch (e: Exception) {
-        println("MediaFileUtils Desktop: Error reading file: ${e.message}")
-        e.printStackTrace()
+        println("MediaFileUtils Desktop: Error reading file: ${logError(e)}")
+        logStackTrace(e)
         null
     }
 }
@@ -86,11 +89,11 @@ actual suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: S
         val outputFile = File(outDir, fileName)
         outputFile.writeBytes(bytes)
 
-        println("MediaFileUtils Desktop: Saved file to ${outputFile.absolutePath}")
+        println("MediaFileUtils Desktop: Saved file to ${logPath(outputFile.absolutePath)}")
         outputFile.absolutePath
     } catch (e: Exception) {
-        println("MediaFileUtils Desktop: Error saving file: ${e.message}")
-        e.printStackTrace()
+        println("MediaFileUtils Desktop: Error saving file: ${logError(e)}")
+        logStackTrace(e)
         null
     }
 }
@@ -103,7 +106,7 @@ actual suspend fun compressImageForTransfer(path: String, maxSizeBytes: Int): Pr
     try {
         val file = File(path)
         if (!file.exists()) {
-            println("MediaFileUtils Desktop: Image file not found: $path")
+            println("MediaFileUtils Desktop: Image file not found: ${logPath(path)}")
             return@withContext null
         }
 
@@ -214,8 +217,8 @@ actual suspend fun compressImageForTransfer(path: String, maxSizeBytes: Int): Pr
         println("MediaFileUtils Desktop: Could not compress image to under $maxSizeBytes bytes")
         null
     } catch (e: Exception) {
-        println("MediaFileUtils Desktop: Error compressing image: ${e.message}")
-        e.printStackTrace()
+        println("MediaFileUtils Desktop: Error compressing image: ${logError(e)}")
+        logStackTrace(e)
         null
     }
 }

@@ -89,7 +89,8 @@ fun SettingsContent(
                     torAvailability = state.torAvailability,
                     torRunning = state.torRunning,
                     torBootstrapPercent = state.torBootstrapPercent,
-                    torErrorMessage = state.torErrorMessage
+                    torErrorMessage = state.torErrorMessage,
+                    torBlocksNostr = state.torBlocksNostr
                 )
             }
 

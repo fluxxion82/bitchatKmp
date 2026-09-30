@@ -1,5 +1,7 @@
 package com.bitchat.design.util
 
+import com.bitchat.viewvo.theme.peerColorSeed
+import com.bitchat.viewvo.theme.peerColorHsv
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -253,54 +255,13 @@ fun formatMessageHeaderAnnotatedString(
     return builder.toAnnotatedString()
 }
 
-fun getPeerColor(message: BitchatMessage, isDark: Boolean): Color {
-    val seed = when {
-        message.senderPeerID?.startsWith("nostr:") == true || message.senderPeerID?.startsWith("nostr_") == true -> {
-            // For Nostr peers, use the full key if available, otherwise the peer ID
-            "nostr:${message.senderPeerID?.lowercase()}"
-        }
+fun getPeerColor(message: BitchatMessage, isDark: Boolean): Color =
+    colorForPeerSeed(peerColorSeed(message.senderPeerID, message.sender), isDark)
 
-        message.senderPeerID?.length == 16 -> {
-            // For ephemeral peer IDs, try to get stable Noise key, fallback to peer ID
-            "noise:${message.senderPeerID?.lowercase()}"
-        }
-
-        message.senderPeerID?.length == 64 -> {
-            // This is already a stable Noise key
-            "noise:${message.senderPeerID?.lowercase()}"
-        }
-
-        else -> {
-            // Fallback to sender name
-            message.sender.lowercase()
-        }
-    }
-
-    return colorForPeerSeed(seed, isDark)
-}
-
+/** The same colour the terminal UI gives this peer (see `peerColorHsv`). */
 fun colorForPeerSeed(seed: String, isDark: Boolean): Color {
-    // djb2 hash algorithm (matches iOS implementation)
-    var hash = 5381UL
-    for (byte in seed.encodeToByteArray()) {
-        hash = ((hash shl 5) + hash) + byte.toInt().and(0xFF).toULong()
-    }
-
-    var hue = (hash % 360UL).toDouble() / 360.0
-
-    val orange = 30.0 / 360.0
-    if (kotlin.math.abs(hue - orange) < 0.05) {
-        hue = (hue + 0.12) % 1.0
-    }
-
-    val saturation = if (isDark) 0.50 else 0.70
-    val brightness = if (isDark) 0.85 else 0.35
-
-    return Color.hsv(
-        hue = (hue * 360).toFloat(),
-        saturation = saturation.toFloat(),
-        value = brightness.toFloat()
-    )
+    val hsv = peerColorHsv(seed, isDark)
+    return Color.hsv(hue = hsv.hue, saturation = hsv.saturation, value = hsv.value)
 }
 
 fun splitSuffix(name: String): Pair<String, String> {

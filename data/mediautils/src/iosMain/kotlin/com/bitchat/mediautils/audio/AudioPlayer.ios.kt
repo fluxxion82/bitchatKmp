@@ -1,5 +1,6 @@
 package com.bitchat.mediautils.audio
 
+import com.bitchat.domain.base.logStackTrace
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -73,7 +74,7 @@ class IosAudioPlayer : AudioPlayer {
                 _durationMs.value = (duration * 1000).toLong()
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            logStackTrace(e)
             release()
         }
     }

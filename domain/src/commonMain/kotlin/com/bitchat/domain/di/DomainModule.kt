@@ -27,6 +27,9 @@ import com.bitchat.domain.chat.GetLoRaPeers
 import com.bitchat.domain.chat.GetMeshPeers
 import com.bitchat.domain.chat.JoinChannel
 import com.bitchat.domain.chat.LeaveChannel
+import com.bitchat.domain.chat.ChatNotices
+import com.bitchat.domain.chat.ClearSelectedPrivatePeer
+import com.bitchat.domain.chat.ResolveChatFallback
 import com.bitchat.domain.chat.MarkPrivateChatRead
 import com.bitchat.domain.chat.ObserveChannelMessages
 import com.bitchat.domain.chat.ObserveLatestUnreadPrivatePeer
@@ -115,6 +118,7 @@ val domainModule = module {
     single {
         ClearAllData(
             chatRepository = get(),
+            chatNotices = get(),
             userRepository = get(),
             appRepository = get(),
             locationRepository = get(),
@@ -168,7 +172,7 @@ val domainModule = module {
     single { JoinChannel(chatRepository = get(), chatEventBus = get()) }
     single { SetChannelPassword(chatRepository = get(), chatEventBus = get()) }
 
-    single { LeaveChannel(chatRepository = get(), chatEventBus = get()) }
+    single { LeaveChannel(chatRepository = get(), chatEventBus = get(), chatNotices = get()) }
     single { GetJoinedNamedChannels(chatRepository = get(), chatEventBus = get()) }
     single { GetGeohashParticipants(chatRepository = get()) }
     single { GetMeshPeers(chatRepository = get()) }
@@ -177,7 +181,7 @@ val domainModule = module {
     single { GetChannelKeyCommitment(chatRepository = get()) }
     single { GetAvailableNamedChannels(chatRepository = get()) }
     single { GetChannelMembers(chatRepository = get()) }
-    single { ClearMessages(chatRepository = get()) }
+    single { ClearMessages(chatRepository = get(), chatNotices = get()) }
 
     single { ObserveChannelMessages(chatRepository = get(), chatEventBus = get()) }
     single { SendMessage(chatRepository = get()) }
@@ -188,6 +192,10 @@ val domainModule = module {
     single { ObserveSelectedPrivatePeer(chatRepository = get(), chatEventBus = get()) }
     single { ObservePeerSessionStates(chatRepository = get()) }
     single { MarkPrivateChatRead(chatRepository = get()) }
+    single { ClearSelectedPrivatePeer(chatRepository = get()) }
+    // One store for the whole app: command feedback outlives the screen that produced it.
+    single { ChatNotices() }
+    single { ResolveChatFallback(userRepository = get(), chatRepository = get()) }
     single { SendPrivateMessage(chatRepository = get()) }
 
     single { GetAvailableChannels(locationRepository = get()) }

@@ -55,6 +55,7 @@ import kotlinx.cinterop.ptr
 import kotlinx.cinterop.sizeOf
 import kotlinx.cinterop.staticCFunction
 import kotlinx.cinterop.toKString
+import com.bitchat.domain.base.LogPolicy
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.runBlocking
 import org.koin.core.component.KoinComponent
@@ -72,6 +73,9 @@ import select.select_fd_set
 import select.select_fd_zero
 import kotlin.concurrent.AtomicReference
 
+/** This binary's identity; the name must match its base name in build.gradle.kts (and so its sidecar). */
+private val buildIdentity = BuildIdentity("bitchat-embedded")
+
 /**
  * App class for Koin dependency injection.
  */
@@ -85,7 +89,7 @@ class App : KoinComponent {
 
         startKoin {
             modules(
-                buildConfigModule,
+                buildConfigModule(buildIdentity, appId = "com.bitchat.embedded"),
                 domainModule,
                 commonLocal,
                 localModule,
@@ -115,9 +119,11 @@ class App : KoinComponent {
  */
 fun main(args: Array<String>) {
     if (args.any { it == "--version" || it == "-v" }) {
-        println(BuildIdentity.line)
+        println(buildIdentity.line)
         return
     }
+    // Message bodies stay out of the journal unless explicitly asked for.
+    LogPolicy.configure(getenv(LogPolicy.ENV_VAR)?.toKString())
     runApp()
 }
 
@@ -135,7 +141,7 @@ private fun runApp() = memScoped {
     ComposeUiMainDispatcher = mainDispatcher
 
     println("=== Bitchat Embedded ===")
-    println(BuildIdentity.line)
+    println(buildIdentity.line)
     println("Initializing application...")
 
     // Initialize Koin and app
@@ -160,10 +166,10 @@ private fun runApp() = memScoped {
         println("[Main] No touch device found (touch disabled)")
     }
 
-    // Read once at startup, and only for a debug binary: BuildIdentity.isDebug is checked first
+    // Read once at startup, and only for a debug binary: buildIdentity.isDebug is checked first
     // so no value of BITCHAT_INPUT_DEBUG can make a release binary log key events at all.
     val keyLogger = KeyLogger(
-        if (BuildIdentity.isDebug) {
+        if (buildIdentity.isDebug) {
             when (getenv("BITCHAT_INPUT_DEBUG")?.toKString()) {
                 "keys" -> KeyLogMode.KEYS
                 "classes" -> KeyLogMode.CLASSES

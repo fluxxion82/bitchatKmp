@@ -1,5 +1,6 @@
 package com.bitchat.mediautils
 
+import com.bitchat.domain.base.logBody
 import com.bitchat.mediautils.model.ResizeOptions
 import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -124,7 +125,7 @@ private fun resizeVideoInternal(inputUrl: NSURL, outputUrl: NSURL, targetWidth: 
         )
 
         if (!insertSuccess) {
-            println("Error inserting time range: ${error.value?.localizedDescription}")
+            println("Error inserting time range: ${logBody(error.value?.localizedDescription)}")
             return false
         }
     }
@@ -198,7 +199,7 @@ private fun resizeVideoInternal(inputUrl: NSURL, outputUrl: NSURL, targetWidth: 
             exportSession.exportAsynchronouslyWithCompletionHandler {
                 success = (exportSession.status.toInt() == 3)
                 if (!success) {
-                    println("Export failed: ${exportSession.error?.localizedDescription}")
+                    println("Export failed: ${logBody(exportSession.error?.localizedDescription)}")
                 } else {
                     val outputAsset = AVAsset.assetWithURL(outputUrl)
                     val outputTrack = outputAsset.tracksWithMediaType(AVMediaTypeVideo)[0] as AVAssetTrack

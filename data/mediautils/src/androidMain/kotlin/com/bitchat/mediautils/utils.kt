@@ -1,5 +1,6 @@
 package com.bitchat.mediautils
 
+import com.bitchat.domain.base.logStackTrace
 import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
@@ -15,7 +16,7 @@ fun getVideoThumbnail(context: Context, videoUri: Uri): Bitmap? {
         retriever.setDataSource(context, videoUri)
         retriever.getFrameAtTime(1000000)
     } catch (e: Exception) {
-        e.printStackTrace()
+        logStackTrace(e)
         null
     } finally {
         retriever.release()
@@ -68,7 +69,7 @@ fun copyContentToLocalFile(
 
         outputFile.absolutePath
     } catch (e: Exception) {
-        e.printStackTrace()
+        logStackTrace(e)
         null
     }
 }

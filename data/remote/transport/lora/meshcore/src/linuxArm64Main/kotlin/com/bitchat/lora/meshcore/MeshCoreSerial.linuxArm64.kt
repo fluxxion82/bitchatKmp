@@ -1,5 +1,6 @@
 package com.bitchat.lora.meshcore
 
+import com.bitchat.domain.base.logBytes
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.IntVar
 import kotlinx.cinterop.alloc
@@ -209,8 +210,7 @@ actual class MeshCoreSerial actual constructor() {
         return try {
             val framed = buildFrame(data)
 
-            val hexBytes = framed.joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
-            println("📤 MeshCoreSerial: Sending frame: $hexBytes")
+            println("📤 MeshCoreSerial: Sending frame: ${logBytes(framed) { framed.joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') } }}")
 
             val written = write(socketFd, framed.refTo(0), framed.size.convert())
             if (written < 0) {
@@ -274,9 +274,9 @@ actual class MeshCoreSerial actual constructor() {
                         break
                     }
 
-                    val hexBytes = (0 until bytesRead.toInt())
-                        .joinToString(" ") { (buffer[it].toInt() and 0xFF).toString(16).padStart(2, '0') }
-                    println("📥 MeshCoreSerial: Received ${bytesRead} bytes: $hexBytes")
+                    println("📥 MeshCoreSerial: Received ${bytesRead} bytes: ${logBytes(bytesRead.toInt()) {
+                        (0 until bytesRead.toInt()).joinToString(" ") { (buffer[it].toInt() and 0xFF).toString(16).padStart(2, '0') }
+                    }}")
 
                     // Process bytes through state machine
                     for (i in 0 until bytesRead.toInt()) {

@@ -2,6 +2,7 @@ package com.bitchat.local.tor
 
 import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.local.prefs.impl.LocalTorPreferences
+import com.bitchat.local.prefs.platformDefaultTorMode
 import com.russhwolf.settings.PropertiesSettings
 import com.russhwolf.settings.Settings
 import java.util.Properties
@@ -20,14 +21,21 @@ class RequestedTorIntentTest {
         LocalTorPreferences(settingsFactory = factory, defaultMode = default)
 
     @Test
-    fun `a fresh desktop install reads off`() {
-        // The trap: an absent key used to read ON, on a platform where Tor cannot start, leaving
-        // the switch unchecked and disabled with no code path able to express OFF.
+    fun `a fresh install on a platform that cannot proxy reads off`() {
+        // The trap: an absent key used to read ON, on platforms whose HTTP engine cannot route
+        // through a SOCKS proxy, so a fresh install had Nostr gated off by a choice nobody made.
         assertEquals(TorMode.OFF, prefs(Factory(), TorMode.OFF).getTorMode())
     }
 
     @Test
-    fun `a fresh mobile install still reads on`() {
+    fun `this platform default is off, since its engine cannot proxy`() {
+        // Desktop, Linux (embedded) and Apple all default to OFF for the same reason; only Android,
+        // whose engine does honour a proxy, still starts protected. This is the one asserted here.
+        assertEquals(TorMode.OFF, platformDefaultTorMode)
+    }
+
+    @Test
+    fun `a fresh Android install still reads on`() {
         assertEquals(TorMode.ON, prefs(Factory(), TorMode.ON).getTorMode())
     }
 

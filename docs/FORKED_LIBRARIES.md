@@ -16,6 +16,7 @@ This document is the single reference for what needs to be cloned, built, and pu
 | 4 | MeshCore | [fluxxion82/MeshCore](https://github.com/fluxxion82/MeshCore) | `orangepi-zero3-sx1276` | N/A (native binary) | Built on-device | `/usr/local/bin/meshcored` |
 | 5 | Meshtastic Firmware | [fluxxion82/firmware](https://github.com/fluxxion82/firmware) | `orangepi-rfm95w` | 2.7.x (native binary) | Built on-device | `/usr/bin/meshtasticd` |
 | 6 | gattlib | [fluxxion82/gattlib](https://github.com/fluxxion82/gattlib) | `bitchat-null-guards` | N/A (native static lib) | `scripts/build-native-linux-arm64.sh` step 5 | `native/gattlib/build/linux-arm64/install/lib/libgattlib.a` |
+| 7 | Mosaic | [fluxxion82/mosaic](https://github.com/fluxxion82/mosaic) | `embedded` | `0.19.0-embedded-SNAPSHOT` | `publishToMavenLocal -PVERSION_NAME=…` | `~/.m2` (mavenLocal); only `:presentation:tui` and `:apps:embedded-tui` |
 
 ## Build Configuration
 
@@ -318,6 +319,28 @@ git checkout f647d32657207143b8acc9aa5ab264a07661fcb7
 No upstream PR has been opened against `labapart/gattlib` yet.
 
 ---
+
+## 7. Mosaic
+
+**What:** Jake Wharton's Mosaic, a Compose-runtime terminal UI library. Used only by the terminal UI (`:presentation:tui`, `:apps:embedded-tui`), which exist only in the embedded profile. See `docs/plans/2026-09-26-mosaic-embedded-tui.md` (local, gitignored).
+
+**Why a fork:** Upstream already publishes linuxArm64. The fork adds what the Orange Pi's Linux console needs, on top of the owner's `wasm-js` branch (wasmJs target, `mosaic-browser`/`mosaic-html`, render-only-when-dirty frames, which matter on a Cortex-A53):
+- `ESC [ [ A`..`E` parsed as F1-F5 (the Linux console's encoding; upstream reads them as the letters A-E).
+- Cursor hidden even when the terminal never answers DECRQM for mode 25 (the Linux console doesn't), restored on close.
+- Frames written to the tty instead of stdout, so app `println` logging (and a systemd `StandardOutput=journal`) cannot corrupt the screen.
+
+**Repo & Branch:** [fluxxion82/mosaic](https://github.com/fluxxion82/mosaic) `embedded` (based on `wasm-js`). Unlike the other forks, the checkout lives beside the bitchat repo, at `workspace/multiplatform/mosaic-wasm`, not under `forks/`. The owner's sterlingdotcom site uses `wasm-js` as `0.19.0-wasm-SNAPSHOT`; the separate version keeps the two from overwriting each other in `~/.m2`.
+
+**Build & Publish:** needs JDK 23 (the default JDK 21 fails on the fork's `jvmJdk22` source set) and Zig 0.15 for the JVM JNI libraries.
+
+```bash
+cd ../../mosaic-wasm   # from bitchatKmp
+git switch embedded
+JAVA_HOME=/opt/homebrew/opt/openjdk@23/libexec/openjdk.jdk/Contents/Home \
+  ./gradlew publishToMavenLocal -PVERSION_NAME=0.19.0-embedded-SNAPSHOT --console=plain
+```
+
+**Consumed via:** catalog `mosaic` version in `gradle/libs.versions.toml` (`mosaic-runtime`, `mosaic-testing`). Mosaic depends on Google's `androidx.compose.runtime` (1.12.1) and `androidx.lifecycle` (2.11.0), not on the Compose fork, so it must never be linked into `:apps:embedded`.
 
 ## First-Time Setup Checklist
 

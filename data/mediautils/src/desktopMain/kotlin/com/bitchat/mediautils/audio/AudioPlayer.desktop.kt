@@ -1,5 +1,8 @@
 package com.bitchat.mediautils.audio
 
+import com.bitchat.domain.base.logStackTrace
+import com.bitchat.domain.base.logError
+import com.bitchat.domain.base.logPath
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -117,7 +120,7 @@ class DesktopAudioPlayer : AudioPlayer {
                 val file = File(path)
 
                 if (!file.exists()) {
-                    println("Audio file not found: $path")
+                    println("Audio file not found: ${logPath(path)}")
                     return@launch
                 }
 
@@ -132,13 +135,13 @@ class DesktopAudioPlayer : AudioPlayer {
                         convertToPcmIfNeeded(stream)
                     } catch (e: Exception) {
                         // Fallback to FFmpeg for any unsupported format
-                        println("Java Sound API failed, trying FFmpeg: ${e.message}")
+                        println("Java Sound API failed, trying FFmpeg: ${logError(e)}")
                         decodeWithFFmpeg(path)
                     }
                 }
 
                 if (audioInputStream == null) {
-                    println("Failed to decode audio file: $path")
+                    println("Failed to decode audio file: ${logPath(path)}")
                     return@launch
                 }
 
@@ -170,8 +173,8 @@ class DesktopAudioPlayer : AudioPlayer {
 
                 _durationMs.value = (newClip.microsecondLength / 1000)
             } catch (e: Exception) {
-                e.printStackTrace()
-                println("Error preparing audio: ${e.message}")
+                logStackTrace(e)
+                println("Error preparing audio: ${logError(e)}")
             }
         }
     }
@@ -208,7 +211,7 @@ class DesktopAudioPlayer : AudioPlayer {
             // Open input file
             formatContext = AVFormatContext(null)
             if (avformat_open_input(formatContext, path, null, null) < 0) {
-                println("Could not open input file: $path")
+                println("Could not open input file: ${logPath(path)}")
                 return null
             }
 
@@ -413,8 +416,8 @@ class DesktopAudioPlayer : AudioPlayer {
             )
 
         } catch (e: Exception) {
-            e.printStackTrace()
-            println("FFmpeg decode error: ${e.message}")
+            logStackTrace(e)
+            println("FFmpeg decode error: ${logError(e)}")
             return null
         } finally {
             // Cleanup

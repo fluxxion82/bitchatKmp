@@ -1,6 +1,7 @@
 package com.bitchat.client
 
 import com.bitchat.client.logger.NetworkLogger
+import com.bitchat.client.logger.networkLogLevel
 import com.bitchat.client.mapper.addClientTypeParameters
 import com.bitchat.client.mapper.toBaseUrl
 import com.bitchat.client.model.ClientType
@@ -16,6 +17,7 @@ import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import org.koin.mp.KoinPlatform.getKoin
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 const val CONNECT_TIMEOUT = 30
@@ -31,11 +33,11 @@ fun ktorWebSocketHttpClient(
     return HttpClient(engine) {
         install(Logging) {
             logger = NetworkLogger()
-            level = LogLevel.ALL
+            level = networkLogLevel()
         }
 
         install(WebSockets) {
-            pingInterval = 30.seconds  // Keep connections alive with 30-second pings
+            pingInterval = websocketPingInterval
         }
 
         install(HttpTimeout) {
@@ -78,11 +80,11 @@ fun ktorHttpClient(
         }
         install(Logging) {
             logger = NetworkLogger()
-            level = LogLevel.ALL
+            level = networkLogLevel()
         }
 
         install(WebSockets) {
-            pingInterval = 30.seconds  // Keep connections alive with 30-second pings
+            pingInterval = websocketPingInterval
         }
 
         defaultRequest {
@@ -128,3 +130,17 @@ expect fun getEngine(isDebug: Boolean, torManager: TorManager? = null): HttpClie
  * and Linux targets.
  */
 expect val httpEngineSupportsTorProxy: Boolean
+
+/**
+ * How often to ping an idle websocket, or null not to ping at all.
+ *
+ * Ktor's client fails a session whose ping goes unanswered, and on Ktor 3.3.3 the Curl engine
+ * reports an incoming PONG as `Frame.Ping` (`CurlWebSocketResponseBody.kt`, the `CURLWS_PONG`
+ * branch), so the reply to our own ping never counts as one: every relay session died of "Ping
+ * timeout" about thirty seconds in. Curl targets therefore send no pings. The relays send theirs,
+ * and an inbound Ping is answered correctly, so idle sessions are still kept alive.
+ *
+ * Fixed upstream in Ktor 3.4.0 (that branch sends `Frame.Pong`), so this can go when the catalog
+ * moves off 3.3.3; the `caInfo` workaround in `ktorHttpClient.linux.kt` goes at the same time.
+ */
+expect val websocketPingInterval: Duration?

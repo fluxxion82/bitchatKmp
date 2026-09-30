@@ -3,6 +3,7 @@ package com.bitchat.design.settings
 import bitchatkmp.presentation.design.generated.resources.Res
 import bitchatkmp.presentation.design.generated.resources.tor_not_available_in_this_build
 import bitchatkmp.presentation.design.generated.resources.tor_not_supported_on_this_platform
+import bitchatkmp.presentation.design.generated.resources.tor_on_but_unusable_on_this_platform
 import com.bitchat.domain.tor.model.TorAvailability
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -27,6 +28,23 @@ class TorUnavailableMessageTest {
         val message = torUnavailableMessage(TorAvailability.NO_PROXY_SUPPORT, torErrorMessage = null)
 
         assertEquals(Res.string.tor_not_supported_on_this_platform, message?.fallback)
+    }
+
+    @Test
+    fun `a platform that cannot proxy says something else again while tor is stored on`() {
+        // The dead end: nothing connects, and the only way out is to turn Tor off. Saying only
+        // "not supported" here reads as a contradiction against the "Tor is on" notice in chat.
+        val blocked = torUnavailableMessage(
+            TorAvailability.NO_PROXY_SUPPORT,
+            torErrorMessage = null,
+            torBlocksNostr = true,
+        )
+
+        assertEquals(Res.string.tor_on_but_unusable_on_this_platform, blocked?.fallback)
+        assertNotEquals(
+            torUnavailableMessage(TorAvailability.NO_PROXY_SUPPORT, torErrorMessage = null)?.fallback,
+            blocked?.fallback,
+        )
     }
 
     @Test

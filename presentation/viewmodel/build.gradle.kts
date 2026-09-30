@@ -42,8 +42,7 @@ kotlin {
 //                implementation(project(":logging:logger"))
                 implementation(project(":presentation:viewvo"))
                 implementation(libs.koin.core)
-                implementation(libs.koin.compose)
-                implementation(libs.koin.composeVM)
+                implementation(libs.koin.coreVM)
                 implementation(libs.lifecycle.viewmodel)
                 implementation(libs.kotlinx.coroutines.core)
             }

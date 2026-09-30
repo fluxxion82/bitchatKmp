@@ -6,6 +6,7 @@ import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.app.repository.AppRepository
 import com.bitchat.domain.base.Usecase
 import com.bitchat.domain.chat.eventbus.ChatEventBus
+import com.bitchat.domain.chat.isSameConversation
 import com.bitchat.domain.chat.model.ChatEvent
 import com.bitchat.domain.chat.repository.ChatRepository
 import com.bitchat.domain.connectivity.repository.ConnectivityRepository
@@ -58,8 +59,7 @@ class SaveUserStateAction(
             }
 
             is UserStateAction.Chat -> {
-                val currentChannel = (repository.getUserState() as? UserState.Active)
-                    ?.activeState?.let { it as? ActiveState.Chat }?.channel
+                val currentChat = currentChat()
 
                 when (param.channel) {
                     is Channel.Location -> {
@@ -88,14 +88,13 @@ class SaveUserStateAction(
                 UserState.Active(
                     ActiveState.Chat(
                         channel = param.channel,
-                        previousChannel = currentChannel
+                        previousChannel = previousFor(param.channel, currentChat)
                     )
                 )
             }
 
             is UserStateAction.MeshDM -> {
-                val currentChannel = (repository.getUserState() as? UserState.Active)
-                    ?.activeState?.let { it as? ActiveState.Chat }?.channel
+                val currentChat = currentChat()
 
                 val dmChannel = Channel.MeshDM(
                     peerID = param.peerID,
@@ -106,14 +105,13 @@ class SaveUserStateAction(
                 UserState.Active(
                     ActiveState.Chat(
                         channel = dmChannel,
-                        previousChannel = currentChannel
+                        previousChannel = previousFor(dmChannel, currentChat)
                     )
                 )
             }
 
             is UserStateAction.NostrDM -> {
-                val currentChannel = (repository.getUserState() as? UserState.Active)
-                    ?.activeState?.let { it as? ActiveState.Chat }?.channel
+                val currentChat = currentChat()
 
                 val peerID = param.peerID ?: param.fullPubkey?.let { "nostr_${it.take(16)}" }
                 ?: error("NostrDM action must provide either peerID or fullPubkey")
@@ -146,7 +144,7 @@ class SaveUserStateAction(
                 UserState.Active(
                     ActiveState.Chat(
                         channel = dmChannel,
-                        previousChannel = currentChannel
+                        previousChannel = previousFor(dmChannel, currentChat)
                     )
                 )
             }
@@ -159,6 +157,17 @@ class SaveUserStateAction(
             chatEventBus.update(ChatEvent.ChannelChanged)
         }
     }
+
+    private suspend fun currentChat(): ActiveState.Chat? =
+        (repository.getUserState() as? UserState.Active)?.activeState as? ActiveState.Chat
+
+    /**
+     * The chat to go back to from [next]: the one active now, unless [next] is that chat (joining
+     * a channel already open, `/j test` twice), which keeps the one before it; a chat is never its
+     * own previous one, or leaving it would return to it.
+     */
+    private fun previousFor(next: Channel, current: ActiveState.Chat?): Channel? =
+        if (current != null && current.channel.isSameConversation(next)) current.previousChannel else current?.channel
 
     private suspend fun getBlockingState(): UserState? {
         return when {

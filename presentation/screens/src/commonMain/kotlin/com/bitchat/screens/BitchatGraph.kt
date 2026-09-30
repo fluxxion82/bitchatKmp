@@ -376,7 +376,7 @@ fun NavGraphBuilder.homeGraph(
                 viewModel = viewModel,
                 dmViewModel = dmViewModel,
                 selectedPrivatePeer = headerState.selectedPrivatePeer,
-                peerNicknames = headerState.peerNicknames
+                selectedChannel = headerState.selectedChannel,
             )
         }
 
@@ -394,7 +394,8 @@ fun NavGraphBuilder.homeGraph(
         }
 
         bottomSheet<Routes.LocationNotes> {
-            val viewModel: LocationNotesViewModel = koinViewModel()
+            // No geohash: these are the notes of the building the device is standing in.
+            val viewModel: LocationNotesViewModel = koinViewModel { parametersOf(null) }
             LocationNotesScreen(mainViewModel = mainViewModel, viewModel = viewModel)
         }
     }

@@ -42,6 +42,12 @@ fun SettingsTogglesCard(
     torRunning: Boolean,
     torBootstrapPercent: Int,
     torErrorMessage: String? = null,
+    /**
+     * The stored choice is ON on a build that cannot proxy (`SettingsState.torBlocksNostr`). The
+     * switch must show that and stay usable, or the user is stuck: Nostr is gated off by a setting
+     * they cannot reach.
+     */
+    torBlocksNostr: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -93,12 +99,16 @@ fun SettingsTogglesCard(
                     icon = Icons.Filled.Security,
                     title = "Tor Network",
                     subtitle = stringResource(Res.string.about_tor_route),
-                    checked = torNetworkEnabled,
+                    // Shown on while the stored choice is on, even where Tor cannot run: a switch
+                    // that renders off while the gate is blocking every relay tells the user the
+                    // opposite of what is happening to them.
+                    checked = torNetworkEnabled || torBlocksNostr,
                     onCheckedChange = onTorNetworkToggled,
                     // Turning it off must stay possible even where Tor cannot run: a host with no
                     // native library previously showed this switch on and disabled, with nothing
-                    // in the app able to turn it back off.
-                    enabled = torAvailability.isAvailable || torNetworkEnabled,
+                    // in the app able to turn it back off. It goes dim once off, so nothing can
+                    // turn it back on where it would only block.
+                    enabled = torAvailability.isAvailable || torNetworkEnabled || torBlocksNostr,
                     statusIndicator = if (torNetworkEnabled) {
                         {
                             val statusColor = when {
@@ -117,7 +127,7 @@ fun SettingsTogglesCard(
             }
         }
 
-        val unavailable = torUnavailableMessage(torAvailability, torErrorMessage)
+        val unavailable = torUnavailableMessage(torAvailability, torErrorMessage, torBlocksNostr)
         if (unavailable != null) {
             // Prefer the concrete reason (which library is missing, where it was looked for and how
             // to build it) over the generic string - the generic one leaves the user with nothing

@@ -16,6 +16,7 @@ import com.bitchat.desktop.di.buildConfigModule
 import com.bitchat.desktop.di.LoRaProtocolSelector
 import com.bitchat.desktop.location.NativeLocationLoader
 import com.bitchat.domain.app.model.AppTheme
+import com.bitchat.domain.base.LogPolicy
 import com.bitchat.domain.base.invoke
 import com.bitchat.domain.di.domainModule
 import com.bitchat.domain.initialization.InitializeApplication
@@ -38,6 +39,8 @@ import org.koin.core.context.startKoin
 
 @OptIn(ExperimentalFoundationApi::class, InternalCoroutinesApi::class)
 fun main() {
+    // Message bodies stay out of the logs unless explicitly asked for.
+    LogPolicy.configure(System.getenv(LogPolicy.ENV_VAR))
     application {
         val app = remember { App() }
         kotlinx.coroutines.runBlocking {

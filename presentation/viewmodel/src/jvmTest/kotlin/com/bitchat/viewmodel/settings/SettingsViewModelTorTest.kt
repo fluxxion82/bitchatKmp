@@ -321,5 +321,38 @@ class SettingsViewModelTorTest : BaseViewModelTest() {
 
         assertFalse(viewModel.state.value.torNetworkEnabled)
         assertEquals(TorMode.ON, viewModel.state.value.requestedTorMode, "the intent still stands")
+        assertTrue(
+            viewModel.state.value.torBlocksNostr,
+            "and it is blocking every relay, which is what the screen has to be able to say",
+        )
+    }
+
+    @Test
+    fun `a stored ON where the engine cannot proxy can still be switched off`() = runTest {
+        // The dead end the owner hit: Nostr gated off by a setting that no screen would let them
+        // change, because the only flag the UI looked at was already false.
+        val viewModel = buildViewModel(
+            torAvailability = TorAvailability.NO_PROXY_SUPPORT,
+            torMode = TorMode.ON,
+            torStatus = TorStatus(),
+        )
+        instantExecutorRule.scheduler.runCurrent()
+
+        viewModel.onTorNetworkToggled(false)
+        instantExecutorRule.scheduler.runCurrent()
+
+        coVerify(exactly = 1) { disableTor(Unit) }
+    }
+
+    @Test
+    fun `an off tor on a build that cannot proxy blocks nothing`() = runTest {
+        val viewModel = buildViewModel(
+            torAvailability = TorAvailability.NO_PROXY_SUPPORT,
+            torMode = TorMode.OFF,
+            torStatus = TorStatus(),
+        )
+        instantExecutorRule.scheduler.runCurrent()
+
+        assertFalse(viewModel.state.value.torBlocksNostr)
     }
 }

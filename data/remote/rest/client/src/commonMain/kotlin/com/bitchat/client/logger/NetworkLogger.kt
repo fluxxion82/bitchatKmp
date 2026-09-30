@@ -1,6 +1,14 @@
 package com.bitchat.client.logger
 
+import com.bitchat.domain.base.LogPolicy
 import io.ktor.client.plugins.logging.*
+
+/**
+ * The Ktor logging level: request and response lines and headers, and bodies (relay lists, the
+ * geocoder's answer for the user's position) only when body logging is opted in. At HEADERS Ktor
+ * never formats a body, so none can reach the log, whatever it contains.
+ */
+fun networkLogLevel(): LogLevel = if (LogPolicy.messageBodies) LogLevel.ALL else LogLevel.HEADERS
 
 class NetworkLogger : Logger {
     private val filteredEndpoints = setOf<String>()

@@ -1,5 +1,7 @@
 package com.bitchat.lora.bitchat.radio
 
+import com.bitchat.domain.base.logBytes
+import com.bitchat.domain.base.LogPolicy
 import com.bitchat.lora.bitchat.logging.LoRaLogger
 import com.bitchat.lora.bitchat.logging.LoRaTags
 import com.bitchat.lora.radio.LoRaConfig
@@ -429,15 +431,16 @@ actual class LoRaRadio(
                 return
             }
 
-            // Log with hex dump of first 32 bytes to see actual content
-            val hexDump = data.take(32).joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
-            val asciiDump = data.take(32).map { b ->
-                val c = b.toInt().toChar()
-                if (c.isLetterOrDigit() || c == '_' || c == ' ') c else '.'
-            }.joinToString("")
-
+            // The first 32 bytes are the message itself: dumped only with body logging opted in.
+            val hexDump = logBytes(data) { data.take(32).joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') } }
             LoRaLogger.i(LoRaTags.RADIO, "RX ${data.size}B RSSI=$rssi SNR=$snr | $hexDump")
-            LoRaLogger.i(LoRaTags.RADIO, "ASCII: $asciiDump")
+            if (LogPolicy.messageBodies) {
+                val asciiDump = data.take(32).map { b ->
+                    val c = b.toInt().toChar()
+                    if (c.isLetterOrDigit() || c == '_' || c == ' ') c else '.'
+                }.joinToString("")
+                LoRaLogger.i(LoRaTags.RADIO, "ASCII: $asciiDump")
+            }
 
             emitEvent(LoRaEvent.PacketReceived(data, rssi, snr))
         }

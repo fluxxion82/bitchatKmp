@@ -2,6 +2,7 @@
 
 package com.bitchat.noise
 
+import com.bitchat.domain.base.logBytes
 import com.southernstorm.noise.protocol.CipherState
 import com.southernstorm.noise.protocol.HandshakeState
 import java.util.logging.Logger
@@ -193,10 +194,10 @@ actual class NoiseSession actual constructor(
 
             // Log received message hex dump for debugging interop
             logger.info("📥 JVM received handshake message (${message.size} bytes):")
-            logger.info("   Hex: ${message.toHexString()}")
-            logger.info("   e (32): ${message.take(32).toByteArray().toHexString()}")
+            logger.info("   Hex: ${logBytes(message) { message.toHexString() }}")
+            logger.info("   e (32): ${logBytes(minOf(32, message.size)) { message.take(32).toByteArray().toHexString() }}")
             if (message.size > 32) {
-                logger.info("   encrypted_s (${message.size - 32}): ${message.drop(32).toByteArray().toHexString()}")
+                logger.info("   encrypted_s (${message.size - 32}): ${logBytes(message.size - 32) { message.drop(32).toByteArray().toHexString() }}")
             }
 
             // Read the incoming message - the library will handle validation
@@ -218,9 +219,9 @@ actual class NoiseSession actual constructor(
 
                     // Log hex dump for debugging interop
                     logger.info("📤 JVM sending handshake message 2 (${response.size} bytes):")
-                    logger.info("   Hex: ${response.toHexString()}")
-                    logger.info("   e (32): ${response.take(32).toByteArray().toHexString()}")
-                    logger.info("   encrypted_s (${response.size - 32}): ${response.drop(32).toByteArray().toHexString()}")
+                    logger.info("   Hex: ${logBytes(response) { response.toHexString() }}")
+                    logger.info("   e (32): ${logBytes(minOf(32, response.size)) { response.take(32).toByteArray().toHexString() }}")
+                    logger.info("   encrypted_s (${response.size - 32}): ${logBytes(response.size - 32) { response.drop(32).toByteArray().toHexString() }}")
 
                     logger.fine("Generated handshake response: ${response.size} bytes, action still: ${handshakeStateLocal.getAction()} currentPattern: $currentPattern")
 

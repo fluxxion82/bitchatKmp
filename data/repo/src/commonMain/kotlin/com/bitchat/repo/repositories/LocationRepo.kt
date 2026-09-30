@@ -1,5 +1,6 @@
 package com.bitchat.repo.repositories
 
+import com.bitchat.repo.utils.RepeatedLogLimiter
 import com.bitchat.domain.base.CoroutineScopeFacade
 import com.bitchat.domain.base.CoroutinesContextFacade
 import com.bitchat.domain.location.eventbus.LocationEventBus
@@ -51,6 +52,9 @@ class LocationRepo(
     private val locationNames = mutableMapOf<GeohashChannelLevel, String>()
     private val locationNamesLock = SynchronizedObject()
     private var lastFix: GeoPoint? = null
+
+    /** The five-second poll's "no location fix" line, let through once per reason and ten minutes. */
+    private val noFixLog = RepeatedLogLimiter(intervalMillis = 10 * 60_000L)
     private var lastResolvedGeohash: String? = null
     private val samplingLock = SynchronizedObject()
     private val samplingSubscriptions = mutableMapOf<String, String>()
@@ -173,9 +177,10 @@ class LocationRepo(
              * turns this into a finished, explained state.
              *
              * No stack trace: the sheet polls every five seconds, so printing one produced a trace
-             * every five seconds for as long as there was no fix.
+             * every five seconds for as long as there was no fix. For the same reason the line
+             * itself is rate-limited: once, then on a change of reason or every ten minutes.
              */
-            logNostrDebug("LocationRepo", "no location fix: ${e.reason.message}")
+            noFixLog.next("no location fix: ${e.reason.message}")?.let { logNostrDebug("LocationRepo", it) }
             throw e
         } catch (e: Exception) {
             e.printStackTrace()

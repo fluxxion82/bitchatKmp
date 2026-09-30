@@ -37,6 +37,8 @@ kotlin {
             dependencies {
                 implementation(libs.kotlinx.coroutines.core)
                 implementation(compose.runtime)
+                // LogPolicy / logPath: media paths stay out of logs unless opted in
+                implementation(project(":domain"))
             }
         }
         val commonTest by getting {

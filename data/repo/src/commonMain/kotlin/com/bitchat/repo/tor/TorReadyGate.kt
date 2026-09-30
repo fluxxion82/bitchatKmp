@@ -94,3 +94,41 @@ suspend fun awaitTorReady(
         }
     }
 }
+
+/**
+ * Whether a request may go out at all, which is not the same question as [awaitTorReady]'s.
+ *
+ * Asking for Tor is asking for the connection itself to be hidden, not only its contents. A relay
+ * dialled directly learns the IP address together with the identity pubkey the gift-wrap
+ * subscriptions carry, the geohash the user is interested in, and on publish the nickname and the
+ * message. Encryption protects the bodies and none of that.
+ *
+ * So on a build whose HTTP engine cannot be given a SOCKS proxy ([engineSupportsTorProxy] false:
+ * the Curl and Darwin engines, so linuxArm64 and iOS) a user who asked for Tor is refused, and
+ * gets no Nostr at all. That is a dead end, and the app has to say so where they will see it:
+ * turning Tor off is the only way out, and doing so is their consent to connect in the clear.
+ * Nothing here may downgrade for them.
+ *
+ * Where the engine can proxy, the rule is the usual one: Tor asked for and not ready blocks.
+ *
+ * @param torRequested whether the user's stored Tor mode is on.
+ * @return true when the caller may proceed.
+ */
+suspend fun torGateAllowsTraffic(
+    torManager: TorManager?,
+    torRequested: Boolean,
+    timeout: Duration = 30.seconds,
+    engineSupportsTorProxy: Boolean = httpEngineSupportsTorProxy,
+    log: (String) -> Unit = ::println,
+): Boolean {
+    if (!engineSupportsTorProxy) {
+        if (torRequested) {
+            log("🔒 Tor is on and this build cannot route through a SOCKS proxy - not connecting")
+        }
+        return !torRequested
+    }
+    if (awaitTorReady(torManager, timeout, engineSupportsTorProxy, log)) return true
+    if (!torRequested) return true
+    log("🔒 Tor is requested but not ready - not attempting this request")
+    return false
+}

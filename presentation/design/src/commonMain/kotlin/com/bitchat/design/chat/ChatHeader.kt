@@ -91,6 +91,9 @@ import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.location.model.PermissionState
 import com.bitchat.domain.location.model.formatTitle
 import com.bitchat.domain.user.model.FavoriteRelationship
+import com.bitchat.viewvo.theme.GEOHASH_COLOR
+import com.bitchat.viewvo.theme.LORA_COLOR
+import com.bitchat.viewvo.theme.MESH_COLOR
 import org.jetbrains.compose.resources.stringResource
 
 @Composable
@@ -352,9 +355,9 @@ fun PeerCounter(
     modifier: Modifier = Modifier
 ) {
     // Color constants
-    val meshBlue = Color(0xFF007AFF)
-    val green = Color(0xFF00C851)
-    val loraOrange = Color(0xFFFF9500)
+    val meshBlue = Color(MESH_COLOR)
+    val green = Color(GEOHASH_COLOR)
+    val loraOrange = Color(LORA_COLOR)
 
     val (peopleCount, tone) = peerCountFor(
         selectedLocationChannel = selectedLocationChannel,
@@ -849,22 +852,22 @@ private fun LocationChannelsButton(
 ) {
     val (badgeText, badgeColor) = when (selectedChannel) {
         is Channel.Mesh -> {
-            "#mesh" to Color(0xFF007AFF)
+            "#mesh" to Color(MESH_COLOR)
         }
 
         is Channel.Meshtastic -> {
             val nodeLabel = selectedChannel.nodeNum?.toString(16)?.padStart(8, '0') ?: "mesh"
-            "#meshtastic:$nodeLabel" to Color(0xFFFF9500)
+            "#meshtastic:$nodeLabel" to Color(LORA_COLOR)
         }
 
         is Channel.Location -> {
             val geohash = selectedChannel.geohash
-            "#$geohash" to Color(0xFF00C851)
+            "#$geohash" to Color(GEOHASH_COLOR)
         }
 
         is Channel.NostrDM,
         is Channel.MeshDM -> {
-            "DM" to Color(0xFFFF9500)
+            "DM" to Color(LORA_COLOR)
         }
 
         is Channel.NamedChannel -> {

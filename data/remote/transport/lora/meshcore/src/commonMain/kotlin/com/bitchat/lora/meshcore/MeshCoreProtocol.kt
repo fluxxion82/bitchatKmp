@@ -1,5 +1,7 @@
 package com.bitchat.lora.meshcore
 
+import com.bitchat.domain.base.logBytes
+import com.bitchat.domain.base.logBody
 import com.bitchat.lora.LoRaPeer
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.radio.LoRaConfig
@@ -362,7 +364,7 @@ class MeshCoreProtocol(
                 println("🔋 Battery: ${response.batteryMv}mV")
             }
             is MeshCoreResponse.ChannelInfo -> {
-                println("Channel ${response.channelIdx}: '${response.name}' secret=${response.secret.toHexString()}")
+                println("Channel ${response.channelIdx}: '${response.name}' secret=${logBytes(response.secret) { response.secret.toHexString() }}")
             }
 
             // Push notifications
@@ -390,8 +392,8 @@ class MeshCoreProtocol(
                 handleContact(response.contact)
             }
             is MeshCoreResponse.Unknown -> {
-                val hex = response.data.toHexString()
-                println("❓ Unknown response: code=0x${(response.code.toInt() and 0xFF).toString(16)}, data=$hex")
+                // A truncated known response lands here too (a ChannelInfo carries a channel secret).
+                println("❓ Unknown response: code=0x${(response.code.toInt() and 0xFF).toString(16)}, data=${logBytes(response.data) { response.data.toHexString() }}")
             }
         }
     }
@@ -488,7 +490,7 @@ class MeshCoreProtocol(
         val senderName = senderContact?.name ?: "Mesh-${prefixHex.takeLast(4)}"
 
         val snrInfo = message.snr?.let { " SNR=${it}dB" } ?: ""
-        println("💬 DM from $senderName: ${message.text}$snrInfo")
+        println("💬 DM from $senderName: ${logBody(message.text)}$snrInfo")
 
         // Format as "nickname:content" for compatibility with ChatRepo
         val formattedMessage = "$senderName:${message.text}"
@@ -507,7 +509,7 @@ class MeshCoreProtocol(
 
     private suspend fun handleChannelMessage(message: MeshCoreResponse.ChannelMessage) {
         val snrInfo = message.snr?.let { " SNR=${it}dB" } ?: ""
-        println("📢 Channel[${message.channelIdx}]: ${message.text}$snrInfo")
+        println("📢 Channel[${message.channelIdx}]: ${logBody(message.text)}$snrInfo")
 
         // Channel messages don't have sender identity in v2, format without name
         val formattedMessage = "channel:${message.text}"

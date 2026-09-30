@@ -1,5 +1,6 @@
 package com.bitchat.mediautils.audio
 
+import com.bitchat.domain.base.logStackTrace
 import android.media.MediaPlayer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -75,7 +76,7 @@ class AndroidAudioPlayer : AudioPlayer {
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            logStackTrace(e)
             release()
         }
     }

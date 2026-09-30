@@ -1,5 +1,6 @@
 package com.bitchat.client.websocket
 
+import com.bitchat.domain.base.logBody
 import io.ktor.client.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
@@ -108,7 +109,7 @@ internal class KtorWebSocketClient(
 
                                 listener.onMessage(url, messageText)
 
-                                println("✅ KtorWebSocketClient: Message handler completed for $url, Message: $messageText")
+                                println("✅ KtorWebSocketClient: Message handler completed for $url, Message: ${logBody(messageText)}")
                             } catch (e: Exception) {
                                 // Continue processing even if message handler fails
                                 println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

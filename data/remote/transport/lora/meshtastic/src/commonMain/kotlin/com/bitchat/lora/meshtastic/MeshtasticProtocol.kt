@@ -1,5 +1,7 @@
 package com.bitchat.lora.meshtastic
 
+import com.bitchat.domain.base.logBytes
+import com.bitchat.domain.base.logBody
 import com.bitchat.lora.LoRaPeer
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.meshtastic.proto.AdminMessage
@@ -313,7 +315,7 @@ class MeshtasticProtocol(
 
         val destStr = if (toNode == BROADCAST_ADDR) "broadcast" else toNode.toString(16).padStart(8, '0')
         println("📡 TX: id=${packetId.toString(16).padStart(8, '0')} from=${myNodeNum.toString(16).padStart(8, '0')} to=$destStr ch=$channelIndex len=${text.size}")
-        println("📤 Sending text message: \"${text.decodeToString().take(50)}${if (text.size > 50) "..." else ""}\"")
+        println("📤 Sending text message: ${logBody(text.decodeToString(), 50)}")
 
         return if (serial.send(encoded)) {
             emitEvent(MeshtasticEvent.MessageSent(packetId))
@@ -592,9 +594,8 @@ class MeshtasticProtocol(
                 // Ignore log_record - too verbose
             }
         } catch (e: Exception) {
-            val hexBytes = data.take(50).joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
             println("❌ Failed to decode FromRadio: ${e.message}")
-            println("   Raw bytes (first 50): $hexBytes")
+            println("   Raw bytes (first 50): ${logBytes(data) { data.take(50).joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') } }}")
         }
     }
 
@@ -652,7 +653,7 @@ class MeshtasticProtocol(
                     ?.nickname
                     ?: "Mesh-${senderDeviceId.takeLast(4)}"
 
-                println("💬 Text message from $senderNickname: $rawText")
+                println("💬 Text message from $senderNickname: ${logBody(rawText)}")
 
                 // Format as "nickname:content" for compatibility with ChatRepo
                 val formattedMessage = "$senderNickname:$rawText"
@@ -688,8 +689,7 @@ class MeshtasticProtocol(
                 // The routing payload contains ErrorReason if it's a NAK
                 val routingBytes = decoded.payload.toByteArray()
                 if (routingBytes.isNotEmpty()) {
-                    val hexPayload = routingBytes.joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
-                    println("📬 ROUTING payload: $hexPayload")
+                    println("📬 ROUTING payload: ${logBytes(routingBytes) { routingBytes.joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') } }}")
                 }
             }
 
