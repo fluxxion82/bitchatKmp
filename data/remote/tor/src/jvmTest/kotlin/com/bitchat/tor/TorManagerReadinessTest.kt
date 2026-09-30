@@ -186,6 +186,30 @@ class TorManagerReadinessTest {
     }
 
     @Test
+    fun `a failed destination stream does not mark the running proxy as failed`() = runTest {
+        val arti = FakeArti()
+        val manager = TorManager(tempDir(), arti)
+        manager.start()
+
+        // A relay or a circuit can reject one stream while the SOCKS listener and Tor client are
+        // still healthy. Treating this as a lifecycle failure made the embedded settings screen
+        // claim Tor was broken even though another SOCKS request succeeded through Tor.
+        arti.registeredCallback!!.onLogLine(
+            "ERROR: SOCKS connection error: tor: remote stream error: Protocol error while launching a data stream"
+        )
+
+        val status = manager.statusFlow.value
+        assertEquals(TorState.RUNNING, status.state)
+        assertTrue(status.running)
+        assertTrue(manager.isProxyReady())
+        assertNull(status.errorMessage)
+        assertEquals(
+            "ERROR: SOCKS connection error: tor: remote stream error: Protocol error while launching a data stream",
+            status.lastLogLine
+        )
+    }
+
+    @Test
     fun `a host without the native library still reports tor unavailable`() = runTest {
         val arti = FakeArti(isAvailable = false)
         val manager = TorManager(tempDir(), arti)

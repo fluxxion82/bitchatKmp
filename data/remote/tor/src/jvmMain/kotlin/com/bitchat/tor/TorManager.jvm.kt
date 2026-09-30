@@ -331,7 +331,7 @@ actual class TorManager internal constructor(
                 }
             }
 
-            line.contains("ERROR", ignoreCase = true) -> {
+            isFatalTorLifecycleError(line) -> {
                 _statusFlow.update { it.copy(state = TorState.ERROR, errorMessage = line, running = false, routeGeneration = 0) }
             }
         }

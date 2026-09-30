@@ -175,7 +175,7 @@ actual class TorManager actual constructor(
                 }
             }
 
-            line.contains("ERROR", ignoreCase = true) -> {
+            isFatalTorLifecycleError(line) -> {
                 NSLog("❌ $TAG: Tor ERROR: $line")
                 _statusFlow.update { it.copy(state = TorState.ERROR, errorMessage = line) }
             }
