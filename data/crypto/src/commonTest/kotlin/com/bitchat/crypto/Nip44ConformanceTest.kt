@@ -15,7 +15,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
- * Where encryptNIP44/decryptNIP44 stand against NIP-44 v2. Despite the names they implement
+ * Where sealBitchatEnvelope/openBitchatEnvelope stand against NIP-44 v2. Despite the names they implement
  * BitChat's private envelope, the same scheme as upstream bitchat iOS and Android, not NIP-44.
  * See docs/reviews/2026-10-01-nip44-conformance.md.
  *
@@ -58,7 +58,7 @@ class Nip44ConformanceTest {
     fun legacyEnvelope_isV2PrefixedBase64UrlOfNonceCiphertextTag() {
         val plaintext = "hello nip44"
 
-        val payload = Cryptography.encryptNIP44(
+        val payload = Cryptography.sealBitchatEnvelope(
             plaintext = plaintext,
             recipientPublicKeyHex = Cryptography.derivePublicKey(SEC2),
             senderPrivateKeyHex = SEC1
@@ -81,7 +81,7 @@ class Nip44ConformanceTest {
         val prk = Cryptography.hmacSha256(ByteArray(0), compressedSharedPoint)
         val okm = Cryptography.hmacSha256(prk, "nip44-v2".encodeToByteArray() + byteArrayOf(0x01))
 
-        val derived = Cryptography.deriveNIP44Key(compressedSharedPoint)
+        val derived = Cryptography.deriveBitchatEnvelopeKey(compressedSharedPoint)
 
         assertEquals(okm.hex(), derived.hex())
         assertEquals("094ae949687633b63ca2c51dc2c0b2ec2ece8920b7e2e51d29fee568cca28c68", derived.hex())
@@ -96,8 +96,8 @@ class Nip44ConformanceTest {
         )
 
         for ((sharedX, conversationKey) in vectors) {
-            val ours = Cryptography.deriveNIP44Key(byteArrayOf(0x02) + sharedX.unhex())
-            val oursOverX = Cryptography.deriveNIP44Key(sharedX.unhex())
+            val ours = Cryptography.deriveBitchatEnvelopeKey(byteArrayOf(0x02) + sharedX.unhex())
+            val oursOverX = Cryptography.deriveBitchatEnvelopeKey(sharedX.unhex())
             val spec = Cryptography.hmacSha256("nip44-v2".encodeToByteArray(), sharedX.unhex())
 
             assertNotEquals(conversationKey, ours.hex())
@@ -110,7 +110,7 @@ class Nip44ConformanceTest {
     fun nip44Deviation_officialPayloadsAreRejected() {
         for (vector in OFFICIAL_ENCRYPT_DECRYPT) {
             assertFailsWith<Exception> {
-                Cryptography.decryptNIP44(
+                Cryptography.openBitchatEnvelope(
                     ciphertext = vector.payload,
                     senderPublicKeyHex = Cryptography.derivePublicKey(vector.sec1),
                     recipientPrivateKeyHex = vector.sec2
@@ -119,13 +119,13 @@ class Nip44ConformanceTest {
         }
     }
 
-    // EXPECTED TO FAIL until a NIP-44 v2 path exists (decryptNIP44 rejects the format, see above).
+    // EXPECTED TO FAIL until a NIP-44 v2 path exists (openBitchatEnvelope rejects the format, see above).
     // Un-ignore as part of the migration in docs/reviews/2026-10-01-nip44-conformance.md.
     @Ignore
     @Test
     fun nip44Spec_decryptsOfficialPayloads() {
         for (vector in OFFICIAL_ENCRYPT_DECRYPT) {
-            val decrypted = Cryptography.decryptNIP44(
+            val decrypted = Cryptography.openBitchatEnvelope(
                 ciphertext = vector.payload,
                 senderPublicKeyHex = Cryptography.derivePublicKey(vector.sec1),
                 recipientPrivateKeyHex = vector.sec2
@@ -142,13 +142,13 @@ class Nip44ConformanceTest {
         expectedSenderPubkey: String
     ): JsonObject {
         val seal = Json.parseToJsonElement(
-            Cryptography.decryptNIP44(wrapContent, wrapPubkey, recipientPrivateKeyHex)
+            Cryptography.openBitchatEnvelope(wrapContent, wrapPubkey, recipientPrivateKeyHex)
         ).jsonObject
         assertEquals(13, seal.getValue("kind").jsonPrimitive.int)
         assertEquals(expectedSenderPubkey, seal.string("pubkey"))
 
         val rumor = Json.parseToJsonElement(
-            Cryptography.decryptNIP44(seal.string("content"), seal.string("pubkey"), recipientPrivateKeyHex)
+            Cryptography.openBitchatEnvelope(seal.string("content"), seal.string("pubkey"), recipientPrivateKeyHex)
         ).jsonObject
         assertEquals(14, rumor.getValue("kind").jsonPrimitive.int)
         assertEquals(expectedSenderPubkey, rumor.string("pubkey"))

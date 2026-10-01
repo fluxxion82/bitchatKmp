@@ -219,12 +219,12 @@ actual object Cryptography {
         }
     }
 
-    actual fun deriveNIP44Key(sharedSecret: ByteArray): ByteArray {
+    actual fun deriveBitchatEnvelopeKey(sharedSecret: ByteArray): ByteArray {
         val prk = hkdfExtract(ByteArray(0), sharedSecret)
         return hkdfExpand(prk, "nip44-v2".encodeToByteArray(), 32)
     }
 
-    actual fun encryptNIP44(
+    actual fun sealBitchatEnvelope(
         plaintext: String,
         recipientPublicKeyHex: String,
         senderPrivateKeyHex: String
@@ -235,7 +235,7 @@ actual object Cryptography {
             recipientPublicKeyHex,
             preferOddY = false
         )
-        val key = deriveNIP44Key(shared)
+        val key = deriveBitchatEnvelopeKey(shared)
 
         val nonce = ByteArray(crypto_aead_xchacha20poly1305_ietf_NPUBBYTES.toInt())
         nonce.usePinned { pinned ->
@@ -271,7 +271,7 @@ actual object Cryptography {
         }
     }
 
-    actual fun decryptNIP44(
+    actual fun openBitchatEnvelope(
         ciphertext: String,
         senderPublicKeyHex: String,
         recipientPrivateKeyHex: String
@@ -296,7 +296,7 @@ actual object Cryptography {
                     senderPublicKeyHex,
                     preferOddY = preferOdd
                 )
-                val key = deriveNIP44Key(shared)
+                val key = deriveBitchatEnvelopeKey(shared)
                 val plaintext = decryptAeadXChaCha(cipher, nonce, key)
                 return plaintext.decodeToString()
             } catch (e: Throwable) {
@@ -306,6 +306,20 @@ actual object Cryptography {
 
         throw lastError ?: RuntimeException("NIP-44 v2 decryption failed")
     }
+
+    actual fun deriveNIP44Key(sharedSecret: ByteArray): ByteArray = deriveBitchatEnvelopeKey(sharedSecret)
+
+    actual fun encryptNIP44(
+        plaintext: String,
+        recipientPublicKeyHex: String,
+        senderPrivateKeyHex: String
+    ): String = sealBitchatEnvelope(plaintext, recipientPublicKeyHex, senderPrivateKeyHex)
+
+    actual fun decryptNIP44(
+        ciphertext: String,
+        senderPublicKeyHex: String,
+        recipientPrivateKeyHex: String
+    ): String = openBitchatEnvelope(ciphertext, senderPublicKeyHex, recipientPrivateKeyHex)
 
     actual fun randomizeTimestampUpToPast(maxPastSeconds: Int): Int {
         val now = time(null).toInt()

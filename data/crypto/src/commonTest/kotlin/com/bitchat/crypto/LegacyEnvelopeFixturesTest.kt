@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
  * (docs/reviews/2026-10-01-nip44-conformance.md section 5.6). If a case here goes red, stop and find
  * out why rather than re-recording the payload.
  *
- * Each payload was produced by that platform's own `encryptNIP44` at commit 25199be, from the fixed
+ * Each payload was produced by that platform's own legacy envelope API at commit 25199be, from the fixed
  * keys below, and recorded verbatim. The nonce is random per call, so these are samples of the
  * format, not reproducible outputs: never "fix" a failure by pasting a fresh payload.
  *
@@ -52,7 +52,7 @@ class LegacyEnvelopeFixturesTest {
     }
 
     private fun assertOpens(payload: String) {
-        assertEquals(PLAINTEXT, Cryptography.decryptNIP44(payload, SENDER_PUBLIC, RECIPIENT_PRIVATE))
+        assertEquals(PLAINTEXT, Cryptography.openBitchatEnvelope(payload, SENDER_PUBLIC, RECIPIENT_PRIVATE))
     }
 
     private companion object {

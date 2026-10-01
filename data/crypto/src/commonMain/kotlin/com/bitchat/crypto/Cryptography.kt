@@ -7,8 +7,29 @@ expect object Cryptography {
     fun deriveEd25519PublicKey(privateKeyHex: String): String
     fun ed25519Sign(message: ByteArray, privateKeyHex: String): ByteArray
     fun ed25519Verify(message: ByteArray, signature: ByteArray, publicKeyHex: String): Boolean
+    fun deriveBitchatEnvelopeKey(sharedSecret: ByteArray): ByteArray
+    fun sealBitchatEnvelope(plaintext: String, recipientPublicKeyHex: String, senderPrivateKeyHex: String): String
+    fun openBitchatEnvelope(ciphertext: String, senderPublicKeyHex: String, recipientPrivateKeyHex: String): String
+
+    @Deprecated(
+        message = "This is BitChat's legacy envelope, not NIP-44; use deriveBitchatEnvelopeKey.",
+        replaceWith = ReplaceWith("deriveBitchatEnvelopeKey(sharedSecret)"),
+        level = DeprecationLevel.WARNING,
+    )
     fun deriveNIP44Key(sharedSecret: ByteArray): ByteArray
+
+    @Deprecated(
+        message = "This is BitChat's legacy envelope, not NIP-44; use sealBitchatEnvelope.",
+        replaceWith = ReplaceWith("sealBitchatEnvelope(plaintext, recipientPublicKeyHex, senderPrivateKeyHex)"),
+        level = DeprecationLevel.WARNING,
+    )
     fun encryptNIP44(plaintext: String, recipientPublicKeyHex: String, senderPrivateKeyHex: String): String
+
+    @Deprecated(
+        message = "This is BitChat's legacy envelope, not NIP-44; use openBitchatEnvelope.",
+        replaceWith = ReplaceWith("openBitchatEnvelope(ciphertext, senderPublicKeyHex, recipientPrivateKeyHex)"),
+        level = DeprecationLevel.WARNING,
+    )
     fun decryptNIP44(ciphertext: String, senderPublicKeyHex: String, recipientPrivateKeyHex: String): String
     fun randomizeTimestampUpToPast(maxPastSeconds: Int = 172800): Int
 

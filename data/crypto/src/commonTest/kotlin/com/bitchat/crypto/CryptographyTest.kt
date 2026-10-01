@@ -30,24 +30,24 @@ class CryptographyTest {
     }
 
     @Test
-    fun deriveNIP44Key_matchesHKDFVector() {
+    fun deriveBitchatEnvelopeKey_matchesLegacyHKDFVector() {
         val sharedSecret = ByteArray(32) { it.toByte() }
         val expectedHex = "06df0a78a2319320fa904694a17faa7e98d594dc3b027422428134afe063482c"
 
-        val derived = Cryptography.deriveNIP44Key(sharedSecret)
+        val derived = Cryptography.deriveBitchatEnvelopeKey(sharedSecret)
 
         assertEquals(expectedHex, derived.toHexString())
     }
 
     @Test
-    fun encryptDecryptNIP44_roundTrip() {
+    fun sealOpenBitchatEnvelope_roundTrip() {
         val senderPrivateKeyHex = "0000000000000000000000000000000000000000000000000000000000000001"
         val recipientPrivateKeyHex = "0000000000000000000000000000000000000000000000000000000000000002"
         val senderPublicKeyHex = Cryptography.derivePublicKey(senderPrivateKeyHex)
         val recipientPublicKeyHex = Cryptography.derivePublicKey(recipientPrivateKeyHex)
         val plaintext = "hello nip44"
 
-        val ciphertext = Cryptography.encryptNIP44(
+        val ciphertext = Cryptography.sealBitchatEnvelope(
             plaintext = plaintext,
             recipientPublicKeyHex = recipientPublicKeyHex,
             senderPrivateKeyHex = senderPrivateKeyHex
@@ -55,7 +55,7 @@ class CryptographyTest {
 
         assertTrue(ciphertext.startsWith("v2:"))
 
-        val decrypted = Cryptography.decryptNIP44(
+        val decrypted = Cryptography.openBitchatEnvelope(
             ciphertext = ciphertext,
             senderPublicKeyHex = senderPublicKeyHex,
             recipientPrivateKeyHex = recipientPrivateKeyHex
@@ -65,25 +65,56 @@ class CryptographyTest {
     }
 
     @Test
-    fun encryptDecryptNIP44_oneCharacterPlaintextRoundTrip() {
+    fun sealOpenBitchatEnvelope_oneCharacterPlaintextRoundTrip() {
         val senderPrivateKeyHex = "0000000000000000000000000000000000000000000000000000000000000001"
         val recipientPrivateKeyHex = "0000000000000000000000000000000000000000000000000000000000000002"
         val senderPublicKeyHex = Cryptography.derivePublicKey(senderPrivateKeyHex)
         val recipientPublicKeyHex = Cryptography.derivePublicKey(recipientPrivateKeyHex)
         val plaintext = "x"
 
-        val ciphertext = Cryptography.encryptNIP44(
+        val ciphertext = Cryptography.sealBitchatEnvelope(
             plaintext = plaintext,
             recipientPublicKeyHex = recipientPublicKeyHex,
             senderPrivateKeyHex = senderPrivateKeyHex
         )
-        val decrypted = Cryptography.decryptNIP44(
+        val decrypted = Cryptography.openBitchatEnvelope(
             ciphertext = ciphertext,
             senderPublicKeyHex = senderPublicKeyHex,
             recipientPrivateKeyHex = recipientPrivateKeyHex
         )
 
         assertEquals(plaintext, decrypted)
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun deprecatedEnvelopeAliases_forwardToBitchatEnvelopeApi() {
+        val senderPrivateKeyHex = "0000000000000000000000000000000000000000000000000000000000000001"
+        val recipientPrivateKeyHex = "0000000000000000000000000000000000000000000000000000000000000002"
+        val senderPublicKeyHex = Cryptography.derivePublicKey(senderPrivateKeyHex)
+        val recipientPublicKeyHex = Cryptography.derivePublicKey(recipientPrivateKeyHex)
+        val plaintext = "legacy alias"
+        val sharedSecret = ByteArray(32) { it.toByte() }
+
+        assertTrue(
+            Cryptography.deriveBitchatEnvelopeKey(sharedSecret).contentEquals(
+                Cryptography.deriveNIP44Key(sharedSecret),
+            )
+        )
+
+        val sealedByNew = Cryptography.sealBitchatEnvelope(
+            plaintext,
+            recipientPublicKeyHex,
+            senderPrivateKeyHex,
+        )
+        assertEquals(plaintext, Cryptography.decryptNIP44(sealedByNew, senderPublicKeyHex, recipientPrivateKeyHex))
+
+        val sealedByOld = Cryptography.encryptNIP44(
+            plaintext,
+            recipientPublicKeyHex,
+            senderPrivateKeyHex,
+        )
+        assertEquals(plaintext, Cryptography.openBitchatEnvelope(sealedByOld, senderPublicKeyHex, recipientPrivateKeyHex))
     }
 
     @Test

@@ -127,7 +127,7 @@ actual object Cryptography {
         }
     }
 
-    actual fun deriveNIP44Key(sharedSecret: ByteArray): ByteArray {
+    actual fun deriveBitchatEnvelopeKey(sharedSecret: ByteArray): ByteArray {
         val zeroSalt = ByteArray(0)
         val prk = hkdfExtract(zeroSalt, sharedSecret)
         return hkdfExpand(prk, info = "nip44-v2".toByteArray(Charsets.UTF_8), length = 32)
@@ -244,7 +244,7 @@ actual object Cryptography {
         }
     }
 
-    actual fun encryptNIP44(
+    actual fun sealBitchatEnvelope(
         plaintext: String,
         recipientPublicKeyHex: String,
         senderPrivateKeyHex: String
@@ -252,7 +252,7 @@ actual object Cryptography {
         try {
             val sharedPoint = computeSharedPointWithParity(senderPrivateKeyHex, recipientPublicKeyHex, preferOddY = false)
             val secretMaterial = compressedPoint(sharedPoint)
-            val encryptionKey = deriveNIP44Key(secretMaterial)
+            val encryptionKey = deriveBitchatEnvelopeKey(secretMaterial)
             val aead = XChaCha20Poly1305(encryptionKey)
             val combined = aead.encrypt(plaintext.toByteArray(Charsets.UTF_8), null) // nonce||ct||tag
             val b64 = base64UrlNoPad(combined)
@@ -262,7 +262,7 @@ actual object Cryptography {
         }
     }
 
-    actual fun decryptNIP44(
+    actual fun openBitchatEnvelope(
         ciphertext: String,
         senderPublicKeyHex: String,
         recipientPrivateKeyHex: String
@@ -278,7 +278,7 @@ actual object Cryptography {
                 try {
                     val point = computeSharedPointWithParity(recipientPrivateKeyHex, senderPublicKeyHex, preferOddY = preferOdd)
                     val secretMaterial = compressedPoint(point)
-                    val key = deriveNIP44Key(secretMaterial)
+                    val key = deriveBitchatEnvelopeKey(secretMaterial)
                     val aead = XChaCha20Poly1305(key)
                     val pt = aead.decrypt(encryptedData, null)
                     return String(pt, Charsets.UTF_8)
@@ -291,6 +291,20 @@ actual object Cryptography {
             throw RuntimeException("NIP-44 v2 decryption failed: ${e.message}", e)
         }
     }
+
+    actual fun deriveNIP44Key(sharedSecret: ByteArray): ByteArray = deriveBitchatEnvelopeKey(sharedSecret)
+
+    actual fun encryptNIP44(
+        plaintext: String,
+        recipientPublicKeyHex: String,
+        senderPrivateKeyHex: String
+    ): String = sealBitchatEnvelope(plaintext, recipientPublicKeyHex, senderPrivateKeyHex)
+
+    actual fun decryptNIP44(
+        ciphertext: String,
+        senderPublicKeyHex: String,
+        recipientPrivateKeyHex: String
+    ): String = openBitchatEnvelope(ciphertext, senderPublicKeyHex, recipientPrivateKeyHex)
 
     actual fun randomizeTimestampUpToPast(maxPastSeconds: Int): Int {
         val now = (System.currentTimeMillis() / 1000).toInt()
