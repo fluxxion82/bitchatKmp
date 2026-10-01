@@ -55,12 +55,7 @@ fun ImageMessageItem(
     onImageClick: ((String, List<String>, Int) -> Unit)?,
     modifier: Modifier = Modifier
 ) {
-    val rawPath = message.content.trim()
-    val path = if (rawPath.startsWith("/") && !rawPath.startsWith("file://")) {
-        "file://$rawPath"
-    } else {
-        rawPath
-    }
+    val path = localImageModel(message.content)
 
     Column(modifier = modifier.fillMaxWidth()) {
         val headerText = formatMessageHeaderAnnotatedString(
@@ -88,50 +83,48 @@ fun ImageMessageItem(
             onTextLayout = { headerLayout = it }
         )
 
-        // Collect all image paths from messages for swipe navigation
-        // Convert absolute file paths to file:// URIs for consistency
+        // Keep gallery navigation limited to the same local-only image models as rendering.
         val imagePaths = remember(messages) {
             messages.filter { it.type == BitchatMessageType.Image }
-                .map { msg ->
-                    val raw = msg.content.trim()
-                    if (raw.startsWith("/") && !raw.startsWith("file://")) {
-                        "file://$raw"
-                    } else {
-                        raw
-                    }
-                }
+                .mapNotNull { msg -> localImageModel(msg.content) }
         }
 
         Box {
-            var imageState by remember { mutableStateOf<ImageLoadState>(ImageLoadState.Empty) }
-            PlatformAsyncImage(
-                model = path,
-                contentDescription = "Image message",
-                modifier = Modifier
-                    .defaultMinSize(minWidth = 100.dp, minHeight = 100.dp)
-                    .widthIn(max = 300.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .clickable {
-                        val currentIndex = imagePaths.indexOf(path)
-                        onImageClick?.invoke(path, imagePaths, currentIndex)
-                    },
-                contentScale = ContentScale.Fit,
-                onState = { state ->
-                    val messageId = message.id
-                    when (state) {
-                        is ImageLoadState.Loading -> println("ImageMessageItem: LOADING messageId=$messageId")
-                        is ImageLoadState.Success -> {
-                            val image = state.image
-                            println("ImageMessageItem: SUCCESS messageId=$messageId image=$image")
+            var imageState by remember(path) {
+                mutableStateOf<ImageLoadState>(
+                    if (path == null) ImageLoadState.Error(null) else ImageLoadState.Empty
+                )
+            }
+            if (path != null) {
+                PlatformAsyncImage(
+                    model = path,
+                    contentDescription = "Image message",
+                    modifier = Modifier
+                        .defaultMinSize(minWidth = 100.dp, minHeight = 100.dp)
+                        .widthIn(max = 300.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .clickable {
+                            val currentIndex = imagePaths.indexOf(path)
+                            onImageClick?.invoke(path, imagePaths, currentIndex)
+                        },
+                    contentScale = ContentScale.Fit,
+                    onState = { state ->
+                        val messageId = message.id
+                        when (state) {
+                            is ImageLoadState.Loading -> println("ImageMessageItem: LOADING messageId=$messageId")
+                            is ImageLoadState.Success -> {
+                                val image = state.image
+                                println("ImageMessageItem: SUCCESS messageId=$messageId image=$image")
+                            }
+                            is ImageLoadState.Error ->
+                                println("ImageMessageItem: ERROR messageId=$messageId error=${state.throwable}")
+                            is ImageLoadState.Empty -> println("ImageMessageItem: EMPTY messageId=$messageId")
                         }
-                        is ImageLoadState.Error ->
-                            println("ImageMessageItem: ERROR messageId=$messageId error=${state.throwable}")
-                        is ImageLoadState.Empty -> println("ImageMessageItem: EMPTY messageId=$messageId")
+                        imageState = state
                     }
-                    imageState = state
-                }
-            )
+                )
+            }
 
             if (imageState is ImageLoadState.Loading) {
                 Box(
