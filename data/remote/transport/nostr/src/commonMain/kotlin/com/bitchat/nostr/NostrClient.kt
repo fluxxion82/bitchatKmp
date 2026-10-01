@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlin.io.encoding.Base64
-import kotlin.random.Random
 import kotlin.time.Clock
 
 private const val NOSTR_PRIVATE_KEY = "nostr_private_key"
@@ -23,6 +22,9 @@ private const val DEVICE_SEED_KEY = "nostr_device_seed"
 
 /** The device seed has no public form; the ledger records only that it exists. */
 private const val SEED_CLAIM = "present"
+
+/** 256 bits, as upstream iOS mints it (`SymmetricKey(size: .bits256)`). */
+private const val DEVICE_SEED_BYTES = 32
 
 /**
  * NIP-17 Protocol Implementation for Private Direct Messages
@@ -526,15 +528,15 @@ class NostrClient(
             // could not be read must not be replaced, because every geohash identity on this
             // device derives from it. The seed has no public form, so its ledger claim is the
             // literal string "present" rather than a digest of a secret.
+            //
+            // Every geohash private key is HMAC(seed, geohash || i), so the seed must come from
+            // a CSPRNG. Seeds minted before this used kotlin.random and are kept as they are:
+            // replacing one changes every geohash identity and orphans its DM threads. Rotating
+            // them, if ever, is a user-initiated action, not something to do on load.
             val seedBase64 = identityProvider.loadOrMint(
                 key = DEVICE_SEED_KEY,
                 publicFormOf = { SEED_CLAIM },
-                mint = {
-                    val seed = ByteArray(32)
-                    Random.nextBytes(seed)
-                    //SecureRandom().nextBytes(seed)
-                    Base64.encode(seed) // android.util.Base64.encodeToString(seed, android.util.Base64.DEFAULT)
-                },
+                mint = { Base64.encode(Cryptography.secureRandomBytes(DEVICE_SEED_BYTES)) },
             )
 
             return Base64.decode(seedBase64) //android.util.Base64.decode(existingSeed, android.util.Base64.DEFAULT)

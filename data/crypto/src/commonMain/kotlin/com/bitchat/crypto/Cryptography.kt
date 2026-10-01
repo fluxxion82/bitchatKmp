@@ -24,4 +24,11 @@ expect object Cryptography {
     fun decryptAESGCM(encryptedData: ByteArray, key: ByteArray): String?
 
     fun deriveX25519PublicKey(privateKeyHex: String): String
+
+    /**
+     * [size] bytes from the platform's cryptographically secure generator: `SecureRandom` on
+     * JVM and Android, libsodium's `randombytes_buf` on Apple and Linux. Use this, never
+     * `kotlin.random.Random`, for anything secret.
+     */
+    fun secureRandomBytes(size: Int): ByteArray
 }

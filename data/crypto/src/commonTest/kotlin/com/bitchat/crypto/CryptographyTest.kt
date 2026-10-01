@@ -2,6 +2,7 @@ package com.bitchat.crypto
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -213,6 +214,26 @@ class CryptographyTest {
 
         assertNotNull(decrypted)
         assertEquals(plaintext, decrypted)
+    }
+
+    @Test
+    fun secureRandomBytes_returnsRequestedSizeAndDiffersAcrossCalls() {
+        val draws = List(16) { Cryptography.secureRandomBytes(32) }
+
+        draws.forEach { assertEquals(32, it.size) }
+        // 16 draws of 256 bits collide with probability ~2^-249. A repeat means a fixed or
+        // reseeded generator, not bad luck.
+        assertEquals(draws.size, draws.map { it.toHexString() }.toSet().size)
+    }
+
+    @Test
+    fun secureRandomBytes_zeroSizeIsEmpty() {
+        assertEquals(0, Cryptography.secureRandomBytes(0).size)
+    }
+
+    @Test
+    fun secureRandomBytes_negativeSizeIsRejected() {
+        assertFailsWith<IllegalArgumentException> { Cryptography.secureRandomBytes(-1) }
     }
 
     private fun ByteArray.toHexString(): String {

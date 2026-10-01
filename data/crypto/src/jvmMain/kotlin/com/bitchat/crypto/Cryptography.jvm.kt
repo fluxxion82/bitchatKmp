@@ -514,4 +514,9 @@ actual object Cryptography {
 
         return publicKeyBytes.toHexString()
     }
+
+    actual fun secureRandomBytes(size: Int): ByteArray {
+        require(size >= 0) { "size must not be negative: $size" }
+        return ByteArray(size).also(secureRandom::nextBytes)
+    }
 }
