@@ -23,7 +23,7 @@ This project keeps protocol-level compatibility with legacy clients while adding
 
 ### Android
 
-- Android SDK with API level 36 and Build Tools
+- Android SDK with API level 37 and Build Tools
 - Set `ANDROID_SDK_ROOT` (or create `local.properties` with `sdk.dir=...`)
 
 ### iOS
