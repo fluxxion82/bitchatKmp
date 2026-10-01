@@ -54,6 +54,12 @@ internal interface ArtiNative {
  * `../docs/reviews/2026-09-07-tor-not-proxying-apple-linux.md`; until it lands, [handleLogLine]
  * stays for the platforms whose libraries *do* deliver lines (Android, linuxArm64) and nothing on
  * JVM depends on it for correctness.
+ *
+ * Not recovered here: Arti state this Arti cannot read. Linux and Apple move it aside once and
+ * restart ([ArtiStateRecovery]) because their wrapper reports Arti's error text. This wrapper turns
+ * every bootstrap failure - unreadable state, a dead network, its own 120 s timeout - into the same
+ * `-3` from [ArtiNative.initialize] and prints the reason to stderr only, so acting on `-3` would
+ * move state aside on an offline start. Desktop needs the wrapper to say which failure it was first.
  */
 actual class TorManager internal constructor(
     private val dataDir: String,

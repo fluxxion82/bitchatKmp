@@ -14,10 +14,16 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.staticCFunction
 import kotlinx.cinterop.toKString
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.Volatile
@@ -35,11 +41,22 @@ private fun nativeLogCallback(message: CPointer<ByteVar>?) {
     println("TorManager: ${message?.toKString().orEmpty()}")
 }
 
-/** Linux Arti manager. Native callbacks are generation-tagged; their message pointer is copied here. */
+/**
+ * Linux Arti manager. Native callbacks are generation-tagged; their message pointer is copied here.
+ *
+ * A lifecycle ERROR saying Arti cannot read its saved state is recovered once per process by
+ * [ArtiStateRecovery] (state moved aside, Arti restarted) instead of leaving Tor down for good.
+ */
 @OptIn(ExperimentalForeignApi::class)
-actual class TorManager actual constructor(
+actual class TorManager internal constructor(
     private val dataDir: String,
+    private val stateRecovery: ArtiStateRecovery,
 ) {
+    actual constructor(dataDir: String) : this(
+        dataDir,
+        ArtiStateRecovery(dataDir, log = { println("TorManager: $it") }),
+    )
+
     private val lifecycle = Mutex()
     private val _statusFlow = MutableStateFlow(TorStatus(socksPort = 0))
     actual val statusFlow: StateFlow<TorStatus> = _statusFlow.asStateFlow()
@@ -47,6 +64,13 @@ actual class TorManager actual constructor(
     @Volatile private var activeGeneration = 0UL
     @Volatile private var stopping = false
     @Volatile private var currentPort: Int? = null
+
+    /**
+     * Where a recovery restart runs. Statuses reach [handleStatus] on Arti's own threads with the
+     * wrapper's publication lock held, and `arti_start` takes that lock and joins the very task that
+     * is reporting, so a restart can never begin inside the callback.
+     */
+    private val recoveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
         activeTorManager = this
@@ -99,6 +123,7 @@ actual class TorManager actual constructor(
 
     actual fun destroy() {
         if (activeTorManager === this) activeTorManager = null
+        recoveryScope.cancel()
     }
 
     internal fun handleStatus(state: Int, port: Int, generation: ULong, message: String) {
@@ -118,17 +143,55 @@ actual class TorManager actual constructor(
                 }
             }
             STATUS_STOPPED -> {
+                // Only the stop this manager asked for is terminal here: `arti_start` also stops a
+                // leftover generation first and tags that STOPPED with the new generation's number,
+                // which must not reset the STARTING status just published (as on Apple).
+                if (!stopping) return
                 currentPort = null
                 _statusFlow.value = TorStatus(socksPort = 0, lastLogLine = message)
             }
-            STATUS_ERROR -> nativeError(generation, message)
+            STATUS_ERROR -> lifecycleError(generation, message)
+        }
+    }
+
+    /**
+     * The current generation failed. State Arti cannot read is moved aside, once per process, and
+     * Arti restarted; any other failure is published as it is. Runs inside the native callback, so
+     * the restart itself is handed to [recoveryScope] and runs under [lifecycle] like any start -
+     * and not at all if a start or stop has taken over since.
+     */
+    private fun lifecycleError(failedGeneration: ULong, message: String) {
+        if (failedGeneration != activeGeneration) return
+        when (val outcome = stateRecovery.onLifecycleError(message)) {
+            is ArtiErrorOutcome.Fail -> publishError(outcome.status)
+            is ArtiErrorOutcome.Restart -> {
+                currentPort = null
+                _statusFlow.value = outcome.status
+                recoveryScope.launch {
+                    lifecycle.withLock {
+                        if (failedGeneration != activeGeneration || stopping) return@withLock
+                        activeGeneration += 1UL
+                        val generation = activeGeneration
+                        currentPort = null
+                        _statusFlow.value = outcome.status
+                        val result = arti_start(dataDir, 0, generation)
+                        if (result != 0) {
+                            nativeError(generation, "Arti start call failed: $result")
+                        }
+                    }
+                }
+            }
         }
     }
 
     private fun nativeError(generation: ULong, message: String) {
         if (generation != activeGeneration) return
+        publishError(artiErrorStatus(message))
+    }
+
+    private fun publishError(status: TorStatus) {
         currentPort = null
-        _statusFlow.value = TorStatus(mode = TorMode.OFF, state = TorState.ERROR, socksPort = 0, lastLogLine = message, errorMessage = message, routeGeneration = 0)
+        _statusFlow.value = status
     }
 
     companion object {

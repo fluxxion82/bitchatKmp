@@ -31,11 +31,15 @@ import kotlinx.coroutines.withContext
  * caller's context (B1.1). Native statuses are copied by the C callback and queued through
  * [events]; the same worker drains the queue, so every piece of lifecycle state here is touched by
  * one thread and a status is applied only if its generation is still current (B2.5).
+ *
+ * A lifecycle ERROR saying Arti cannot read its saved state is recovered once per process by
+ * [ArtiStateRecovery] (state moved aside, Arti restarted) instead of leaving Tor down for good.
  */
 @OptIn(ExperimentalForeignApi::class)
 actual class TorManager internal constructor(
     private val dataDir: String,
     private val native: ArtiNative,
+    private val stateRecovery: ArtiStateRecovery = ArtiStateRecovery(dataDir, log = ::logArtiLine),
 ) {
     actual constructor(dataDir: String) : this(dataDir, ArtiNativeBinding)
 
@@ -75,20 +79,14 @@ actual class TorManager internal constructor(
 
     actual suspend fun start() = lifecycle.withLock {
         onWorker {
-            stopping = false
-            activeGeneration += 1UL
-            val generation = activeGeneration
-            currentPort = null
-            _statusFlow.value = TorStatus(
-                mode = TorMode.ON,
-                state = TorState.STARTING,
-                lastLogLine = "Starting Arti",
-                socksPort = 0,
+            beginGeneration(
+                TorStatus(
+                    mode = TorMode.ON,
+                    state = TorState.STARTING,
+                    lastLogLine = "Starting Arti",
+                    socksPort = 0,
+                )
             )
-            val result = native.start(dataDir, 0, generation)
-            if (result != 0) {
-                nativeError(generation, "Arti start call failed: $result")
-            }
         }
     }
 
@@ -117,6 +115,19 @@ actual class TorManager internal constructor(
     }
 
     private suspend fun onWorker(block: () -> Unit) = withContext(artiLifecycleWorker) { block() }
+
+    /** Publishes [starting] and starts a new generation. On [artiLifecycleWorker] only. */
+    private fun beginGeneration(starting: TorStatus) {
+        stopping = false
+        activeGeneration += 1UL
+        val generation = activeGeneration
+        currentPort = null
+        _statusFlow.value = starting
+        val result = native.start(dataDir, 0, generation)
+        if (result != 0) {
+            nativeError(generation, "Arti start call failed: $result")
+        }
+    }
 
     private fun applyStatus(event: ArtiStatusEvent) {
         if (event.generation != activeGeneration) return
@@ -155,20 +166,32 @@ actual class TorManager internal constructor(
                 currentPort = null
                 _statusFlow.value = TorStatus(socksPort = 0, lastLogLine = event.message)
             }
-            ARTI_STATUS_ERROR -> nativeError(event.generation, event.message)
+            ARTI_STATUS_ERROR -> lifecycleError(event.generation, event.message)
+        }
+    }
+
+    /**
+     * The current generation failed. State Arti cannot read is moved aside, once per process, and
+     * Arti restarted ([ArtiStateRecovery]); any other failure is published as it is. This already
+     * runs on [artiLifecycleWorker] and outside the native callback - the sink only enqueued it - so
+     * the restart calls [ArtiNative.start] here exactly as [start] does, and a stop queued behind it
+     * stops the new generation.
+     */
+    private fun lifecycleError(generation: ULong, message: String) {
+        if (generation != activeGeneration) return
+        when (val outcome = stateRecovery.onLifecycleError(message)) {
+            is ArtiErrorOutcome.Restart -> beginGeneration(outcome.status)
+            is ArtiErrorOutcome.Fail -> publishError(outcome.status)
         }
     }
 
     private fun nativeError(generation: ULong, message: String) {
         if (generation != activeGeneration) return
+        publishError(artiErrorStatus(message))
+    }
+
+    private fun publishError(status: TorStatus) {
         currentPort = null
-        _statusFlow.value = TorStatus(
-            mode = TorMode.OFF,
-            state = TorState.ERROR,
-            socksPort = 0,
-            lastLogLine = message,
-            errorMessage = message,
-            routeGeneration = 0,
-        )
+        _statusFlow.value = status
     }
 }

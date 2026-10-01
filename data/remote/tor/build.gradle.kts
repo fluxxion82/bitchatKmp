@@ -127,6 +127,9 @@ kotlin {
                 implementation(libs.kotlinx.serialization)
                 implementation(libs.multiplatform.settings)
                 implementation(libs.kotlinx.atomicfu)
+                // ArtiStateRecovery moves unreadable Arti state aside with one implementation for
+                // JVM, Apple and Linux.
+                implementation(libs.kotlinx.io.core)
             }
         }
 
