@@ -35,7 +35,9 @@ class CentralLinkPolicy(
     private val maxCentralLinks: Int = MAX_CENTRAL_LINKS,
     private val connectTimeoutMs: Long = CONNECT_TIMEOUT_MS,
     private val baseBackoffMs: Long = BASE_BACKOFF_MS,
-    private val maxBackoffMs: Long = MAX_BACKOFF_MS
+    private val maxBackoffMs: Long = MAX_BACKOFF_MS,
+    private val immediateDropRetryEnabled: Boolean = false,
+    private val healthyLinkMs: Long = CONNECT_TIMEOUT_MS
 ) {
 
     /** Why a discovered device was not connected to, or that it should be. */
@@ -55,6 +57,13 @@ class CentralLinkPolicy(
     // `org.bluez.Error.InProgress`.
     private val lastActivity = mutableMapOf<String, Long>()
     private val attemptCount = mutableMapOf<String, Int>()
+
+    // The embedded radio sometimes repeatedly succeeds at connecting only to lose the link before
+    // carrying traffic. Keep that failure mode separate from ordinary failed attempts so the
+    // desktop policy retains its established backoff semantics unless it opts in.
+    private val connectedAt = mutableMapOf<String, Long>()
+    private val immediateDropCount = mutableMapOf<String, Int>()
+    private val lastImmediateDrop = mutableMapOf<String, Long>()
 
     /**
      * Whether to open an outbound link to [address], discovered at [now].
@@ -89,6 +98,13 @@ class CentralLinkPolicy(
             return Decision.Skip("${established.size} outbound link(s) already open")
         }
 
+        val lastDrop = lastImmediateDrop[address]
+        if (immediateDropRetryEnabled && lastDrop != null &&
+            now - lastDrop < immediateDropBackoffFor(immediateDropCount[address] ?: 0)
+        ) {
+            return Decision.Skip("within immediate-drop backoff")
+        }
+
         val since = lastActivity[address]
         if (since != null && now - since < backoffFor(attemptCount[address] ?: 0)) {
             return Decision.Skip("within backoff")
@@ -101,18 +117,39 @@ class CentralLinkPolicy(
     }
 
     /** The attempt to [address] produced a usable link. */
-    fun onConnected(address: String) {
+    fun onConnected(address: String, now: Long = UNSET_TIME) {
         pending.remove(address)
         established.add(address)
         attemptCount.remove(address)
         lastActivity.remove(address)
+        if (immediateDropRetryEnabled) {
+            // A caller that forgets the time would make every link look healthy and silently switch
+            // the quarantine off, which is the bug this policy exists to prevent. Fail loudly instead.
+            require(now != UNSET_TIME) { "immediate-drop retry needs the time the link came up" }
+            connectedAt[address] = now
+        }
     }
 
     /** The attempt to [address] failed, or its link went down, at [now]. */
     fun onReleased(address: String, now: Long) {
         pending.remove(address)
+        val connectedSince = connectedAt.remove(address)
         established.remove(address)
+        if (immediateDropRetryEnabled && connectedSince != null) {
+            if (now - connectedSince >= healthyLinkMs) {
+                clearImmediateDropRecord(address)
+            } else {
+                immediateDropCount[address] = (immediateDropCount[address] ?: 0) + 1
+                lastImmediateDrop[address] = now
+            }
+            return
+        }
         if (attemptCount.containsKey(address)) lastActivity[address] = now
+    }
+
+    /** A mesh frame proves the link was useful, so prior immediate drops no longer predict it. */
+    fun onMeshFrameExchanged(address: String) {
+        if (immediateDropRetryEnabled) clearImmediateDropRecord(address)
     }
 
     /**
@@ -132,6 +169,7 @@ class CentralLinkPolicy(
     fun onNativeBusy(address: String, now: Long) {
         pending.remove(address)
         established.remove(address)
+        connectedAt.remove(address)
         attemptCount[address] = attemptsForMaxBackoff()
         lastActivity[address] = now
     }
@@ -163,6 +201,9 @@ class CentralLinkPolicy(
         established.clear()
         lastActivity.clear()
         attemptCount.clear()
+        connectedAt.clear()
+        immediateDropCount.clear()
+        lastImmediateDrop.clear()
     }
 
     /** Delay owed after [attempts] failures: [baseBackoffMs] doubling up to [maxBackoffMs]. */
@@ -174,6 +215,18 @@ class CentralLinkPolicy(
             backoff *= 2
         }
         return if (backoff > maxBackoffMs) maxBackoffMs else backoff
+    }
+
+    private fun immediateDropBackoffFor(drops: Int): Long = when (drops) {
+        1 -> FIRST_IMMEDIATE_DROP_BACKOFF_MS
+        2 -> SECOND_IMMEDIATE_DROP_BACKOFF_MS
+        3 -> THIRD_IMMEDIATE_DROP_BACKOFF_MS
+        else -> IMMEDIATE_DROP_QUARANTINE_MS
+    }
+
+    private fun clearImmediateDropRecord(address: String) {
+        immediateDropCount.remove(address)
+        lastImmediateDrop.remove(address)
     }
 
     companion object {
@@ -203,8 +256,21 @@ class CentralLinkPolicy(
         /** How often the deadline is checked. */
         const val SWEEP_INTERVAL_MS = 5_000L
 
+        /** No time supplied. Only legal while [immediateDropRetryEnabled] is false. */
+        const val UNSET_TIME = Long.MIN_VALUE
+
         const val BASE_BACKOFF_MS = 5_000L
         const val MAX_BACKOFF_MS = 60_000L
+
+        /**
+         * A mesh peer can move briefly out of range, so give three immediate drops short retries
+         * before pausing it. The two-minute pause stops a pairing prompt storm without turning one
+         * bad moment into a long mesh blackout.
+         */
+        const val FIRST_IMMEDIATE_DROP_BACKOFF_MS = 5_000L
+        const val SECOND_IMMEDIATE_DROP_BACKOFF_MS = 10_000L
+        const val THIRD_IMMEDIATE_DROP_BACKOFF_MS = 20_000L
+        const val IMMEDIATE_DROP_QUARANTINE_MS = 120_000L
 
         /** Stops [attemptsForMaxBackoff] looping if the backoff constants are ever made unreachable. */
         private const val MAX_BACKOFF_ATTEMPT_CEILING = 32

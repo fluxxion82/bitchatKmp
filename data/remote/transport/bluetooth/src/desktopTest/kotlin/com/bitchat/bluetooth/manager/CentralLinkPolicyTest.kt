@@ -258,4 +258,51 @@ class CentralLinkPolicyTest {
 
         assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 2_000_001L))
     }
+
+    @Test
+    fun piImmediateDropsUseTheShortLadderThenQuarantineThePeer() {
+        val policy = CentralLinkPolicy(immediateDropRetryEnabled = true)
+
+        fun connectThenDrop(attemptAt: Long) {
+            assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = attemptAt))
+            policy.onConnected(phoneA, now = attemptAt + 1L)
+            policy.onReleased(phoneA, now = attemptAt + 2L)
+        }
+
+        connectThenDrop(attemptAt = 0L)
+        assertIs<CentralLinkPolicy.Decision.Skip>(policy.onDiscovered(phoneA, now = 5_001L))
+        connectThenDrop(attemptAt = 5_002L)
+        assertIs<CentralLinkPolicy.Decision.Skip>(policy.onDiscovered(phoneA, now = 15_003L))
+        connectThenDrop(attemptAt = 15_004L)
+        assertIs<CentralLinkPolicy.Decision.Skip>(policy.onDiscovered(phoneA, now = 35_005L))
+        connectThenDrop(attemptAt = 35_006L)
+
+        assertIs<CentralLinkPolicy.Decision.Skip>(policy.onDiscovered(phoneA, now = 155_007L))
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 155_008L))
+    }
+
+    @Test
+    fun piImmediateDropRecordResetsAfterAHealthyLinkInterval() {
+        val policy = CentralLinkPolicy(immediateDropRetryEnabled = true)
+
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 0L))
+        policy.onConnected(phoneA, now = 1L)
+        policy.onReleased(phoneA, now = CentralLinkPolicy.CONNECT_TIMEOUT_MS + 1L)
+
+        assertIs<CentralLinkPolicy.Decision.Connect>(
+            policy.onDiscovered(phoneA, now = CentralLinkPolicy.CONNECT_TIMEOUT_MS + 2L)
+        )
+    }
+
+    @Test
+    fun piImmediateDropRecordResetsWhenAMeshFrameIsExchanged() {
+        val policy = CentralLinkPolicy(immediateDropRetryEnabled = true)
+
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 0L))
+        policy.onConnected(phoneA, now = 1L)
+        policy.onReleased(phoneA, now = 2L)
+        policy.onMeshFrameExchanged(phoneA)
+
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 3L))
+    }
 }

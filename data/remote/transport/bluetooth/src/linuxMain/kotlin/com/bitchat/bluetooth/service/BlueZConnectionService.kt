@@ -50,7 +50,7 @@ class BlueZConnectionService(
     private val connectionMutex = Mutex()
 
     // Permission to open an outbound link, and the deadline gattlib does not enforce on one.
-    private val linkPolicy = CentralLinkPolicy()
+    private val linkPolicy = CentralLinkPolicy(immediateDropRetryEnabled = true)
 
     /**
      * Every address the scanner has ever named, so the sweep can offer one again.
@@ -314,7 +314,7 @@ class BlueZConnectionService(
      * Called when client connection is established.
      */
     internal suspend fun onClientConnected(deviceAddress: String) {
-        connectionMutex.withLock { linkPolicy.onConnected(deviceAddress) }
+        connectionMutex.withLock { linkPolicy.onConnected(deviceAddress, currentTimeMillis()) }
 
         logInfo(TAG, "Client connected: ${deviceAddress.take(8)}")
         connectionEstablishedCallback?.onDeviceConnected(deviceAddress)
@@ -458,6 +458,13 @@ class BlueZConnectionService(
         }
     }
 
+    /** A received mesh frame proves this link was useful, regardless of its connection age. */
+    private fun onMeshFrameExchanged(deviceAddress: String) {
+        coroutineScopeFacade.applicationScope.launch {
+            connectionMutex.withLock { linkPolicy.onMeshFrameExchanged(deviceAddress) }
+        }
+    }
+
     private fun setupDelegates() {
         // Setup scanning callback
         scanningService.setOnDeviceDiscoveredCallback { address, name ->
@@ -469,6 +476,7 @@ class BlueZConnectionService(
         // Setup GATT server delegate
         gattServer.setDelegate(object : GattServerDelegate {
             override fun onDataReceived(data: ByteArray, deviceAddress: String) {
+                onMeshFrameExchanged(deviceAddress)
                 onPacketReceivedCallback?.onPacketReceived(data, deviceAddress)
             }
 
@@ -517,6 +525,7 @@ class BlueZConnectionService(
         // Setup GATT client delegate
         gattClient.setDelegate(object : GattClientDelegate {
             override fun onCharacteristicRead(deviceAddress: String, data: ByteArray) {
+                onMeshFrameExchanged(deviceAddress)
                 onPacketReceivedCallback?.onPacketReceived(data, deviceAddress)
             }
 
