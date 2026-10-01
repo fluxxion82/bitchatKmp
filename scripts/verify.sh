@@ -5,6 +5,9 @@
 #   scripts/verify.sh desktop    # quick + packageDmg + macOS arm64 BLE dylib link (on macOS arm64)
 #   scripts/verify.sh android    # :apps:droid:assembleDebug
 #   scripts/verify.sh ios        # :iosdi debug frameworks for iosSimulatorArm64 and iosArm64 (the only iOS targets)
+#                                # + the Darwin SOCKS capture harness (rest client macosArm64Test, iosSimulatorArm64Test;
+#                                #   the simulator run needs CoreSimulatorService, so run it outside a sandbox; the DNS
+#                                #   leak cases skip loudly without /etc/resolver/bitchat-leak.test)
 #   scripts/verify.sh embedded   # -Pembedded.enabled=true linuxArm64 link + compose resources
 #   scripts/verify.sh tui        # -Pembedded.enabled=true :presentation:tui JVM tests + linuxArm64 compile + TUI link
 #   scripts/verify.sh desktop-tui # JVM desktop TUI tests and installDist
@@ -42,7 +45,7 @@ case "$MODE" in
     gradle "${desktop_tasks[@]}"
     ;;
   android)  gradle :apps:droid:assembleDebug ;;
-  ios)      gradle :iosdi:linkDebugFrameworkIosSimulatorArm64 :iosdi:linkDebugFrameworkIosArm64 :data:crypto:macosArm64Test :data:crypto:iosSimulatorArm64Test ;;
+  ios)      gradle :iosdi:linkDebugFrameworkIosSimulatorArm64 :iosdi:linkDebugFrameworkIosArm64 :data:crypto:macosArm64Test :data:crypto:iosSimulatorArm64Test :data:remote:rest:client:macosArm64Test :data:remote:rest:client:iosSimulatorArm64Test ;;
   embedded) gradle_embedded :apps:embedded:linkDebugExecutableLinuxArm64 ;;
   tui)      gradle_embedded :presentation:tui:jvmTest :presentation:tui:compileKotlinLinuxArm64 :apps:embedded-tui:linkDebugExecutableLinuxArm64 ;;
   desktop-tui)

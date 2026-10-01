@@ -10,13 +10,13 @@ import platform.Foundation.NSLog
  * but NSLog is simpler and more compatible with Kotlin/Native
  */
 actual fun logError(tag: String, message: String) {
-    NSLog("[$tag] ERROR: $message")
+    NSLog("%s", "[$tag] ERROR: $message")
 }
 
 actual fun logDebug(tag: String, message: String) {
-    NSLog("[$tag] DEBUG: $message")
+    NSLog("%s", "[$tag] DEBUG: $message")
 }
 
 actual fun logInfo(tag: String, message: String) {
-    NSLog("[$tag] INFO: $message")
+    NSLog("%s", "[$tag] INFO: $message")
 }

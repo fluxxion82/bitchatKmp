@@ -1,5 +1,6 @@
 package com.bitchat.local.di
 
+import com.bitchat.domain.initialization.AppInitializer
 import com.bitchat.local.identity.DomainInspector
 import com.bitchat.local.identity.LedgerStore
 import com.bitchat.local.identity.NoDomainInspector
@@ -7,6 +8,7 @@ import com.bitchat.local.identity.NoLedgerStore
 import com.bitchat.local.prefs.EncryptionSettingsFactory
 import com.bitchat.local.prefs.NativeEncryptionSettingsFactory
 import com.bitchat.local.service.GeocoderService
+import com.bitchat.local.service.IosAppLifecycleObserver
 import com.bitchat.local.service.IosLocationService
 import com.bitchat.local.service.IosSettingsService
 import com.bitchat.local.service.LocationService
@@ -15,6 +17,7 @@ import com.bitchat.local.service.impl.StubGeocoderService
 import com.russhwolf.settings.NSUserDefaultsSettings
 import com.russhwolf.settings.Settings
 import org.koin.dsl.module
+import org.koin.dsl.bind
 
 actual val localModule = module {
     single<Settings.Factory> { NSUserDefaultsSettings.Factory() }
@@ -26,6 +29,7 @@ actual val localModule = module {
     single<LedgerStore> { NoLedgerStore }
 
     single<EncryptionSettingsFactory> { NativeEncryptionSettingsFactory() }
+    single { IosAppLifecycleObserver(foregroundState = get()) } bind AppInitializer::class
 
     single<SettingsService> { IosSettingsService() }
     single<LocationService> { IosLocationService() }

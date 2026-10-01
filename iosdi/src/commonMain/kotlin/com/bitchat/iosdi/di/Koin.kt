@@ -15,21 +15,24 @@ import org.koin.core.module.Module
 
 fun initKoin(appModule: Module, mock: Boolean): KoinApplication {
     val koinApplication = startKoin {
-        modules(
-            appModule,
-            commonLocal,
-            commonRepoModule,
-            localModule,
-            viewModelModule,
-            domainModule,
-            bluetoothModule,
-            commonLocal,
-            localModule,
-            clientModule,
-            nostrModule,
-            torModule,
-        )
+        modules(iosKoinModules(appModule))
     }
 
     return koinApplication
 }
+
+/** The iOS application graph, kept inspectable by the Apple binding regression test. */
+internal fun iosKoinModules(appModule: Module): List<Module> = listOf(
+    appModule,
+    commonLocal,
+    commonRepoModule,
+    localModule,
+    viewModelModule,
+    domainModule,
+    bluetoothModule,
+    commonLocal,
+    localModule,
+    clientModule,
+    nostrModule,
+    torModule,
+)

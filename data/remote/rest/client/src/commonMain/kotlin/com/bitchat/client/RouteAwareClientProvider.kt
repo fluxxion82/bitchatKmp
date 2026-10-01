@@ -6,8 +6,9 @@ import com.bitchat.domain.tor.RequestedTorIntent
 import com.bitchat.domain.tor.TorRouteLifecycle
 import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.domain.tor.model.TorState
-import com.bitchat.tor.TorManager
+import com.bitchat.tor.TorRouteSource
 import io.ktor.client.HttpClient
+import io.ktor.client.engine.HttpClientEngineFactory
 import io.ktor.client.engine.ProxyConfig
 import io.ktor.client.request.HttpRequestBuilder
 import kotlinx.coroutines.Job
@@ -77,14 +78,17 @@ private class RouteProvenance(
 class RouteAwareClientProvider(
     private val appInformation: AppInformation,
     private val requestedIntent: RequestedTorIntent?,
-    private val torManager: TorManager?,
+    private val torRouteSource: TorRouteSource?,
     private val readyTimeout: Duration = 30.seconds,
+    private val engineSupportsTorProxy: Boolean = httpEngineSupportsTorProxy,
+    /** Engine per routed client; the Darwin teardown spike substitutes an owned-session factory. */
+    private val engineFactory: (isDebug: Boolean) -> HttpClientEngineFactory<*> = { getEngine(it) },
 ) : TorRouteLifecycle, WebSocketRouteProvider {
     private val routes = RouteGenerations()
 
     suspend fun openWebSocket(): RoutedHttpClient = open { proxy ->
         ktorWebSocketHttpClient(
-            engine = getEngine(appInformation.debug),
+            engine = engineFactory(appInformation.debug),
             proxy = proxy,
         )
     }
@@ -119,7 +123,7 @@ class RouteAwareClientProvider(
             ktorHttpClient(
                 clientType = clientType,
                 interceptors = interceptors,
-                engine = getEngine(appInformation.debug),
+                engine = engineFactory(appInformation.debug),
                 proxy = proxy,
             )
         }
@@ -166,21 +170,21 @@ class RouteAwareClientProvider(
 
     private suspend fun proxyForCurrentIntent(): NativeTorRoute? {
         if (requestedIntent?.current != TorMode.ON) return null
-        if (!httpEngineSupportsTorProxy) throw TorRouteRequiredException()
-        val manager = torManager ?: throw TorRouteRequiredException()
-        awaitReadyRoute(manager)
+        if (!engineSupportsTorProxy) throw TorRouteRequiredException()
+        val routeSource = torRouteSource ?: throw TorRouteRequiredException()
+        awaitReadyRoute(routeSource)
         // Intent may have changed while waiting. A switched-off user requested a direct route.
         if (requestedIntent.current != TorMode.ON) return null
-        val (host, port) = manager.getSocksProxyAddress() ?: throw TorRouteRequiredException()
-        val generation = manager.statusFlow.value.routeGeneration
+        val (host, port) = routeSource.getSocksProxyAddress() ?: throw TorRouteRequiredException()
+        val generation = routeSource.statusFlow.value.routeGeneration
         if (generation == 0L) throw TorRouteRequiredException()
         return NativeTorRoute(torSocksProxy(host, port), generation, port)
     }
 
     private fun NativeTorRoute.isCurrent(): Boolean {
-        val manager = torManager ?: return false
-        val status = manager.statusFlow.value
-        return manager.isProxyReady() &&
+        val routeSource = torRouteSource ?: return false
+        val status = routeSource.statusFlow.value
+        return routeSource.isProxyReady() &&
             status.state == TorState.RUNNING &&
             status.routeGeneration == generation &&
             status.socksPort == port
@@ -190,19 +194,19 @@ class RouteAwareClientProvider(
      * Client construction is intentionally outside this wait. The Koin graph can therefore be
      * assembled while Arti bootstraps; only an outbound request or socket acquisition waits.
      */
-    private suspend fun awaitReadyRoute(manager: TorManager) {
-        if (manager.isProxyReady()) return
-        if (!manager.isAvailable) throw TorRouteRequiredException()
+    private suspend fun awaitReadyRoute(routeSource: TorRouteSource) {
+        if (routeSource.isProxyReady()) return
+        if (!routeSource.isAvailable) throw TorRouteRequiredException()
 
         withTimeoutOrNull(readyTimeout) {
-            manager.statusFlow.first { status ->
-                manager.isProxyReady() ||
+            routeSource.statusFlow.first { status ->
+                routeSource.isProxyReady() ||
                     status.state == TorState.ERROR ||
                     status.state == TorState.OFF ||
                     requestedIntent?.current != TorMode.ON
             }
         }
 
-        if (!manager.isProxyReady()) throw TorRouteRequiredException()
+        if (!routeSource.isProxyReady()) throw TorRouteRequiredException()
     }
 }

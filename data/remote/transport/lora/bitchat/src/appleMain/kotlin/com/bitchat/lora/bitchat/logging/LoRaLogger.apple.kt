@@ -13,28 +13,28 @@ actual object LoRaLogger {
     }
 
     actual fun d(tag: String, message: String) {
-        if (enabled) NSLog("[D/$tag] %@", message)
+        if (enabled) NSLog("%s", "[D/$tag] $message")
     }
 
     actual fun i(tag: String, message: String) {
-        if (enabled) NSLog("[I/$tag] %@", message)
+        if (enabled) NSLog("%s", "[I/$tag] $message")
     }
 
     actual fun w(tag: String, message: String) {
-        if (enabled) NSLog("[W/$tag] %@", message)
+        if (enabled) NSLog("%s", "[W/$tag] $message")
     }
 
     actual fun e(tag: String, message: String, throwable: Throwable?) {
         if (enabled) {
             if (throwable != null) {
-                NSLog("[E/$tag] %@ - %@", message, throwable.message ?: "Unknown error")
+                NSLog("%s", "[E/$tag] $message - ${throwable.message ?: "Unknown error"}")
             } else {
-                NSLog("[E/$tag] %@", message)
+                NSLog("%s", "[E/$tag] $message")
             }
         }
     }
 
     actual fun v(tag: String, message: String) {
-        if (enabled) NSLog("[V/$tag] %@", message)
+        if (enabled) NSLog("%s", "[V/$tag] $message")
     }
 }

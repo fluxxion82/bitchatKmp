@@ -6,9 +6,10 @@ import com.bitchat.repo.repositories.TorRepo
 /**
  * Answers "is this relay socket really going over Tor?" for the relay log lines.
  *
- * [TorRepo.isProxyReady] is the whole answer: it is false whenever Tor is off, still bootstrapping,
- * unavailable because the native library is missing, or - on the Apple and Linux engines - because
- * nothing in this build can be routed through a SOCKS proxy in the first place.
+ * [TorRepo.isProxyReady] is the manager's side of the answer: it is false whenever Tor is off, still
+ * bootstrapping, stopped in the background, unavailable because the native library is missing, or
+ * on an engine that cannot be routed through a SOCKS proxy. Whether a particular socket was opened
+ * through Tor is the route provenance of the routed client that owns it.
  */
 class TorRelayProxyStatus(
     private val torRepo: TorRepo,

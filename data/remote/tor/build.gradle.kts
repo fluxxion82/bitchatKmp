@@ -202,6 +202,27 @@ tasks.named<Test>("jvmTest") {
     systemProperty("compose.application.resources.dir", missingLibDir.get().asFile.absolutePath)
 }
 
+// Apple tests (macosArm64Test, iosSimulatorArm64Test) drive the manager with a fake Arti. The
+// opt-in TorManagerArtiSmokeTest bootstraps the real, statically linked Arti over the network when
+// TOR_INTEGRATION=1 is in the environment; it prints why it skipped otherwise.
+val torIntegration = providers.environmentVariable("TOR_INTEGRATION").orNull
+tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>().configureEach {
+    testLogging {
+        showStandardStreams = true
+        events("passed", "skipped", "failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
+    if (torIntegration != null) {
+        environment("TOR_INTEGRATION", torIntegration)
+        // `simctl spawn` forwards only SIMCTL_CHILD_-prefixed variables to the simulator process.
+        if (this is org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest) {
+            environment("SIMCTL_CHILD_TOR_INTEGRATION", torIntegration)
+        }
+        // A bootstrap against the live network is an observation, never satisfied by an earlier run.
+        doNotTrackState("real Arti smoke always runs")
+    }
+}
+
 
 // Task to check if native Arti libraries exist
 val checkArtiLibraries by tasks.registering {

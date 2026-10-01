@@ -21,9 +21,9 @@ class DisableTor(
          */
         if (routeLifecycle != null) {
             routeLifecycle.transition(waitForDirectRetirements = false) {
-                torRepository.disable()
                 requestedIntent.set(TorMode.OFF)
                 torEventBus.update(TorEvent.ModeChanged)
+                torRepository.disable()
             }
         } else {
             requestedIntent.set(TorMode.OFF)

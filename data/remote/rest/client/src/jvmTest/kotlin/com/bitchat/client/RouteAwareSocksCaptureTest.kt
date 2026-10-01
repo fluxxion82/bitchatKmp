@@ -7,7 +7,7 @@ import com.bitchat.domain.tor.RequestedTorIntent
 import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.domain.tor.model.TorState
 import com.bitchat.domain.tor.model.TorStatus
-import com.bitchat.tor.TorManager
+import com.bitchat.tor.TorRouteSource
 import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.client.request.get
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,7 +16,6 @@ import kotlinx.coroutines.runBlocking
 import java.io.InputStream
 import java.net.ServerSocket
 import java.net.Socket
-import java.nio.file.Files
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -37,11 +36,11 @@ class RouteAwareSocksCaptureTest {
         ServerSocket(0).use { direct ->
             val directThread = acceptDirectConnections(direct, directConnections)
             SocksCapture().use { socks ->
-                val manager = readyTorManager(socks.port)
+                val routeSource = ReadyTorRouteSource(socks.port)
                 val provider = RouteAwareClientProvider(
                     appInformation = AppInformation(Version("test", "test", ""), 1, "test", false),
                     requestedIntent = TorOnIntent,
-                    torManager = manager,
+                    torRouteSource = routeSource,
                 )
                 val destination = "localhost:${direct.localPort}"
 
@@ -65,17 +64,22 @@ class RouteAwareSocksCaptureTest {
         }
     }
 
-    private fun readyTorManager(port: Int): TorManager {
-        val manager = TorManager(Files.createTempDirectory("route-aware-socks").toString())
-        val statusField = TorManager::class.java.getDeclaredField("_statusFlow").apply { isAccessible = true }
-        @Suppress("UNCHECKED_CAST")
-        val status = statusField.get(manager) as MutableStateFlow<TorStatus>
-        TorManager::class.java.getDeclaredField("currentPort").apply {
-            isAccessible = true
-            setInt(manager, port)
-        }
-        status.value = TorStatus(mode = TorMode.ON, running = true, state = TorState.RUNNING, socksPort = port, routeGeneration = 1)
-        return manager
+    private class ReadyTorRouteSource(port: Int) : TorRouteSource {
+        override val statusFlow: StateFlow<TorStatus> = MutableStateFlow(
+            TorStatus(
+                mode = TorMode.ON,
+                running = true,
+                state = TorState.RUNNING,
+                socksPort = port,
+                routeGeneration = 1,
+            ),
+        )
+
+        override val isAvailable: Boolean = true
+
+        override fun getSocksProxyAddress(): Pair<String, Int> = "127.0.0.1" to statusFlow.value.socksPort
+
+        override fun isProxyReady(): Boolean = true
     }
 
     private fun acceptDirectConnections(server: ServerSocket, connections: AtomicInteger): Thread = thread(isDaemon = true) {

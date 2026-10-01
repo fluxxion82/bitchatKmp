@@ -75,6 +75,12 @@ kotlin {
                 implementation(libs.ktor.client.darwin)
             }
         }
+        // Darwin SOCKS capture harness (macosArm64Test, iosSimulatorArm64Test); see the A1 tests.
+        val appleTest by getting {
+            dependencies {
+                implementation(libs.kotlin.test)
+            }
+        }
 
         if (embeddedEnabled) {
             // Linux-specific - uses Curl engine (CIO doesn't support TLS on Native)
@@ -84,5 +90,36 @@ kotlin {
                 }
             }
         }
+    }
+}
+
+// Opt-in public-name leak probe (DarwinPublicLeakProbeTest): -Pbitchat.publicLeakProbe=true. Default
+// runs and verify.sh are unaffected; the probe cases then print one "disabled" line each and return.
+val publicLeakProbe = providers.gradleProperty("bitchat.publicLeakProbe")
+    .map(String::toBoolean)
+    .orElse(false)
+    .get()
+
+// Both native suites bind the leak detector's UDP port on the host loopback, and the configuration
+// cache lets tasks of one project run in parallel: keep the simulator suite after the macOS one.
+tasks.matching { it.name == "iosSimulatorArm64Test" }.configureEach {
+    mustRunAfter(tasks.matching { it.name == "macosArm64Test" })
+}
+
+// The Darwin capture harness reports its leak-detector state on stdout; the gate has to show it.
+tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest>().configureEach {
+    testLogging {
+        showStandardStreams = true
+        events("passed", "skipped", "failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
+    if (publicLeakProbe) {
+        environment("BITCHAT_PUBLIC_LEAK_PROBE", "true")
+        // `simctl spawn` forwards only SIMCTL_CHILD_-prefixed variables to the simulator process.
+        if (this is org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest) {
+            environment("SIMCTL_CHILD_BITCHAT_PUBLIC_LEAK_PROBE", "true")
+        }
+        // A probe run is an observation for a packet capture: never satisfied by an earlier result.
+        doNotTrackState("public leak probe always runs")
     }
 }

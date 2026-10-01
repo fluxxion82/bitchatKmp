@@ -11,6 +11,7 @@ import com.bitchat.domain.tor.model.TorState
 import com.bitchat.domain.tor.model.TorStatus
 import com.bitchat.domain.tor.repository.TorRepository
 import com.bitchat.domain.tor.MutableRequestedTorIntent
+import com.bitchat.repo.tor.TorLifecycleControl
 import com.bitchat.tor.TorManager
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -33,6 +34,7 @@ class TorRepo(
     private val coroutineScopeFacade: CoroutineScopeFacade,
     private val torEventBus: TorEventBus,
     private val engineSupportsTorProxy: Boolean = httpEngineSupportsTorProxy,
+    private val lifecycleCoordinator: TorLifecycleControl? = null,
 ) : TorRepository {
     @Volatile
     private var externalLogLine: RouteEvidence? = null
@@ -99,6 +101,11 @@ class TorRepo(
             println("TorRepo: not starting Tor - this build's HTTP engine cannot use a SOCKS proxy")
             return@withContext
         }
+        lifecycleCoordinator?.let { coordinator ->
+            coordinator.reconcile()
+            updateStartFailure()
+            return@withContext
+        }
         torManager.start()
         // start() reports failure through statusFlow rather than throwing.
         val started = torManager.isAvailable &&
@@ -135,8 +142,17 @@ class TorRepo(
     override suspend fun disable() = withContext(coroutinesContextFacade.io) {
         // Intent is written by the caller before this runs, for the same reason enable() no longer
         // writes it: a slow stop completing after a newer switch-on must not undo it.
-        torManager.stop()
+        lifecycleCoordinator?.reconcile() ?: torManager.stop()
         startFailed = false
+    }
+
+    private suspend fun updateStartFailure() {
+        if (torManager.isAvailable && torManager.statusFlow.value.state != TorState.ERROR) {
+            startFailed = false
+        } else {
+            startFailed = true
+            torEventBus.update(TorEvent.ModeChanged)
+        }
     }
 
     override suspend fun getTorStatus(): TorStatus = withContext(coroutinesContextFacade.io) {

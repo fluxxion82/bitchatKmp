@@ -128,10 +128,12 @@ expect fun getEngine(isDebug: Boolean, torManager: TorManager? = null): HttpClie
  * True when [getEngine] actually routes traffic through the Tor SOCKS proxy once
  * [TorManager.getSocksProxyAddress] reports one.
  *
- * Only the OkHttp (JVM/Android) engine installs a `ProxySelector`; the Darwin and Curl engines
- * ignore the [TorManager] they are handed and always connect directly. Anything that tells the
- * user their traffic is going over Tor has to consult this first, or it will be lying on Apple
- * and Linux targets.
+ * True on every shipped engine today: OkHttp (JVM/Android) through a `ProxySelector`, Curl (Linux)
+ * through `socks5h://` with a forced empty no-proxy list, and Darwin (Apple) through an owned
+ * `NSURLSession` whose configuration carries the SOCKS dictionary. A new engine starts at false
+ * until it is proven the same way; anything that tells the user their traffic is going over Tor
+ * has to consult this first. It says what the engine can do, not that a given socket used Tor:
+ * that is the route provenance carried by each routed client.
  */
 expect val httpEngineSupportsTorProxy: Boolean
 

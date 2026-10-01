@@ -5,4 +5,5 @@ import org.koin.dsl.module
 
 actual val repoModule = module {
     single { BackgroundServiceController() }
+    includes(appleTorLifecycleModule)
 }

@@ -1,6 +1,7 @@
 package com.bitchat.domain.di
 
 import com.bitchat.domain.app.ClearAllData
+import com.bitchat.domain.app.AppForegroundState
 import com.bitchat.domain.app.DisableBackgroundMode
 import com.bitchat.domain.app.DisableBatteryOptimization
 import com.bitchat.domain.app.EnableBackgroundMode
@@ -9,9 +10,7 @@ import com.bitchat.domain.app.GetBackgroundMode
 import com.bitchat.domain.app.SetAppTheme
 import com.bitchat.domain.app.SkipBatteryOptimization
 import com.bitchat.domain.app.eventbus.AppEventBus
-import com.bitchat.domain.app.eventbus.ForegroundEventBus
 import com.bitchat.domain.app.eventbus.InMemoryAppEventBus
-import com.bitchat.domain.app.eventbus.InMemoryForegroundEventBus
 import com.bitchat.domain.base.CoroutineScopeFacade
 import com.bitchat.domain.base.CoroutinesContextFacade
 import com.bitchat.domain.base.DefaultScopeFacade
@@ -138,7 +137,7 @@ val domainModule = module {
 
     single { InitializeApplication(initializers = getKoin().getAll<AppInitializer>().toSet(), contextFacade = get()) }
 
-    single { InMemoryForegroundEventBus() } bind ForegroundEventBus::class
+    single { AppForegroundState() }
     single { InMemoryUserEventBus(contextFacade = get()) } bind UserEventBus::class
 
     single { GetUserState(userRepository = get(), appRepository = get(), connectivityRepository = get()) }

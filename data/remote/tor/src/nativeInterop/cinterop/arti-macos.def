@@ -1,3 +1,6 @@
 headers = arti_ios.h
 staticLibraries = libarti_macos.a
 package = com.bitchat.tor.native
+# The macOS archive is not self-contained like the iOS ones: arti's sysinfo dependency reads the CPU
+# frequency through IOKit, and lzma-sys links the system liblzma instead of bundling it.
+linkerOpts.osx = -framework IOKit -llzma

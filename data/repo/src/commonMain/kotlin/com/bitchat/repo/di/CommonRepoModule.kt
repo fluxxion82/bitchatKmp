@@ -130,6 +130,7 @@ val commonRepoModule = module {
         TorAppInitializer(
             torRepository = get(),
             coroutineScopeFacade = get(),
+            lifecycleCoordinator = getOrNull(),
         )
     } bind AppInitializer::class
     single {
@@ -158,6 +159,7 @@ val commonRepoModule = module {
             coroutinesContextFacade = get(),
             coroutineScopeFacade = get(),
             torEventBus = get(),
+            lifecycleCoordinator = getOrNull(),
         )
     }
     single<TorRepository> { get<TorRepo>() }
