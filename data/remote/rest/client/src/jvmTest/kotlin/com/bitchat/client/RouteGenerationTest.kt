@@ -182,12 +182,15 @@ class RouteGenerationTest {
     fun `a failed Tor retirement never blocks another route policy`() = runBlocking {
         val routes = RouteGenerations()
         var published = false
+        var retirementAttempts = 0
         routes.retainFailedRetirement(blocksTorEnable = false) {
+            retirementAttempts++
             error("Tor Curl teardown completed exceptionally")
         }
 
         routes.transition { published = true }
 
         assertTrue(published, "a retired Tor route cannot prevent policy recovery")
+        assertTrue(retirementAttempts == 0, "a failed Tor retirement was retained instead of discarded")
     }
 }

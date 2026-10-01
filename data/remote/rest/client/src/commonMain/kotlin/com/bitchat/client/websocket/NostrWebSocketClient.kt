@@ -61,7 +61,7 @@ class NostrWebSocketClient(
         return wsClient.isConnected(relayUrl)
     }
 
-    fun shutdown() {
+    suspend fun shutdown() {
         wsClient.shutdown()
     }
 }

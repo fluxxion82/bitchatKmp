@@ -5,7 +5,11 @@ import com.bitchat.client.TorRouteProvenance
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.websocket.Frame
+import io.ktor.websocket.WebSocketExtension
 import io.ktor.websocket.WebSocketSession
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.channels.Channel
 import java.net.ServerSocket
 import java.net.Socket
 import java.lang.reflect.Proxy
@@ -20,12 +24,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.async
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * The retry budget decides whether a relay killed by a policy the user has since changed can come
@@ -168,6 +174,44 @@ class ReconnectBudgetTest {
     }
 
     @Test
+    fun `send failure retires only its still-current session`() = runBlocking {
+        val client = KtorWebSocketClient(routes(HttpClient()))
+        val enteredSend = CompletableDeferred<Unit>()
+        val releaseFailure = CompletableDeferred<Unit>()
+        val failingSession = gatedFailingSendSession(enteredSend, releaseFailure)
+        val replacement = deadSession()
+        val currentRoute = object : TorRouteProvenance {
+            override val usedTorProxy = false
+            override fun isCurrent() = true
+        }
+        val connection = KtorWebSocketClient.WebSocketConnection(
+            url = deadUrl,
+            session = failingSession,
+            route = currentRoute,
+            owner = Any(),
+        )
+        client.activeConnections[deadUrl] = connection
+
+        try {
+            val send = async { client.send(deadUrl, "failure from A") }
+            withTimeout(1_000) { enteredSend.await() }
+            connection.session = replacement
+            connection.route = currentRoute
+            connection.owner = Any()
+            releaseFailure.complete(Unit)
+            send.await()
+
+            assertTrue(
+                connection.session === replacement,
+                "a failure from A retired the newer session B",
+            )
+        } finally {
+            releaseFailure.complete(Unit)
+            client.shutdown()
+        }
+    }
+
+    @Test
     fun `a late old-reader teardown failure neither clears nor reports against its replacement`() = runBlocking {
         val server = ReplacementWebSocketServer()
         val http = HttpClient(CIO) { install(WebSockets) }
@@ -203,9 +247,18 @@ class ReconnectBudgetTest {
             // healthy replacement from new subscriptions.
             assertEquals(failuresBeforeRelease, failures.get(), "an old reader reported failure against its replacement")
         } finally {
-            client.shutdown()
-            http.close()
-            server.close()
+            // The route deliberately waits non-cancellably. Release it before a future joining
+            // shutdown, then close the fixture sockets so neither side can keep a reader alive.
+            routes.releaseOldTeardown.complete(Unit)
+            try {
+                server.close()
+            } finally {
+                try {
+                    client.shutdown()
+                } finally {
+                    http.close()
+                }
+            }
         }
     }
 
@@ -242,9 +295,48 @@ class ReconnectBudgetTest {
             assertTrue(failures.get() >= 1, "the current reader's failure was treated as obsolete")
         } finally {
             routes.releaseOldTeardown.complete(Unit)
+            try {
+                server.close()
+            } finally {
+                try {
+                    client.shutdown()
+                } finally {
+                    http.close()
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `shutdown cancels and joins readers retries and controllers`() = runBlocking {
+        val server = ReplacementWebSocketServer()
+        val http = HttpClient(CIO) { install(WebSockets) }
+        val client = KtorWebSocketClient(routes(http))
+        val opens = AtomicInteger()
+        val listener = object : WebSocketListener {
+            override fun onOpen(url: String, route: TorRouteProvenance) { opens.incrementAndGet() }
+            override fun onMessage(url: String, text: String) = Unit
+            override fun onClosing(url: String, code: Int, reason: String) = Unit
+            override fun onClosed(url: String, code: Int, reason: String) = Unit
+            override fun onFailure(url: String, t: Throwable) = Unit
+        }
+
+        try {
+            client.connect(server.url, listener, maxReconnectAttempts = 1, initialBackoffMs = 10_000)
+            withTimeout(2_000) { server.firstReady.await() }
+            withTimeout(2_000) { while (opens.get() != 1) delay(5) }
+            val reader = client.activeConnections.getValue(server.url).job!!
+
+            withTimeout(2_000) { client.shutdown() }
+
+            assertTrue(reader.isCompleted, "shutdown returned before the reader completed")
+            assertTrue(client.activeConnections.isEmpty(), "shutdown retained connection snapshots")
+            client.connect(server.url, listener)
+            assertFalse(client.isConnecting(server.url), "a terminal client accepted a later connect")
+        } finally {
+            server.close()
             client.shutdown()
             http.close()
-            server.close()
         }
     }
 
@@ -268,6 +360,116 @@ class ReconnectBudgetTest {
             else -> null
         }
     } as WebSocketSession
+
+    private fun gatedFailingSendSession(
+        enteredSend: CompletableDeferred<Unit>,
+        releaseFailure: CompletableDeferred<Unit>,
+    ): WebSocketSession = Proxy.newProxyInstance(
+        KtorWebSocketClient::class.java.classLoader,
+        arrayOf(WebSocketSession::class.java),
+    ) { _, method, _ ->
+        when (method.name) {
+            "getCoroutineContext" -> EmptyCoroutineContext
+            "send" -> runBlocking {
+                enteredSend.complete(Unit)
+                releaseFailure.await()
+                error("A failed after B became current")
+            }
+            else -> null
+        }
+    } as WebSocketSession
+
+    @Test
+    fun `a send while the relay is down does not suppress its reconnect`() = runBlocking {
+        /*
+         * send() used to mint an owner before checking that there was a session to write on. A send
+         * that arrived during reconnect backoff therefore left the controller owned with no worker
+         * and no session - a state both RetryDue and connect() read as "a dial is already in
+         * flight" - so the relay never dialled again.
+         */
+        val client = KtorWebSocketClient(routes(HttpClient()))
+
+        client.connect(deadUrl, listener, maxReconnectAttempts = 6, initialBackoffMs = 250)
+        delay(120) // the first dial has failed; this is inside its backoff
+        val beforeSend = failures.get()
+        assertTrue(beforeSend >= 1, "expected the first dial to fail")
+
+        client.send(deadUrl, "written while the relay is down")
+        delay(700)
+        assertTrue(failures.get() > beforeSend, "a send during backoff suppressed the scheduled retry")
+
+        // And the same state must not make an explicit reconnect a no-op.
+        val beforeExplicit = failures.get()
+        client.connect(deadUrl, listener, maxReconnectAttempts = 1, initialBackoffMs = 1)
+        delay(300)
+        assertTrue(failures.get() > beforeExplicit, "a send during backoff suppressed an explicit connect")
+
+        client.shutdown()
+    }
+
+    @Test
+    fun `shutdown releases a send whose write never completes`() = runBlocking {
+        // The write is handed to the client's scope, and its result comes back as a command. Shutdown
+        // closes that channel and cancels the scope, so without releasing them here the caller of
+        // send() waits for a result that can no longer be delivered.
+        val client = KtorWebSocketClient(routes(HttpClient()))
+        client.activeConnections[deadUrl] = KtorWebSocketClient.WebSocketConnection(
+            url = deadUrl,
+            session = neverReturningSession(),
+            route = currentRoute,
+            owner = Any(),
+        )
+
+        val sending = async { client.send(deadUrl, "never lands") }
+        delay(150)
+        assertFalse(sending.isCompleted, "the fixture's write completed; it must stay suspended")
+
+        withTimeout(5.seconds) { client.shutdown() }
+        withTimeout(5.seconds) { sending.await() }
+    }
+
+    @Test
+    fun `two shutdowns both return`() = runBlocking {
+        // A second caller used to see the terminal flag, take no controllers, and cancel the scope out
+        // from under the first caller, which was still awaiting its controllers' acknowledgement. The
+        // window is small: this does NOT reliably reproduce that race, so green here is a guard
+        // against the deadlock shape returning, not proof that the race is gone.
+        val client = KtorWebSocketClient(routes(HttpClient()))
+        client.connect(deadUrl, listener, maxReconnectAttempts = 0, initialBackoffMs = 1)
+        delay(50)
+
+        withTimeout(10.seconds) {
+            val first = async { client.shutdown() }
+            val second = async { client.shutdown() }
+            first.await()
+            second.await()
+        }
+    }
+
+    private val currentRoute = object : TorRouteProvenance {
+        override val usedTorProxy = false
+        override fun isCurrent() = true
+    }
+
+    /**
+     * A session whose write suspends until cancelled, so no send result can come back on its own.
+     * The suspension must be cancellable: an uncancellable one would hang the scope's own join, and
+     * the point here is what happens to the caller, not to the scope.
+     */
+    private class StuckSession : WebSocketSession {
+        override val coroutineContext = EmptyCoroutineContext
+        override val incoming = Channel<Frame>()
+        override val outgoing = Channel<Frame>()
+        override val extensions: List<WebSocketExtension<*>> = emptyList()
+        override var masking: Boolean = false
+        override var maxFrameSize: Long = Long.MAX_VALUE
+        override suspend fun send(frame: Frame) = awaitCancellation()
+        override suspend fun flush() = Unit
+        @Deprecated("Use cancel() instead.", replaceWith = ReplaceWith("cancel()", "kotlinx.coroutines.cancel"))
+        override fun terminate() = Unit
+    }
+
+    private fun neverReturningSession(): WebSocketSession = StuckSession()
 
     private class LateFailingRoutes(private val client: HttpClient) : WebSocketRouteProvider {
         private var calls = 0

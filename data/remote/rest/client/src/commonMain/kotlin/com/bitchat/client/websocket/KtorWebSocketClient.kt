@@ -1,26 +1,44 @@
 package com.bitchat.client.websocket
 
+import com.bitchat.client.TorRouteProvenance
 import com.bitchat.client.WebSocketRouteProvider
-import com.bitchat.domain.base.logBody
-import io.ktor.client.plugins.websocket.*
+import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.websocket.*
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.internal.SynchronizedObject
+import kotlinx.coroutines.internal.synchronized
 import kotlin.math.pow
 import kotlin.time.Duration.Companion.seconds
 
-internal class KtorWebSocketClient(
-    private val routeProvider: WebSocketRouteProvider,
-) {
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+/** One controller serializes all mutable state for one URL. */
+@OptIn(InternalCoroutinesApi::class)
+internal class KtorWebSocketClient(private val routeProvider: WebSocketRouteProvider) {
+    private val scopeJob = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.Default + scopeJob)
+    private val registryLock = SynchronizedObject()
+    private val controllers = mutableMapOf<String, Controller>()
+    private var terminal = false
+
+    /** The one [shutdown] operation; later callers join it instead of running their own. */
+    private var shuttingDown: Job? = null
+
+    /** Outlives [scope], which [shutdown] cancels, and belongs to no caller that may be cancelled. */
+    private val lifecycleScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    /** Synchronous snapshot; only its owning [Controller] mutates lifecycle state. */
     internal val activeConnections = mutableMapOf<String, WebSocketConnection>()
 
     internal data class ReconnectPolicy(
@@ -37,23 +55,34 @@ internal class KtorWebSocketClient(
         var job: Job? = null,
         var reconnectJob: Job? = null,
         var session: WebSocketSession? = null,
-        var route: com.bitchat.client.TorRouteProvenance? = null,
+        var route: TorRouteProvenance? = null,
         internal var reconnectPolicy: ReconnectPolicy? = null,
-        /** Identity of the reader allowed to report on this connection; replaced per launch. */
         internal var owner: Any? = null,
+        /** The newest owner allowed to reach listener code. */
+        internal var callbackOwner: Any? = null,
     )
 
-    /**
-     * [resetBudget] distinguishes a caller asking for a connection from the internal retry loop
-     * asking again.
-     *
-     * The budget resets only on success, so once ten attempts were spent the connection stayed
-     * dead for the life of the process: a later call would try once and then decline to reschedule.
-     * That is survivable when failures are transient, and not survivable when the cause was a
-     * policy the user has since changed -- switching Tor off produced no event that could revive
-     * the relay. An explicit call is a fresh start; the retry loop passes false so its ceiling
-     * still means something.
-     */
+    private sealed interface Command {
+        data class Connect(val policy: ReconnectPolicy, val resetBudget: Boolean) : Command
+        data class Opened(val owner: Any, val session: WebSocketSession, val route: TorRouteProvenance) : Command
+        data class ReaderEnded(val owner: Any, val session: WebSocketSession?, val error: Throwable?) : Command
+        data class Message(val owner: Any, val session: WebSocketSession, val text: String) : Command
+        data class SendRequested(val message: String, val completed: CompletableDeferred<Unit>) : Command
+        data class SendResult(val owner: Any, val session: WebSocketSession, val error: Throwable?, val completed: CompletableDeferred<Unit>) : Command
+        data class Disconnect(val completed: CompletableDeferred<Unit>) : Command
+        data class RetryDue(val token: Any, val policy: ReconnectPolicy) : Command
+        data class Shutdown(val completed: CompletableDeferred<Unit>) : Command
+    }
+
+    private data class Callback(val url: String, val owner: Any, val invoke: () -> Unit)
+    private val callbacks = Channel<Callback>(Channel.UNLIMITED)
+    private val callbackDispatcher = scope.launch {
+        for (callback in callbacks) {
+            // Callbacks are ordered here and rejected again immediately before NostrRelay can see them.
+            if (isCallbackCurrent(callback.url, callback.owner)) runCatching(callback.invoke)
+        }
+    }
+
     fun connect(
         url: String,
         listener: WebSocketListener,
@@ -63,321 +92,333 @@ internal class KtorWebSocketClient(
         backoffMultiplier: Double = 2.0,
         resetBudget: Boolean = true,
     ) {
-        println("KtorWebSocketClient: connect() marker v2025-12-31b for $url")
-        val connection = activeConnections.getOrPut(url) {
-            WebSocketConnection(url)
-        }
-        if (resetBudget && connection.reconnectAttempts > 0) {
-            println("KtorWebSocketClient: resetting retry budget for $url")
-            connection.reconnectAttempts = 0
-        }
-        connection.reconnectPolicy = ReconnectPolicy(
-            listener = listener,
-            maxReconnectAttempts = maxReconnectAttempts,
-            initialBackoffMs = initialBackoffMs,
-            maxBackoffMs = maxBackoffMs,
-            backoffMultiplier = backoffMultiplier,
+        controller(url)?.commands?.trySend(
+            Command.Connect(ReconnectPolicy(listener, maxReconnectAttempts, initialBackoffMs, maxBackoffMs, backoffMultiplier), resetBudget),
         )
-
-        // A live socket is reusable only while its route provenance remains current.
-        if (connection.session?.isActive == true) {
-            if (connection.route?.isCurrent() == true) {
-                println("⚠️ KtorWebSocketClient: Already connected to $url, skipping duplicate connect()")
-                return
-            }
-            println("KtorWebSocketClient: retiring stale route for $url before reconnecting")
-            retireConnection(connection)
-        }
-
-        // ADDED: Early return if connection already in progress
-        if (connection.job?.isActive == true && connection.session == null) {
-            println("⚠️ KtorWebSocketClient: Connection to $url already in progress, skipping duplicate connect()")
-            return
-        }
-
-        // Only cancel jobs if we're definitely reconnecting (failed or not started)
-        connection.job?.cancel()
-        connection.reconnectJob?.cancel()
-
-        val owner = Any()
-        connection.owner = owner
-        connection.job = scope.launch {
-            var session: WebSocketSession? = null
-
-            // True once a newer launch or a retirement took this connection over. An obsolete
-            // reader must not report closure or failure: Nostr would mark the replacement's relay
-            // disconnected. Ownership is set before launch, so a stored session left behind by an
-            // unwinding older reader cannot make the current reader look obsolete.
-            fun superseded(): Boolean = connection.owner !== owner
-
-            try {
-                println("KtorWebSocketClient: 🔌 Attempting connection to $url")
-                routeProvider.useWebSocketRoute { client, route ->
-                    session = withTimeoutOrNull(15.seconds) {
-                        client.webSocketSession(url)
-                    }
-                    if (session == null) {
-                        println("KtorWebSocketClient: ⏳ WebSocket connect timeout for $url")
-                        if (!superseded()) {
-                            listener.onFailure(url, IllegalStateException("WebSocket connection timeout"))
-                        }
-                        return@useWebSocketRoute
-                    }
-
-                    val opened = session!!
-                    check(route.isCurrent()) { "WebSocket route was retired before session publication" }
-                    println("KtorWebSocketClient: ✅ WebSocket session established for $url")
-                    connection.reconnectAttempts = 0
-                    connection.session = opened
-                    connection.route = route
-                    listener.onOpen(url, route)
-
-                    for (frame in opened.incoming) {
-                        if (!scope.isActive) break
-
-                        when (frame) {
-                            is Frame.Text -> {
-                                try {
-                                    val messageText = frame.readText()
-                                    listener.onMessage(url, messageText)
-                                    println("✅ KtorWebSocketClient: Message handler completed for $url, Message: ${logBody(messageText)}")
-                                } catch (e: Exception) {
-                                    listener.onFailure(url, e)
-                                }
-                            }
-
-                            is Frame.Close -> {
-                                val closeReason = frame.readReason()
-                                val code = closeReason?.code?.toInt() ?: 1000
-                                val reason = closeReason?.message ?: "Unknown"
-                                if (!superseded()) {
-                                    listener.onClosing(url, code, reason)
-                                    listener.onClosed(url, code, reason)
-                                }
-                                if (connection.session === opened) {
-                                    connection.session = null
-                                    connection.route = null
-                                }
-                                return@useWebSocketRoute
-                            }
-
-                            else -> Unit
-                        }
-                    }
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                println("KtorWebSocketClient: ❌ Connection failed for $url: ${e.message}")
-                println("KtorWebSocketClient: Exception type: ${e::class.simpleName}")
-                e.printStackTrace()
-                // This reader may have been retired while a replacement was connecting. Never
-                // erase that replacement merely because the old route's teardown later failed.
-                if (superseded()) {
-                    println("KtorWebSocketClient: ignoring failure from a superseded reader for $url")
-                    return@launch
-                }
-                if (connection.session === session) {
-                    connection.session = null
-                    connection.route = null
-                }
-                listener.onFailure(url, e)
-            } finally {
-                if (connection.session === session) {
-                    connection.session = null
-                    connection.route = null
-                }
-                // A cancelled reader does not cancel Ktor's client-owned websocket job. Always
-                // close the owned session before returning the route lease, including cancellation.
-                session?.let { opened ->
-                    runCatching { opened.close(CloseReason(1000, "Session closed")) }
-                }
-            }
-
-            // Schedule reconnection if we haven't exceeded max attempts
-            if (connection.reconnectAttempts < maxReconnectAttempts && scope.isActive) {
-                println("KtorWebSocketClient: 🔄 Scheduling reconnection (attempt ${connection.reconnectAttempts + 1}/$maxReconnectAttempts)")
-                scheduleReconnection(
-                    url = url,
-                    listener = listener,
-                    connection = connection,
-                    maxReconnectAttempts = maxReconnectAttempts,
-                    initialBackoffMs = initialBackoffMs,
-                    maxBackoffMs = maxBackoffMs,
-                    backoffMultiplier = backoffMultiplier
-                )
-            }
-        }
     }
 
-    private fun scheduleReconnection(
-        url: String,
-        listener: WebSocketListener,
-        connection: WebSocketConnection,
-        maxReconnectAttempts: Int,
-        initialBackoffMs: Long,
-        maxBackoffMs: Long,
-        backoffMultiplier: Double
-    ) {
-        if (connection.reconnectJob?.isActive == true) return
-        connection.reconnectAttempts++
-
-        // Calculate backoff delay with exponential growth
-        val backoffDelay = (initialBackoffMs * backoffMultiplier.pow(connection.reconnectAttempts - 1.0))
-            .toLong()
-            .coerceAtMost(maxBackoffMs)
-
-        connection.reconnectJob = scope.launch {
-            delay(backoffDelay)
-            if (scope.isActive) {
-                connect(
-                    url = url,
-                    listener = listener,
-                    maxReconnectAttempts = maxReconnectAttempts,
-                    initialBackoffMs = initialBackoffMs,
-                    maxBackoffMs = maxBackoffMs,
-                    backoffMultiplier = backoffMultiplier,
-                    // The retry loop must not refill its own budget.
-                    resetBudget = false,
-                )
-            }
-        }
-    }
-
-    /**
-     * Send a text message over the WebSocket connection.
-     * Requires an active connection session.
-     */
     suspend fun send(url: String, message: String) {
-        try {
-//            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-//            println("📤 KtorWebSocketClient.send STARTED")
-//            println("   Relay URL: $url")
-//            println("   Message length: ${message.length} chars")
-//            println("   Message preview: ${message.take(100)}${if (message.length > 100) "..." else ""}")
-//            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
-            val connection = activeConnections[url]
-            if (connection == null) {
-                println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                println("❌ KtorWebSocketClient.send FAILED")
-                println("   Reason: No active connection found for $url")
-                println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                return
-            }
-
-            val session = connection.session
-            if (session == null) {
-                println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                println("❌ KtorWebSocketClient.send FAILED")
-                println("   Reason: No active session for $url")
-                println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                return
-            }
-
-            if (connection.route?.isCurrent() != true) {
-                println("KtorWebSocketClient.send refused: route for $url was retired")
-                try {
-                    session.close(CloseReason(1000, "Route retired"))
-                } catch (_: Exception) {
-                    // The cancelled reader also closes its owned session in its finally block.
-                }
-                retireConnection(connection)
-                return
-            }
-
-            session.send(Frame.Text(message))
-
-//            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-//            println("✅ KtorWebSocketClient.send COMPLETED")
-//            println("   Successfully sent to $url")
-//            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        } catch (e: Exception) {
-            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            println("❌ KtorWebSocketClient.send EXCEPTION")
-            println("   Relay URL: $url")
-            println("   Error: ${e.message}")
-            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            e.printStackTrace()
-            activeConnections[url]?.let(::retireConnection)
-        }
+        val completion = CompletableDeferred<Unit>()
+        val controller = controller(url) ?: return
+        // A shutdown between taking the controller and enqueueing closes the channel: nothing will
+        // ever answer a rejected request, so do not wait for an answer.
+        if (controller.commands.trySend(Command.SendRequested(message, completion)).isSuccess) completion.await()
     }
 
-    /** Cancels exactly the reader that owns this stale session, never another relay's reader. */
-    private fun retireConnection(connection: WebSocketConnection) {
-        connection.owner = null
-        connection.session = null
-        connection.route = null
-        connection.reconnectJob?.cancel()
-        connection.reconnectJob = null
-        val reader = connection.job
-        connection.job = null
-        reader?.cancel()
-        connection.reconnectPolicy?.let { policy ->
-            scheduleReconnection(
-                url = connection.url,
-                listener = policy.listener,
-                connection = connection,
-                maxReconnectAttempts = policy.maxReconnectAttempts,
-                initialBackoffMs = policy.initialBackoffMs,
-                maxBackoffMs = policy.maxBackoffMs,
-                backoffMultiplier = policy.backoffMultiplier,
-            )
-        }
-    }
-
-    /**
-     * Disconnect from a WebSocket URL.
-     */
     suspend fun disconnect(url: String) {
-        val connection = activeConnections.remove(url) ?: return
-        connection.owner = null
-        connection.reconnectJob?.cancelAndJoin()
+        val completion = CompletableDeferred<Unit>()
+        val controller = synchronized(registryLock) { controllers[url] } ?: return
+        if (controller.commands.trySend(Command.Disconnect(completion)).isSuccess) completion.await()
+    }
 
-        try {
-            /*
-             * Close the session we hold. This used to dial a brand new WebSocket purely so it
-             * could close it -- which achieved nothing, and under Tor enforcement is itself an
-             * outbound connection attempt made while disconnecting.
-             */
-            connection.session?.close(CloseReason(CloseReason.Codes.NORMAL, "Normal closure"))
-        } catch (e: Exception) {
-            // Already closed, or the session never opened.
-        } finally {
-            connection.session = null
-            connection.route = null
-            connection.job?.cancelAndJoin()
+    fun isConnected(url: String): Boolean = synchronized(registryLock) {
+        activeConnections[url]?.let { it.session?.isActive == true && it.route?.isCurrent() == true } == true
+    }
+
+    fun isConnecting(url: String): Boolean = synchronized(registryLock) {
+        activeConnections[url]?.let { it.job?.isActive == true && it.session == null } == true
+    }
+
+    /**
+     * Terminal external-owner operation: closes sessions, cancels every controller/worker and
+     * joins the client scope. A descendant must request this from outside its own scope instead
+     * of awaiting itself.
+     */
+    suspend fun shutdown() {
+        // One shutdown operation, awaited by every caller, running in a scope of its own. It must not
+        // belong to any caller: a caller cancelled midway would otherwise leave the registry populated
+        // and the worker scope alive while later callers returned as if shutdown had finished. It also
+        // must not belong to [scope], which this very operation cancels.
+        val running = synchronized(registryLock) {
+            shuttingDown ?: lifecycleScope.launch(start = CoroutineStart.LAZY) { runShutdown() }
+                .also { shuttingDown = it }
+        }
+        running.start()
+        running.join()
+    }
+
+    private suspend fun runShutdown() {
+        val pending = synchronized(registryLock) {
+            terminal = true
+            activeConnections.values.forEach { it.callbackOwner = null }
+            activeConnections.clear()
+            controllers.values.toList()
+        }
+        val settled = pending.map { controller ->
+            CompletableDeferred<Unit>().also { controller.commands.trySend(Command.Shutdown(it)) }
+        }
+        settled.forEach { it.await() }
+        callbacks.close()
+        scopeJob.cancel()
+        scopeJob.join()
+        synchronized(registryLock) {
+            controllers.clear()
+            activeConnections.clear()
         }
     }
 
-    /**
-     * Check if connected to a WebSocket URL.
-     */
-    fun isConnected(url: String): Boolean {
-        val connection = activeConnections[url] ?: return false
-        return connection.session?.isActive == true && connection.route?.isCurrent() == true
+    private fun controller(url: String): Controller? = synchronized(registryLock) {
+        if (terminal) return@synchronized null
+        controllers.getOrPut(url) {
+            // Registration and terminal admission share the registry lock.
+            val snapshot = activeConnections[url] ?: WebSocketConnection(url).also { activeConnections[url] = it }
+            Controller(url, snapshot)
+        }
     }
 
-    /**
-     * Check if a connection is currently in progress for a WebSocket URL.
-     * Returns true if a connection job is active but the session is not yet established.
-     */
-    fun isConnecting(url: String): Boolean {
-        val connection = activeConnections[url] ?: return false
-        // Connection is "connecting" if job is active but session is not yet established
-        return connection.job?.isActive == true && connection.session == null
+    private fun isCallbackCurrent(url: String, owner: Any): Boolean = synchronized(registryLock) {
+        !terminal && activeConnections[url]?.callbackOwner === owner
     }
 
-    /**
-     * Close all active connections and cancel the scope.
-     */
-    fun shutdown() {
-        scope.launch {
-            activeConnections.values.forEach { connection ->
-                connection.job?.cancel()
-                connection.reconnectJob?.cancel()
+    private inner class Controller(private val url: String, private val connection: WebSocketConnection) {
+        val commands = Channel<Command>(Channel.UNLIMITED)
+        val job = scope.launch { for (command in commands) handle(command) }
+
+        private var owner: Any? = connection.owner
+        private var session: WebSocketSession? = connection.session
+        private var route: TorRouteProvenance? = connection.route
+        private var worker: Job? = null
+        private var retry: Job? = null
+        private var retryToken: Any? = null
+        private var policy: ReconnectPolicy? = connection.reconnectPolicy
+        private var explicitlyDisconnected = false
+
+        /** Completions of writes handed to [scope], owed a result. Touched only on this controller. */
+        private val pendingSends = mutableListOf<CompletableDeferred<Unit>>()
+
+        private suspend fun handle(command: Command) {
+            when (command) {
+                is Command.Connect -> connect(command.policy, command.resetBudget)
+                is Command.Opened -> opened(command)
+                is Command.ReaderEnded -> readerEnded(command)
+                is Command.Message -> message(command)
+                is Command.SendRequested -> send(command)
+                is Command.SendResult -> sendResult(command)
+                is Command.Disconnect -> {
+                    explicitlyDisconnected = true
+                    policy = null
+                    retire(false)
+                    removeSnapshot()
+                    command.completed.complete(Unit)
+                }
+                is Command.RetryDue -> if (!explicitlyDisconnected && retryToken === command.token && owner == null && session == null) {
+                    retry = null
+                    retryToken = null
+                    startWorker(command.policy)
+                }
+                is Command.Shutdown -> {
+                    explicitlyDisconnected = true
+                    policy = null
+                    retire(false)
+                    // Closing the channel and cancelling the scope means no SendResult can arrive for a
+                    // write still in flight, so release its caller here instead of leaving it awaiting.
+                    pendingSends.forEach { it.complete(Unit) }
+                    pendingSends.clear()
+                    commands.close()
+                    command.completed.complete(Unit)
+                }
             }
-            activeConnections.clear()
+        }
+
+        private fun connect(newPolicy: ReconnectPolicy, resetBudget: Boolean) {
+            explicitlyDisconnected = false
+            policy = newPolicy
+            if (resetBudget) connection.reconnectAttempts = 0
+            if (session?.isActive == true && route?.isCurrent() == true) {
+                publishSnapshot()
+                return
+            }
+            if (owner != null && (session == null || session?.isActive == true)) return // duplicate Connect during a dial/live read
+            retire(false)
+            startWorker(newPolicy)
+        }
+
+        private fun startWorker(newPolicy: ReconnectPolicy) {
+            if (explicitlyDisconnected || terminal) return
+            retry?.cancel()
+            retry = null
+            retryToken = null
+            val newOwner = Any()
+            owner = newOwner // Ownership exists before dial: failures before publication are owner-based.
+            session = null
+            route = null
+            publishSnapshot()
+            worker = scope.launch {
+                var opened: WebSocketSession? = null
+                var reported = false
+                try {
+                    // This route-owning worker spans dial, reader, close, and provider engine retirement.
+                    routeProvider.useWebSocketRoute { client, leasedRoute ->
+                        opened = withTimeoutOrNull(15.seconds) { client.webSocketSession(url) }
+                        val established = opened
+                        if (established == null) {
+                            commands.trySend(Command.ReaderEnded(newOwner, null, IllegalStateException("WebSocket connection timeout")))
+                            reported = true
+                            return@useWebSocketRoute
+                        }
+                        commands.trySend(Command.Opened(newOwner, established, leasedRoute))
+                        for (frame in established.incoming) {
+                            when (frame) {
+                                is Frame.Text -> commands.trySend(Command.Message(newOwner, established, frame.readText()))
+                                is Frame.Close -> {
+                                    commands.trySend(Command.ReaderEnded(newOwner, established, null))
+                                    reported = true
+                                    return@useWebSocketRoute
+                                }
+                                else -> Unit
+                            }
+                        }
+                        if (!reported) {
+                            // Report reader completion before route-provider retirement can block.
+                            commands.trySend(Command.ReaderEnded(newOwner, established, null))
+                            reported = true
+                        }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    commands.trySend(Command.ReaderEnded(newOwner, opened, error))
+                    reported = true
+                } finally {
+                    if (!reported) commands.trySend(Command.ReaderEnded(newOwner, opened, null))
+                    opened?.let { stale -> runCatching { stale.close(CloseReason(CloseReason.Codes.NORMAL, "Session closed")) } }
+                }
+            }
+            publishSnapshot()
+        }
+
+        private fun opened(command: Command.Opened) {
+            if (owner !== command.owner || explicitlyDisconnected || !command.route.isCurrent()) {
+                close(command.session, "Superseded")
+                return
+            }
+            session = command.session
+            route = command.route
+            connection.reconnectAttempts = 0
+            connection.callbackOwner = command.owner
+            publishSnapshot()
+            callback(command.owner) { policy?.listener?.onOpen(url, command.route) }
+        }
+
+        private fun readerEnded(command: Command.ReaderEnded) {
+            if (owner !== command.owner || (command.session != null && session != null && session !== command.session)) {
+                command.session?.let { close(it, "Superseded") }
+                return
+            }
+            connection.callbackOwner = command.owner
+            val listener = policy?.listener
+            if (command.error != null) callback(command.owner) { listener?.onFailure(url, command.error) }
+            session = null
+            route = null
+            owner = null
+            worker = null
+            publishSnapshot()
+            if (!explicitlyDisconnected) scheduleRetry()
+        }
+
+        private fun message(command: Command.Message) {
+            if (owner === command.owner && session === command.session && !explicitlyDisconnected) {
+                callback(command.owner) { policy?.listener?.onMessage(url, command.text) }
+            }
+        }
+
+        private fun send(command: Command.SendRequested) {
+            // A request that queued behind Disconnect or Shutdown is answered here and nowhere else:
+            // retire() leaves the published snapshot alone once terminal, so the fallback below could
+            // still find a session, and its result could no longer come back through a closed channel.
+            if (explicitlyDisconnected) {
+                command.completed.complete(Unit)
+                return
+            }
+            // The snapshot fallback preserves the old, intentionally injected JVM-session tests;
+            // production writes these fields only from this controller.
+            val capturedSession = session ?: connection.session
+            if (capturedSession == null) {
+                // Nothing to write on. Minting an owner here would leave this controller owned with
+                // no worker and no session, which RetryDue and connect() both read as a dial already
+                // in flight: the relay would then never reconnect.
+                command.completed.complete(Unit)
+                return
+            }
+            val capturedOwner = owner ?: connection.owner ?: Any().also {
+                owner = it
+                connection.owner = it
+            }
+            if ((route ?: connection.route)?.isCurrent() != true) {
+                retire(true)
+                command.completed.complete(Unit)
+                return
+            }
+            pendingSends += command.completed
+            scope.launch {
+                val error = runCatching { capturedSession.send(Frame.Text(command.message)) }.exceptionOrNull()
+                commands.trySend(Command.SendResult(capturedOwner, capturedSession, error, command.completed))
+            }
+        }
+
+        private fun sendResult(command: Command.SendResult) {
+            pendingSends -= command.completed
+            if (command.error != null) {
+                // A's send cannot retire B: both the owner and captured session must still match.
+                if (connection.owner === command.owner && connection.session === command.session) retire(true)
+                else close(command.session, "Obsolete send failure")
+            }
+            command.completed.complete(Unit)
+        }
+
+        private fun retire(scheduleRetry: Boolean) {
+            val retiringSession = session
+            owner = null
+            session = null
+            route = null
+            (worker ?: connection.job)?.cancel()
+            worker = null
+            retry?.cancel()
+            retry = null
+            retryToken = null
+            retiringSession?.let { close(it, "Retired") }
+            publishSnapshot()
+            if (scheduleRetry && !explicitlyDisconnected) scheduleRetry(force = true)
+        }
+
+        private fun scheduleRetry(force: Boolean = false) {
+            val saved = policy ?: return
+            if ((!force && connection.reconnectAttempts >= saved.maxReconnectAttempts) || retry?.isActive == true || terminal) return
+            connection.reconnectAttempts++
+            val backoff = (saved.initialBackoffMs * saved.backoffMultiplier.pow(connection.reconnectAttempts - 1.0))
+                .toLong().coerceAtMost(saved.maxBackoffMs)
+            val token = Any()
+            retryToken = token
+            retry = scope.launch {
+                delay(backoff)
+                commands.trySend(Command.RetryDue(token, saved))
+            }
+            publishSnapshot()
+        }
+
+        private fun close(session: WebSocketSession, reason: String) {
+            scope.launch { runCatching { session.close(CloseReason(CloseReason.Codes.NORMAL, reason)) } }
+        }
+
+        private fun callback(callbackOwner: Any, block: () -> Unit) {
+            callbacks.trySend(Callback(url, callbackOwner, block))
+        }
+
+        private fun publishSnapshot() = synchronized(registryLock) {
+            if (!terminal && !explicitlyDisconnected) {
+                connection.owner = owner
+                connection.session = session
+                connection.route = route
+                connection.job = worker
+                connection.reconnectJob = retry
+                connection.reconnectPolicy = policy
+                activeConnections[url] = connection
+            }
+        }
+
+        private fun removeSnapshot() = synchronized(registryLock) {
+            connection.callbackOwner = null
+            activeConnections.remove(url)
         }
     }
 }

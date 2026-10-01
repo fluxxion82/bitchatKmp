@@ -88,6 +88,9 @@ kotlin {
                 implementation("org.jetbrains.kotlin:kotlin-test-junit")
                 implementation(project(":data:remote:tor"))
                 implementation("io.mockk:mockk:1.14.7")
+                // The production JVM engine. RelayTransportRecoveryIntegrationTest's Tor route needs
+                // it: CIO ignores a SOCKS proxy, so only OkHttp actually dials one.
+                implementation(libs.ktor.client.okhttp)
 
             }
         }
