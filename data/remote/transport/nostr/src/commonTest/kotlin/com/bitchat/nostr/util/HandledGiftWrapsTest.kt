@@ -93,7 +93,7 @@ class HandledGiftWrapsTest {
     }
 
     @Test
-    fun `a set full of fresh ids still delivers the next message, giving up the oldest id`() {
+    fun `a set full of fresh ids still delivers the next message by giving up the oldest id`() {
         val now = 1_000_000L
         val handled = HandledGiftWraps(capacity = 2, retentionSeconds = 100, nowEpochSeconds = { now })
         val first = syntheticGiftWrap("first", createdAt = now)
