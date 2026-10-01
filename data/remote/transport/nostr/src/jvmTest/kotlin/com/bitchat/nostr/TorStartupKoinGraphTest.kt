@@ -12,6 +12,8 @@ import com.bitchat.nostr.di.nostrModule
 import com.bitchat.transport.IdentityStoreState
 import com.bitchat.transport.TransportIdentityProvider
 import com.bitchat.tor.TorManager
+import com.bitchat.tor.TorManagerRouteSource
+import com.bitchat.tor.TorRouteSource
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -52,6 +54,7 @@ class TorStartupKoinGraphTest {
                     single { AppInformation(Version("test", "test", ""), 1, "test", debug = false) }
                     single<RequestedTorIntent> { RequestedIntent(TorMode.ON) }
                     single { torManager }
+                    single<TorRouteSource> { TorManagerRouteSource(torManager) }
                     single<NostrPreferences> { TestNostrPreferences() }
                     single<TransportIdentityProvider> { TestIdentityProvider() }
                 },
