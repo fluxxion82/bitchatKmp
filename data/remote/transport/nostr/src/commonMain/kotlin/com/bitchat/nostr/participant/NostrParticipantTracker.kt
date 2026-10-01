@@ -68,17 +68,23 @@ class NostrParticipantTracker {
         val cutoff = Clock.System.now() - 5.minutes
         val participantsMap = participants[geohash] ?: return 0
 
-        // Remove expired entries using iterator (multiplatform-compatible)
+        // Remove expired entries using iterator (multiplatform-compatible). Read the key and the
+        // timestamp BEFORE removing: Kotlin/Native invalidates the entry on remove(), so touching
+        // it afterwards (as the log line below does) throws ConcurrentModificationException and
+        // killed the app whenever a participant aged out. The JVM's HashMap tolerates it, so this
+        // only ever crashed on iOS and the embedded binaries.
         val iterator = participantsMap.entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
-            if (entry.value < cutoff) {
+            val pubkey = entry.key
+            val lastSeen = entry.value
+            if (lastSeen < cutoff) {
                 iterator.remove()
-                val name = nicknames[entry.key] ?: "anon"
-                val ageSeconds = Clock.System.now().minus(entry.value).inWholeSeconds
+                val name = nicknames[pubkey] ?: "anon"
+                val ageSeconds = Clock.System.now().minus(lastSeen).inWholeSeconds
                 logNostrDebug(
                     "ParticipantTracker",
-                    "Removed stale participant ${shortPubkey(entry.key)} ($name) from geohash=$geohash, lastSeen=${entry.value}, age=${ageSeconds}s"
+                    "Removed stale participant ${shortPubkey(pubkey)} ($name) from geohash=$geohash, lastSeen=$lastSeen, age=${ageSeconds}s"
                 )
             }
         }
