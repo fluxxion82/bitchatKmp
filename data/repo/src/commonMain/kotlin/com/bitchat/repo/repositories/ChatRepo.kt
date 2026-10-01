@@ -429,7 +429,7 @@ class ChatRepo(
         )
 
         nostrRelay.subscribe(
-            subscriptionId = NostrSubscriptionId.sampling(geohash),
+            subscriptionId = NostrSubscriptionId.geohashMessages(geohash),
             filter = filter,
             handler = { event -> handleGeohashEvent(geohash, event) },
             targetRelayUrls = relayUrls.ifEmpty { null },

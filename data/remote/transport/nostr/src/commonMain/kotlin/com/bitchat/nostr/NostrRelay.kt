@@ -350,9 +350,12 @@ class NostrRelay(
         targetRelayUrls: Set<String>? = null,
         originGeohash: String? = null
     ): String {
+        require(subscriptionId.length in 1..NostrSubscriptionId.MAX_LENGTH) {
+            "Subscription ID length ${subscriptionId.length} is outside NIP-01's 1..${NostrSubscriptionId.MAX_LENGTH}-character limit"
+        }
+
         println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         println("🔔 NostrRelay.subscribe")
-        println("   Subscription ID: $subscriptionId")
         println("   Filter kinds: ${filter.kinds}")
         println("   Filter tags: ${filter.tagFilters}")
         println("   Origin geohash: ${originGeohash ?: "none"}")
@@ -395,7 +398,7 @@ class NostrRelay(
                 sendSubscriptionRequest(subscriptionId, filter, relayUrl)
             }
 
-            println("✅ NostrRelay: Subscription $subscriptionId sent to ${relaysToSubscribe.size} relays")
+            println("✅ NostrRelay: Subscription sent to ${relaysToSubscribe.size} relays")
         }
 
         return subscriptionId
