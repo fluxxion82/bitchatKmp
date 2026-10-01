@@ -140,7 +140,7 @@ Release Apple links carry a Kotlin/Native 2.4.20 miscompile workaround (KT-88544
 
 ### 4. Verify
 
-`scripts/verify.sh [quick|desktop|android|ios|embedded|full]` runs the per-platform build gates (default `quick` = `:domain:jvmTest` + desktop compile); the last recorded results are written to `docs/baseline/`, which is untracked and local to each machine.
+`scripts/verify.sh [quick|desktop|android|ios|embedded|tui|desktop-tui|full]` runs the per-platform build gates (default `quick` = `:domain:jvmTest` + desktop compile); the last recorded results are written to `docs/baseline/`, which is untracked and local to each machine.
 On a Homebrew JDK, `desktop`/`full` need `GRADLE_ARGS='-Pcompose.desktop.packaging.checkJdkVendor=false'` (see the `scripts/verify.sh` header).
 
 Agent/editor notes live in the gitignored CLAUDE.md; docs/architecture-summary.md is the tracked source for the module map.
@@ -150,7 +150,7 @@ Agent/editor notes live in the gitignored CLAUDE.md; docs/architecture-summary.m
 | Target | Submodules | Native build script | Homebrew packages | Notes |
 |--------|-----------|---------------------|-------------------|-------|
 | Android | No | No | No | Uses Maven deps (BouncyCastle). Just needs Android SDK. |
-| Desktop (JVM) | No | No | No | Compiles from Maven deps. BLE and native location are macOS-only opt-ins (`-PbleNative=macos`, `-PlocationNative=macos`); Tor needs the Arti native library from `build-all-desktop.sh`. Linux desktop is untested. |
+| Desktop (JVM) | No | No | No | Compiles from Maven deps. Native BLE and native location are macOS-only opt-ins (`-PbleNative=macos`, `-PlocationNative=macos`); Linux gets BLE from BlueZ over D-Bus with no native library. Tor needs the Arti native library from `build-all-desktop.sh`. Linux desktop builds and runs but has never been shipped. |
 | Desktop (macOS native BLE/Tor) | Yes | `build-all-desktop.sh` | `libsodium secp256k1` | Needed for `-PbleNative=macos` and Arti/Tor. |
 | iOS | Yes | `build-all-ios.sh` | No | Builds libsodium, secp256k1, noise-c, Arti from source via Xcode toolchain. |
 | Linux ARM64 (embedded) | Yes | `build-all-linux.sh` | No | Cross-compiles inside Docker. Requires `-Pembedded.enabled=true` (or `embedded.enabled=true` in `~/.gradle/gradle.properties`). |

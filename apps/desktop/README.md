@@ -12,7 +12,8 @@ Linux builds and runs but has never been shipped, and Windows is untried.
 
 `-PbleNative=macos` / `-PlocationNative=macos` build Kotlin/Native dylibs and bundle them as classpath
 resources; `NativeBleLoader` / `NativeLocationLoader` extract and `System.load` them, and both no-op on a
-non-macOS host. Without them the app uses the desktop BLE stubs and IP-based location.
+non-macOS host. Without them macOS falls back to the desktop BLE stubs and IP-based location; Linux
+needs no native library for BLE (BlueZ over D-Bus, see the Linux notes below) and also uses IP-based location.
 
 ## Native libraries and app resources
 
@@ -105,4 +106,9 @@ A missing `libGL.so.1` surfaces as `Skiko RenderException: Cannot create OpenGL 
   uses a different `actual` and writes the same preferences as plain-text files under
   `~/.bitchat/prefs`.
 - **LoRa** over `/dev/ttyUSB*` needs the user in the `dialout` group.
-- There is **no Linux JVM BLE backend**; the mesh transport reports itself unavailable.
+- **BLE on Linux goes through BlueZ over D-Bus**, from the JVM with dbus-java
+  (`LinuxGattClientService` and its siblings under `data/remote/transport/bluetooth`'s
+  `desktopMain/.../linux/`), so there is no native library to build and BlueZ must be running.
+  Advertising and the GATT server have been verified on air. The central role discovers and dials, but
+  a completed outbound link is still unproven. macOS uses the CoreBluetooth dylib from `-PbleNative=macos`
+  instead; any other host gets the stub services, and the mesh transport reports itself unavailable.
