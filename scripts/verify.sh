@@ -2,7 +2,7 @@
 # Verification gates for bitchatKmp.
 #
 #   scripts/verify.sh            # quick: domain tests + desktop compile
-#   scripts/verify.sh desktop    # quick + packageDmg
+#   scripts/verify.sh desktop    # quick + packageDmg + macOS arm64 BLE dylib link (on macOS arm64)
 #   scripts/verify.sh android    # :apps:droid:assembleDebug
 #   scripts/verify.sh ios        # :iosdi debug frameworks for iosSimulatorArm64 and iosArm64 (the only iOS targets)
 #   scripts/verify.sh embedded   # -Pembedded.enabled=true linuxArm64 link + compose resources
@@ -34,7 +34,13 @@ gradle_tui()      { echo "== ./gradlew ${BASE[*]} -Pembedded.enabled=false -Ptui
 
 case "$MODE" in
   quick)    gradle :domain:jvmTest :apps:desktop:compileKotlin :apps:desktop-common:test ;;
-  desktop)  gradle :domain:jvmTest :apps:desktop:compileKotlin :apps:desktop-common:test :apps:desktop:packageDmg ;;
+  desktop)
+    desktop_tasks=(:domain:jvmTest :apps:desktop:compileKotlin :apps:desktop-common:test :apps:desktop:packageDmg)
+    if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
+      desktop_tasks+=(:data:remote:transport:bluetooth:linkDebugSharedMacosArm64)
+    fi
+    gradle "${desktop_tasks[@]}"
+    ;;
   android)  gradle :apps:droid:assembleDebug ;;
   ios)      gradle :iosdi:linkDebugFrameworkIosSimulatorArm64 :iosdi:linkDebugFrameworkIosArm64 ;;
   embedded) gradle_embedded :apps:embedded:linkDebugExecutableLinuxArm64 ;;
@@ -45,6 +51,6 @@ case "$MODE" in
     [[ "$version_line" == bitchat-tui\ * ]] || { echo "desktop-tui --version did not start with bitchat-tui: $version_line" >&2; exit 1; }
     ;;
   full)     for m in desktop android ios embedded tui desktop-tui; do "$SELF" "$m"; done ;;
-  *) echo "usage: $0 [quick|desktop|android|ios|embedded|tui|desktop-tui|full]" >&2; exit 2 ;;
+  *) echo "usage: $0 [quick|desktop|android|ios|embedded|tui|desktop-tui|full] (desktop links the macOS arm64 BLE dylib on macOS arm64)" >&2; exit 2 ;;
 esac
 echo "verify.sh $MODE: OK"

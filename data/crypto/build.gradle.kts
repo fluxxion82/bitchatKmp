@@ -69,19 +69,23 @@ kotlin {
         }
     }
 
-    // Configure cinterops for macOS targets
+    // Configure cinterops for macOS targets. Cinterop ignores linker options, so statically embed
+    // the libraries to keep the dylib free of Homebrew runtime dependencies. These Homebrew paths
+    // are arm64-host-only; macosX64 is not linked on this host.
     listOf(macosX64, macosArm64).forEach { target ->
         target.compilations.getByName("main") {
             cinterops {
                 val libsodium by creating {
                     defFile(project.file("src/nativeInterop/cinterop/libsodium.def"))
                     includeDirs("/opt/homebrew/opt/libsodium/include")
-                    linkerOpts("-L/opt/homebrew/opt/libsodium/lib", "-lsodium")
+                    extraOpts("-libraryPath", "/opt/homebrew/opt/libsodium/lib")
+                    extraOpts("-staticLibrary", "libsodium.a")
                 }
                 val secp256k1 by creating {
                     defFile(project.file("src/nativeInterop/cinterop/secp256k1.def"))
                     includeDirs("/opt/homebrew/opt/secp256k1/include")
-                    linkerOpts("-L/opt/homebrew/opt/secp256k1/lib", "-lsecp256k1")
+                    extraOpts("-libraryPath", "/opt/homebrew/opt/secp256k1/lib")
+                    extraOpts("-staticLibrary", "libsecp256k1.a")
                 }
             }
         }
