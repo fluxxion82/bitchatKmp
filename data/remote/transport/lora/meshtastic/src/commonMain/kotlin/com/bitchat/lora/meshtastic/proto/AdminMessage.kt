@@ -17,6 +17,7 @@ import com.squareup.wire.Syntax.PROTO_3
 import com.squareup.wire.WireField
 import com.squareup.wire.`internal`.JvmField
 import com.squareup.wire.`internal`.countNonNull
+import com.squareup.wire.`internal`.decodeMessageOrMerge
 import kotlin.Any
 import kotlin.AssertionError
 import kotlin.Boolean
@@ -166,11 +167,11 @@ public class AdminMessage(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<AdminMessage> = object : ProtoAdapter<AdminMessage>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      AdminMessage::class, 
-      "type.googleapis.com/meshtastic.AdminMessage", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      AdminMessage::class,
+      "type.googleapis.com/meshtastic.AdminMessage",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: AdminMessage): Int {
@@ -211,24 +212,61 @@ public class AdminMessage(
         var get_config_response: Config? = null
         var set_channel: Channel? = null
         var set_config: Config? = null
+        var payload_variant_tag: Int = 0
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
-            1 -> get_channel_request = ProtoAdapter.UINT32.decode(reader)
-            2 -> get_channel_response = Channel.ADAPTER.decode(reader)
-            5 -> get_config_request = ProtoAdapter.UINT32.decode(reader)
-            6 -> get_config_response = Config.ADAPTER.decode(reader)
-            33 -> set_channel = Channel.ADAPTER.decode(reader)
-            34 -> set_config = Config.ADAPTER.decode(reader)
+            1 -> run {
+              get_channel_request = ProtoAdapter.UINT32.decode(reader)
+              payload_variant_tag = 1
+            }
+
+            2 -> run {
+              if (payload_variant_tag != 2) {
+                get_channel_response = null
+              }
+              get_channel_response = decodeMessageOrMerge(Channel.ADAPTER, reader, get_channel_response)
+              payload_variant_tag = 2
+            }
+
+            5 -> run {
+              get_config_request = ProtoAdapter.UINT32.decode(reader)
+              payload_variant_tag = 5
+            }
+
+            6 -> run {
+              if (payload_variant_tag != 6) {
+                get_config_response = null
+              }
+              get_config_response = decodeMessageOrMerge(Config.ADAPTER, reader, get_config_response)
+              payload_variant_tag = 6
+            }
+
+            33 -> run {
+              if (payload_variant_tag != 33) {
+                set_channel = null
+              }
+              set_channel = decodeMessageOrMerge(Channel.ADAPTER, reader, set_channel)
+              payload_variant_tag = 33
+            }
+
+            34 -> run {
+              if (payload_variant_tag != 34) {
+                set_config = null
+              }
+              set_config = decodeMessageOrMerge(Config.ADAPTER, reader, set_config)
+              payload_variant_tag = 34
+            }
+
             else -> reader.readUnknownField(tag)
           }
         }
         return AdminMessage(
-          get_channel_request = get_channel_request,
-          get_channel_response = get_channel_response,
-          get_config_request = get_config_request,
-          get_config_response = get_config_response,
-          set_channel = set_channel,
-          set_config = set_config,
+          get_channel_request = if (payload_variant_tag == 1) get_channel_request else null,
+          get_channel_response = if (payload_variant_tag == 2) get_channel_response else null,
+          get_config_request = if (payload_variant_tag == 5) get_config_request else null,
+          get_config_response = if (payload_variant_tag == 6) get_config_response else null,
+          set_channel = if (payload_variant_tag == 33) set_channel else null,
+          set_config = if (payload_variant_tag == 34) set_config else null,
           unknownFields = unknownFields
         )
       }

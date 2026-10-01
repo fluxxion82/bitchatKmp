@@ -16,6 +16,7 @@ import com.squareup.wire.ReverseProtoWriter
 import com.squareup.wire.Syntax.PROTO_3
 import com.squareup.wire.WireField
 import com.squareup.wire.`internal`.JvmField
+import com.squareup.wire.`internal`.decodeMessageOrMerge
 import kotlin.Any
 import kotlin.AssertionError
 import kotlin.Boolean
@@ -170,11 +171,11 @@ public class NodeInfo(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<NodeInfo> = object : ProtoAdapter<NodeInfo>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      NodeInfo::class, 
-      "type.googleapis.com/meshtastic.NodeInfo", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      NodeInfo::class,
+      "type.googleapis.com/meshtastic.NodeInfo",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: NodeInfo): Int {
@@ -264,11 +265,11 @@ public class NodeInfo(
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> num = ProtoAdapter.UINT32.decode(reader)
-            2 -> user = User.ADAPTER.decode(reader)
-            3 -> position = Position.ADAPTER.decode(reader)
+            2 -> user = decodeMessageOrMerge(User.ADAPTER, reader, user)
+            3 -> position = decodeMessageOrMerge(Position.ADAPTER, reader, position)
             4 -> snr = ProtoAdapter.FLOAT.decode(reader)
             5 -> last_heard = ProtoAdapter.FIXED32.decode(reader)
-            6 -> device_metrics = DeviceMetrics.ADAPTER.decode(reader)
+            6 -> device_metrics = decodeMessageOrMerge(DeviceMetrics.ADAPTER, reader, device_metrics)
             7 -> hops_away = ProtoAdapter.UINT32.decode(reader)
             else -> reader.readUnknownField(tag)
           }

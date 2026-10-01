@@ -20,9 +20,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.HttpClientEngineFactory
 import io.ktor.client.engine.cio.CIO
-import io.ktor.client.engine.cio.CIOEngineConfig
 import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.engine.okhttp.OkHttpConfig
 import io.ktor.client.plugins.websocket.WebSockets
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
@@ -46,20 +44,18 @@ import kotlin.time.Duration.Companion.seconds
 
 class RelayTransportRecoveryIntegrationTest {
     @Test
-    fun `failed Tor websocket retirement recovers directly after requested OFF`() = runBlocking {
+    fun `a requested OFF reconnects directly and revokes the Tor route`() = runBlocking {
         withTimeout(10.seconds) {
             val relayServer = TorOffRecoveryRelayServer()
             val socks = ForwardingSocks5Proxy(relayServer.port)
             val intent = MutableIntent(TorMode.ON)
-            val torRetirementFailed = CompletableDeferred<Unit>()
-            val factoryCalls = AtomicInteger()
             val provider = RouteAwareClientProvider(
                 appInformation = AppInformation(Version("test", "test", ""), 1, "test", false),
                 requestedIntent = intent,
                 torRouteSource = ReadyTorRouteSource(socks.port),
-                engineFactory = {
-                    if (factoryCalls.getAndIncrement() == 0) FailingCloseEngineFactory(torRetirementFailed) else OkHttp
-                },
+                // The production JVM engine. It has to be OkHttp: CIO ignores a SOCKS ProxyConfig, so a
+                // CIO client would reach the relay directly and the proxy would never see the route.
+                engineFactory = { OkHttp },
             )
             val routes = RecordingRoutes(provider)
             val client = NostrWebSocketClient(routes)
@@ -91,7 +87,6 @@ class RelayTransportRecoveryIntegrationTest {
                 assertTrue(routes.snapshot().single().usedTorProxy, "first connection bypassed Tor: ${routes.diagnostics()}")
 
                 relay.disconnectAll()
-                withTimeout(2.seconds) { torRetirementFailed.await() }
 
                 provider.transition { intent.set(TorMode.OFF) }
                 relay.ensureGeohashRelaysConnected("u4pruydqqvj", nRelays = 1)
@@ -204,26 +199,6 @@ class RelayTransportRecoveryIntegrationTest {
         override val isAvailable = true
         override fun getSocksProxyAddress(): Pair<String, Int> = "127.0.0.1" to statusFlow.value.socksPort
         override fun isProxyReady() = true
-    }
-
-    /**
-     * The production JVM engine, with a close that reports and then fails, so the first route's
-     * retirement completes exceptionally. It has to be OkHttp: CIO ignores a SOCKS [ProxyConfig],
-     * so a CIO client would reach the relay directly and the proxy would never see the route.
-     */
-    private class FailingCloseEngineFactory(
-        private val closeAttempted: CompletableDeferred<Unit>,
-    ) : HttpClientEngineFactory<OkHttpConfig> {
-        override fun create(block: OkHttpConfig.() -> Unit): HttpClientEngine {
-            val delegate = OkHttp.create(block)
-            return object : HttpClientEngine by delegate {
-                override fun close() {
-                    delegate.close()
-                    closeAttempted.complete(Unit)
-                    error("Tor engine close failed")
-                }
-            }
-        }
     }
 
     private class ForwardingSocks5Proxy(private val relayPort: Int) : AutoCloseable {

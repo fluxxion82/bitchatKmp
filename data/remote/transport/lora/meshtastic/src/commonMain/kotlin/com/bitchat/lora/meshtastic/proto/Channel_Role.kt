@@ -30,8 +30,8 @@ public enum class Channel_Role(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<Channel_Role> = object : EnumAdapter<Channel_Role>(
-      Channel_Role::class, 
-      PROTO_3, 
+      Channel_Role::class,
+      PROTO_3,
       Channel_Role.DISABLED
     ) {
       override fun fromValue(`value`: Int): Channel_Role? = Channel_Role.fromValue(`value`)

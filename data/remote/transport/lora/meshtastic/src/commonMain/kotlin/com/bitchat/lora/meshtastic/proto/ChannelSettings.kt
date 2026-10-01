@@ -156,11 +156,11 @@ public class ChannelSettings(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<ChannelSettings> = object : ProtoAdapter<ChannelSettings>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      ChannelSettings::class, 
-      "type.googleapis.com/meshtastic.ChannelSettings", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      ChannelSettings::class,
+      "type.googleapis.com/meshtastic.ChannelSettings",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: ChannelSettings): Int {

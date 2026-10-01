@@ -46,8 +46,8 @@ public enum class RegionCode(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<RegionCode> = object : EnumAdapter<RegionCode>(
-      RegionCode::class, 
-      PROTO_3, 
+      RegionCode::class,
+      PROTO_3,
       RegionCode.UNSET_REGION
     ) {
       override fun fromValue(`value`: Int): RegionCode? = RegionCode.fromValue(`value`)

@@ -34,8 +34,8 @@ public enum class Priority(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<Priority> = object : EnumAdapter<Priority>(
-      Priority::class, 
-      PROTO_3, 
+      Priority::class,
+      PROTO_3,
       Priority.UNSET_PRIORITY
     ) {
       override fun fromValue(`value`: Int): Priority? = Priority.fromValue(`value`)

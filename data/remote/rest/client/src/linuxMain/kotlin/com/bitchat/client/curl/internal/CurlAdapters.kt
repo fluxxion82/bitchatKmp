@@ -131,10 +131,12 @@ internal fun HttpRequestData.headersToCurl(): CPointer<curl_slist> {
 }
 
 @OptIn(ExperimentalForeignApi::class)
+// The CURL_HTTP_VERSION_* constants come from Ktor's libcurl cinterop, whose integer type has
+// changed between Ktor releases (UInt before 3.6, Long in it), so convert rather than compare.
 internal fun UInt.fromCurl(): HttpProtocolVersion = when (this) {
-    CURL_HTTP_VERSION_1_0 -> HttpProtocolVersion.HTTP_1_0
-    CURL_HTTP_VERSION_1_1 -> HttpProtocolVersion.HTTP_1_1
-    CURL_HTTP_VERSION_2_0 -> HttpProtocolVersion.HTTP_2_0
+    CURL_HTTP_VERSION_1_0.toUInt() -> HttpProtocolVersion.HTTP_1_0
+    CURL_HTTP_VERSION_1_1.toUInt() -> HttpProtocolVersion.HTTP_1_1
+    CURL_HTTP_VERSION_2_0.toUInt() -> HttpProtocolVersion.HTTP_2_0
     // old curl fallback
     else -> HttpProtocolVersion.HTTP_1_1
 }

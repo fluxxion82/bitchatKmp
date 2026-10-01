@@ -129,11 +129,11 @@ public class MyNodeInfo(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<MyNodeInfo> = object : ProtoAdapter<MyNodeInfo>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      MyNodeInfo::class, 
-      "type.googleapis.com/meshtastic.MyNodeInfo", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      MyNodeInfo::class,
+      "type.googleapis.com/meshtastic.MyNodeInfo",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: MyNodeInfo): Int {

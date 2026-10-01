@@ -70,8 +70,8 @@ public enum class HardwareModel(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<HardwareModel> = object : EnumAdapter<HardwareModel>(
-      HardwareModel::class, 
-      PROTO_3, 
+      HardwareModel::class,
+      PROTO_3,
       HardwareModel.UNSET
     ) {
       override fun fromValue(`value`: Int): HardwareModel? = HardwareModel.fromValue(`value`)

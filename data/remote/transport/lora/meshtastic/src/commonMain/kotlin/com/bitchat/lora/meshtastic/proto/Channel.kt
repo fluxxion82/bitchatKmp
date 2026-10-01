@@ -16,6 +16,7 @@ import com.squareup.wire.ReverseProtoWriter
 import com.squareup.wire.Syntax.PROTO_3
 import com.squareup.wire.WireField
 import com.squareup.wire.`internal`.JvmField
+import com.squareup.wire.`internal`.decodeMessageOrMerge
 import kotlin.Any
 import kotlin.AssertionError
 import kotlin.Boolean
@@ -110,11 +111,11 @@ public class Channel(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<Channel> = object : ProtoAdapter<Channel>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      Channel::class, 
-      "type.googleapis.com/meshtastic.Channel", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      Channel::class,
+      "type.googleapis.com/meshtastic.Channel",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: Channel): Int {
@@ -164,7 +165,7 @@ public class Channel(
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> index = ProtoAdapter.INT32.decode(reader)
-            2 -> settings = ChannelSettings.ADAPTER.decode(reader)
+            2 -> settings = decodeMessageOrMerge(ChannelSettings.ADAPTER, reader, settings)
             3 -> try {
               role = Channel_Role.ADAPTER.decode(reader)
             } catch (e: ProtoAdapter.EnumConstantNotFoundException) {

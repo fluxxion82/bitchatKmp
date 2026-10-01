@@ -17,6 +17,7 @@ import com.squareup.wire.Syntax.PROTO_3
 import com.squareup.wire.WireField
 import com.squareup.wire.`internal`.JvmField
 import com.squareup.wire.`internal`.countNonNull
+import com.squareup.wire.`internal`.decodeMessageOrMerge
 import com.squareup.wire.`internal`.sanitize
 import kotlin.Any
 import kotlin.AssertionError
@@ -194,11 +195,11 @@ public class FromRadio(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<FromRadio> = object : ProtoAdapter<FromRadio>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      FromRadio::class, 
-      "type.googleapis.com/meshtastic.FromRadio", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      FromRadio::class,
+      "type.googleapis.com/meshtastic.FromRadio",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: FromRadio): Int {
@@ -253,28 +254,69 @@ public class FromRadio(
         var config_complete_id: Int? = null
         var rebooted: Boolean? = null
         var channel: Channel? = null
+        var payload_variant_tag: Int = 0
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> id = ProtoAdapter.UINT32.decode(reader)
-            2 -> packet = MeshPacket.ADAPTER.decode(reader)
-            3 -> my_info = MyNodeInfo.ADAPTER.decode(reader)
-            4 -> node_info = NodeInfo.ADAPTER.decode(reader)
-            6 -> log_record = ProtoAdapter.STRING.decode(reader)
-            7 -> config_complete_id = ProtoAdapter.UINT32.decode(reader)
-            8 -> rebooted = ProtoAdapter.BOOL.decode(reader)
-            10 -> channel = Channel.ADAPTER.decode(reader)
+            2 -> run {
+              if (payload_variant_tag != 2) {
+                packet = null
+              }
+              packet = decodeMessageOrMerge(MeshPacket.ADAPTER, reader, packet)
+              payload_variant_tag = 2
+            }
+
+            3 -> run {
+              if (payload_variant_tag != 3) {
+                my_info = null
+              }
+              my_info = decodeMessageOrMerge(MyNodeInfo.ADAPTER, reader, my_info)
+              payload_variant_tag = 3
+            }
+
+            4 -> run {
+              if (payload_variant_tag != 4) {
+                node_info = null
+              }
+              node_info = decodeMessageOrMerge(NodeInfo.ADAPTER, reader, node_info)
+              payload_variant_tag = 4
+            }
+
+            6 -> run {
+              log_record = ProtoAdapter.STRING.decode(reader)
+              payload_variant_tag = 6
+            }
+
+            7 -> run {
+              config_complete_id = ProtoAdapter.UINT32.decode(reader)
+              payload_variant_tag = 7
+            }
+
+            8 -> run {
+              rebooted = ProtoAdapter.BOOL.decode(reader)
+              payload_variant_tag = 8
+            }
+
+            10 -> run {
+              if (payload_variant_tag != 10) {
+                channel = null
+              }
+              channel = decodeMessageOrMerge(Channel.ADAPTER, reader, channel)
+              payload_variant_tag = 10
+            }
+
             else -> reader.readUnknownField(tag)
           }
         }
         return FromRadio(
           id = id,
-          packet = packet,
-          my_info = my_info,
-          node_info = node_info,
-          log_record = log_record,
-          config_complete_id = config_complete_id,
-          rebooted = rebooted,
-          channel = channel,
+          packet = if (payload_variant_tag == 2) packet else null,
+          my_info = if (payload_variant_tag == 3) my_info else null,
+          node_info = if (payload_variant_tag == 4) node_info else null,
+          log_record = if (payload_variant_tag == 6) log_record else null,
+          config_complete_id = if (payload_variant_tag == 7) config_complete_id else null,
+          rebooted = if (payload_variant_tag == 8) rebooted else null,
+          channel = if (payload_variant_tag == 10) channel else null,
           unknownFields = unknownFields
         )
       }

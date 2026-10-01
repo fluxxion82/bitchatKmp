@@ -128,11 +128,11 @@ public class DeviceMetrics(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<DeviceMetrics> = object : ProtoAdapter<DeviceMetrics>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      DeviceMetrics::class, 
-      "type.googleapis.com/meshtastic.DeviceMetrics", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      DeviceMetrics::class,
+      "type.googleapis.com/meshtastic.DeviceMetrics",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: DeviceMetrics): Int {

@@ -183,3 +183,10 @@ if (enableNativeLocation && org.gradle.internal.os.OperatingSystem.current().isM
         }
     }
 }
+
+// Since lifecycle 2.11.0 the distribution sees lifecycle-common-jvm twice: `lifecycle-common`
+// resolves to its -jvm variant and `lifecycle-common-jvm` is also on the classpath, so the same file
+// arrives under two coordinates. Dropping the second copy is safe; without a strategy installDist fails.
+tasks.withType<AbstractCopyTask>().configureEach {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}

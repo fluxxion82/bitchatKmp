@@ -126,11 +126,11 @@ public class Position(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<Position> = object : ProtoAdapter<Position>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      Position::class, 
-      "type.googleapis.com/meshtastic.Position", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      Position::class,
+      "type.googleapis.com/meshtastic.Position",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: Position): Int {

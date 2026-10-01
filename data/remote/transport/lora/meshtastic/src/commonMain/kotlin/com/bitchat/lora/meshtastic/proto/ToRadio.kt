@@ -17,6 +17,7 @@ import com.squareup.wire.Syntax.PROTO_3
 import com.squareup.wire.WireField
 import com.squareup.wire.`internal`.JvmField
 import com.squareup.wire.`internal`.countNonNull
+import com.squareup.wire.`internal`.decodeMessageOrMerge
 import kotlin.Any
 import kotlin.AssertionError
 import kotlin.Boolean
@@ -132,11 +133,11 @@ public class ToRadio(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<ToRadio> = object : ProtoAdapter<ToRadio>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      ToRadio::class, 
-      "type.googleapis.com/meshtastic.ToRadio", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      ToRadio::class,
+      "type.googleapis.com/meshtastic.ToRadio",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: ToRadio): Int {
@@ -169,20 +170,40 @@ public class ToRadio(
         var want_config_id: Int? = null
         var disconnect: Boolean? = null
         var heartbeat: Boolean? = null
+        var payload_variant_tag: Int = 0
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
-            1 -> packet = MeshPacket.ADAPTER.decode(reader)
-            3 -> want_config_id = ProtoAdapter.UINT32.decode(reader)
-            4 -> disconnect = ProtoAdapter.BOOL.decode(reader)
-            5 -> heartbeat = ProtoAdapter.BOOL.decode(reader)
+            1 -> run {
+              if (payload_variant_tag != 1) {
+                packet = null
+              }
+              packet = decodeMessageOrMerge(MeshPacket.ADAPTER, reader, packet)
+              payload_variant_tag = 1
+            }
+
+            3 -> run {
+              want_config_id = ProtoAdapter.UINT32.decode(reader)
+              payload_variant_tag = 3
+            }
+
+            4 -> run {
+              disconnect = ProtoAdapter.BOOL.decode(reader)
+              payload_variant_tag = 4
+            }
+
+            5 -> run {
+              heartbeat = ProtoAdapter.BOOL.decode(reader)
+              payload_variant_tag = 5
+            }
+
             else -> reader.readUnknownField(tag)
           }
         }
         return ToRadio(
-          packet = packet,
-          want_config_id = want_config_id,
-          disconnect = disconnect,
-          heartbeat = heartbeat,
+          packet = if (payload_variant_tag == 1) packet else null,
+          want_config_id = if (payload_variant_tag == 3) want_config_id else null,
+          disconnect = if (payload_variant_tag == 4) disconnect else null,
+          heartbeat = if (payload_variant_tag == 5) heartbeat else null,
           unknownFields = unknownFields
         )
       }

@@ -183,11 +183,11 @@ public class Data(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<Data> = object : ProtoAdapter<Data>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      Data::class, 
-      "type.googleapis.com/meshtastic.Data", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      Data::class,
+      "type.googleapis.com/meshtastic.Data",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: Data): Int {

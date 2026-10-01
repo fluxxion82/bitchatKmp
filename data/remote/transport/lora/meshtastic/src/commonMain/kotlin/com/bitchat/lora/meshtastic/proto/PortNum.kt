@@ -53,8 +53,8 @@ public enum class PortNum(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<PortNum> = object : EnumAdapter<PortNum>(
-      PortNum::class, 
-      PROTO_3, 
+      PortNum::class,
+      PROTO_3,
       PortNum.UNKNOWN_APP
     ) {
       override fun fromValue(`value`: Int): PortNum? = PortNum.fromValue(`value`)

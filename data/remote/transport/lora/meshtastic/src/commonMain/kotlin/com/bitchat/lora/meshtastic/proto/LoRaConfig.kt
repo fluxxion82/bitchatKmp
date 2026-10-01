@@ -262,11 +262,11 @@ public class LoRaConfig(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<LoRaConfig> = object : ProtoAdapter<LoRaConfig>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      LoRaConfig::class, 
-      "type.googleapis.com/meshtastic.LoRaConfig", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      LoRaConfig::class,
+      "type.googleapis.com/meshtastic.LoRaConfig",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: LoRaConfig): Int {

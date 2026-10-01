@@ -16,6 +16,7 @@ import com.squareup.wire.ReverseProtoWriter
 import com.squareup.wire.Syntax.PROTO_3
 import com.squareup.wire.WireField
 import com.squareup.wire.`internal`.JvmField
+import com.squareup.wire.`internal`.decodeMessageOrMerge
 import kotlin.Any
 import kotlin.AssertionError
 import kotlin.Boolean
@@ -82,11 +83,11 @@ public class Config(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<Config> = object : ProtoAdapter<Config>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      Config::class, 
-      "type.googleapis.com/meshtastic.Config", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      Config::class,
+      "type.googleapis.com/meshtastic.Config",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: Config): Int {
@@ -109,7 +110,10 @@ public class Config(
         var lora: LoRaConfig? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
-            3 -> lora = LoRaConfig.ADAPTER.decode(reader)
+            3 -> run {
+              lora = decodeMessageOrMerge(LoRaConfig.ADAPTER, reader, lora)
+            }
+
             else -> reader.readUnknownField(tag)
           }
         }

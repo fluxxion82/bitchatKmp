@@ -17,6 +17,7 @@ import com.squareup.wire.Syntax.PROTO_3
 import com.squareup.wire.WireField
 import com.squareup.wire.`internal`.JvmField
 import com.squareup.wire.`internal`.countNonNull
+import com.squareup.wire.`internal`.decodeMessageOrMerge
 import kotlin.Any
 import kotlin.AssertionError
 import kotlin.Boolean
@@ -249,11 +250,11 @@ public class MeshPacket(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<MeshPacket> = object : ProtoAdapter<MeshPacket>(
-      FieldEncoding.LENGTH_DELIMITED, 
-      MeshPacket::class, 
-      "type.googleapis.com/meshtastic.MeshPacket", 
-      PROTO_3, 
-      null, 
+      FieldEncoding.LENGTH_DELIMITED,
+      MeshPacket::class,
+      "type.googleapis.com/meshtastic.MeshPacket",
+      PROTO_3,
+      null,
       "meshtastic/mesh.proto"
     ) {
       override fun encodedSize(`value`: MeshPacket): Int {
@@ -378,13 +379,25 @@ public class MeshPacket(
         var want_ack: Boolean = false
         var priority: Priority = Priority.UNSET_PRIORITY
         var rx_rssi: Int = 0
+        var payload_variant_tag: Int = 0
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> from = ProtoAdapter.FIXED32.decode(reader)
             2 -> to = ProtoAdapter.FIXED32.decode(reader)
             3 -> channel = ProtoAdapter.UINT32.decode(reader)
-            4 -> decoded = Data.ADAPTER.decode(reader)
-            5 -> encrypted = ProtoAdapter.BYTES.decode(reader)
+            4 -> run {
+              if (payload_variant_tag != 4) {
+                decoded = null
+              }
+              decoded = decodeMessageOrMerge(Data.ADAPTER, reader, decoded)
+              payload_variant_tag = 4
+            }
+
+            5 -> run {
+              encrypted = ProtoAdapter.BYTES.decode(reader)
+              payload_variant_tag = 5
+            }
+
             6 -> id = ProtoAdapter.FIXED32.decode(reader)
             7 -> rx_time = ProtoAdapter.FIXED32.decode(reader)
             8 -> rx_snr = ProtoAdapter.FLOAT.decode(reader)
@@ -403,8 +416,8 @@ public class MeshPacket(
           from = from,
           to = to,
           channel = channel,
-          decoded = decoded,
-          encrypted = encrypted,
+          decoded = if (payload_variant_tag == 4) decoded else null,
+          encrypted = if (payload_variant_tag == 5) encrypted else null,
           id = id,
           rx_time = rx_time,
           rx_snr = rx_snr,

@@ -35,8 +35,8 @@ public enum class ModemPreset(
   public companion object {
     @JvmField
     public val ADAPTER: ProtoAdapter<ModemPreset> = object : EnumAdapter<ModemPreset>(
-      ModemPreset::class, 
-      PROTO_3, 
+      ModemPreset::class,
+      PROTO_3,
       ModemPreset.LONG_FAST
     ) {
       override fun fromValue(`value`: Int): ModemPreset? = ModemPreset.fromValue(`value`)
