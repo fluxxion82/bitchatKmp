@@ -1,24 +1,29 @@
 #!/usr/bin/env bash
-# Build, ship, verify and restart the embedded binary on the Orange Pi.
+# Build, ship, verify and restart a selected embedded UI board on the Orange Pi.
 #
 # Release layout on the device:
-#   /opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/   binary, compose-resources/,
-#                                                              SHA256SUMS, BUILD_INFO, bitchat.service,
-#                                                              wait-for-input-devices.sh,
-#                                                              bluetooth-bitchat-ble.conf
-#   /opt/bitchat/releases/current -> <release dir>             swapped atomically (ln + mv -T)
-#   /opt/bitchat/bitchat.service                               copy owned by the deploy user
-#                                                              that the sudoers rule lets us install
-#   ~/bitchat-embedded.kexe -> .../current/bitchat-embedded.kexe   convenience symlink, kept
-#                                                              current by every deploy
+#   Compose: /opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/   binary, compose-resources/,
+#                                                                         SHA256SUMS, BUILD_INFO, bitchat.service,
+#                                                                         wait-for-input-devices.sh,
+#                                                                         bluetooth-bitchat-ble.conf
+#            /opt/bitchat/releases/current -> <release dir>             swapped atomically (ln + mv -T)
+#            /opt/bitchat/bitchat.service                               copy owned by the deploy user
+#                                                                         that the sudoers rule lets us install
+#            ~/bitchat-embedded.kexe -> .../current/bitchat-embedded.kexe
+#   TUI:     /opt/bitchat-tui/releases/<sha12>[-dirty]-<build>-<digest8>/ binary, SHA256SUMS,
+#                                                                         BUILD_INFO, bitchat-tui.service,
+#                                                                         bluetooth-bitchat-ble.conf
+#            /opt/bitchat-tui/releases/current -> <release dir>         swapped atomically (ln + mv -T)
+#            /opt/bitchat-tui/bitchat-tui.service                       copy owned by the deploy user
+#            ~/bitchat-tui.kexe -> .../current/bitchat-tui.kexe
 #
 # <digest8> is the first 8 hex chars of sha256 over the SHA256SUMS lines minus the
 # ./BUILD_INFO line, so a release name is a pure function of the shipped payload
 # (executable, compose-resources/, unit, ExecStartPre script, bluetoothd drop-in) and an existing release directory is never
 # rewritten with a different payload.
 #
-# Identity comes from the bitchat-embedded.build-info sidecar that every link task writes
-# next to the executable (apps/embedded/build.gradle.kts). Its kexe_sha256 must match the
+# Identity comes from the selected board's build-info sidecar that every link task writes
+# next to the executable. Its kexe_sha256 must match the
 # executable we ship (so --no-build cannot pair stale metadata with a newer binary) and its
 # identity= line must be exactly what `--version` prints on the device and what the service
 # logs at startup.
@@ -30,40 +35,42 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"
-RELEASES="/opt/bitchat/releases"
 RSYNC="${RSYNC:-rsync}"
 
 usage() {
   cat <<USAGE
 Usage: scripts/deploy-pi.sh [options]
 
-Builds the linuxArm64 embedded binary, stages it with compose-resources/,
-a SHA256SUMS manifest, BUILD_INFO, bitchat.service,
-wait-for-input-devices.sh and the bluetoothd drop-in, uploads it to
-\$PI_HOST:$RELEASES/<sha12>[-dirty]-<build>-<digest8>/,
-verifies it on the device, swaps $RELEASES/current,
-restarts bitchat.service and warns if bluetoothd is not
-running with the drop-in.
+Builds and deploys the selected linuxArm64 UI board. Compose is the default:
+it stages the executable, compose-resources/, its unit and input-device wait
+script; tui stages the executable and its console unit. Every release gets a
+SHA256SUMS manifest and BUILD_INFO, is verified on the device, atomically
+selected through that board's current symlink, and then its unit is restarted.
 
 The target is not baked into this repository. Set PI_HOST (an ssh
 destination: user@host, or a Host alias from ~/.ssh/config) or pass
 --host. Key-based ssh must work without a passphrase prompt (BatchMode).
 
 Options:
+  --ui compose|tui  select the board to deploy (default: compose)
   --release          link the release binary (default: debug)
   --debug            link the debug binary
-  --no-build         reuse the existing link output (its build-info sidecar must match)
-  --no-restart       upload, verify and switch, but do not install/restart the unit
-  --dry-run          build and stage locally, print what would be uploaded, no ssh
-  --host DEST        target ssh destination (overrides \$PI_HOST); required if PI_HOST is unset
+  --no-build         reuse the selected board's existing link output
+                    (its build-info sidecar must match)
+  --no-restart       upload, verify and switch that board's current release,
+                    but do not install or restart its unit
+  --dry-run          build and stage locally, print the selected release and
+                    manifest, and do not use ssh
+  --host DEST        target ssh destination (overrides \$PI_HOST); required if
+                    PI_HOST is unset
   -h, --help
 
 Env:
   PI_HOST   target ssh destination (required unless --host is given)
-  PI_USER   account the unit runs as (default: the user part of the target,
-            so PI_HOST=pi@box implies pi; required when the target is a bare
-            host or an ssh alias)
-  PI_GROUP  group for the unit (default: same as PI_USER)
+  PI_USER   account the selected unit runs as (default: the user part of the
+            target, so PI_HOST=pi@box implies pi; required when the target is
+            a bare host or an ssh alias)
+  PI_GROUP  group for the selected unit (default: same as PI_USER)
   RSYNC     rsync binary (default: rsync)
 USAGE
 }
@@ -71,9 +78,11 @@ die() { echo "deploy-pi.sh: $*" >&2; exit 1; }
 log() { echo "== $*"; }
 
 # --- 1. options -------------------------------------------------------------
-BUILD=debug; DO_BUILD=1; DO_RESTART=1; DRY_RUN=0; HOST="${PI_HOST:-}"
+UI=compose; BUILD=debug; DO_BUILD=1; DO_RESTART=1; DRY_RUN=0; HOST="${PI_HOST:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --ui)         [[ $# -ge 2 ]] || { echo "deploy-pi.sh: --ui needs compose or tui" >&2; usage >&2; exit 2; }
+                  UI="$2"; shift ;;
     --release)    BUILD=release ;;
     --debug)      BUILD=debug ;;
     --no-build)   DO_BUILD=0 ;;
@@ -86,25 +95,57 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+case "$UI" in compose|tui) ;; *) echo "deploy-pi.sh: unknown UI: $UI" >&2; usage >&2; exit 2 ;; esac
 [[ -n "$HOST" ]] || die "no target; set PI_HOST=user@host or pass --host user@host (see --help)"
 # The unit runs as an unprivileged account on the device. Derive it from the target so a plain
 # PI_HOST=user@host needs nothing else, and let PI_USER/PI_GROUP override for ssh aliases.
 PI_USER="${PI_USER:-}"
 if [[ -z "$PI_USER" && "$HOST" == *@* ]]; then PI_USER="${HOST%%@*}"; fi
-[[ -n "$PI_USER" ]] || die "cannot tell which account bitchat.service should run as: '$HOST' carries no user part, so set PI_USER"
+if [[ -z "$PI_USER" ]]; then
+  case "$UI" in
+    compose) die "cannot tell which account bitchat.service should run as: '$HOST' carries no user part, so set PI_USER" ;;
+    tui)     die "cannot tell which account bitchat-tui.service should run as: '$HOST' carries no user part, so set PI_USER" ;;
+  esac
+fi
 case "$PI_USER" in *[!A-Za-z0-9._-]*) die "PI_USER '$PI_USER' is not a plain user name" ;; esac
 PI_GROUP="${PI_GROUP:-$PI_USER}"
 case "$PI_GROUP" in *[!A-Za-z0-9._-]*) die "PI_GROUP '$PI_GROUP' is not a plain group name" ;; esac
 
 case "$BUILD" in debug) BUILD_CAP=Debug ;; release) BUILD_CAP=Release ;; esac
 TASK="link${BUILD_CAP}ExecutableLinuxArm64"
-OUT_DIR="$REPO/apps/embedded/build/bin/linuxArm64/${BUILD}Executable"
-BINARY="$OUT_DIR/bitchat-embedded.kexe"
-SIDECAR="$OUT_DIR/bitchat-embedded.build-info"
-UNIT_FILE="$REPO/apps/embedded/systemd/bitchat.service"
-# The unit's ExecStartPre= references this through /opt/bitchat/releases/current/, so it ships
-# inside the release directory (and therefore counts towards the payload digest).
-WAIT_SCRIPT="$REPO/apps/embedded/systemd/wait-for-input-devices.sh"
+case "$UI" in
+  compose)
+    APP_PROJECT="apps:embedded"
+    APP_DIR="apps/embedded"
+    BINARY_BASENAME="bitchat-embedded"
+    SERVICE_NAME="bitchat.service"
+    RELEASES="/opt/bitchat/releases"
+    UNIT_FILE="$REPO/apps/embedded/systemd/bitchat.service"
+    OWNER_UNIT_FILE="/opt/bitchat/bitchat.service"
+    HOME_LINK_NAME="bitchat-embedded.kexe"
+    NEEDS_COMPOSE_RESOURCES=1
+    NEEDS_INPUT_WAIT=1
+    # The unit's ExecStartPre= references this through /opt/bitchat/releases/current/, so it ships
+    # inside the release directory (and therefore counts towards the payload digest).
+    WAIT_SCRIPT="$REPO/apps/embedded/systemd/wait-for-input-devices.sh"
+    ;;
+  tui)
+    APP_PROJECT="apps:embedded-tui"
+    APP_DIR="apps/embedded-tui"
+    BINARY_BASENAME="bitchat-tui"
+    SERVICE_NAME="bitchat-tui.service"
+    RELEASES="/opt/bitchat-tui/releases"
+    UNIT_FILE="$REPO/apps/embedded-tui/systemd/bitchat-tui.service"
+    OWNER_UNIT_FILE="/opt/bitchat-tui/bitchat-tui.service"
+    HOME_LINK_NAME="bitchat-tui.kexe"
+    NEEDS_COMPOSE_RESOURCES=0
+    NEEDS_INPUT_WAIT=0
+    WAIT_SCRIPT=""
+    ;;
+esac
+OUT_DIR="$REPO/$APP_DIR/build/bin/linuxArm64/${BUILD}Executable"
+BINARY="$OUT_DIR/$BINARY_BASENAME.kexe"
+SIDECAR="$OUT_DIR/$BINARY_BASENAME.build-info"
 # Installed by hand, once (README, "Pairing prompts on iPhones"); shipped so that copy is on the device and
 # so step 11a can tell whether the installed one and the running bluetoothd still match it.
 BT_DROPIN_SRC="$REPO/apps/embedded/systemd/bluetooth.service.d/bitchat-ble.conf"
@@ -140,16 +181,20 @@ sync_remote() {
 
 # --- 2. build ---------------------------------------------------------------
 if [[ "$DO_BUILD" == 1 ]]; then
-  log "./gradlew -Pembedded.enabled=true :apps:embedded:$TASK --console=plain"
-  ./gradlew -Pembedded.enabled=true ":apps:embedded:$TASK" --console=plain
+  log "./gradlew -Pembedded.enabled=true :$APP_PROJECT:$TASK --console=plain"
+  ./gradlew -Pembedded.enabled=true ":$APP_PROJECT:$TASK" --console=plain
 fi
 
 # --- 3. identity (from the sidecar the link task wrote next to the binary) --
-[[ -f "$BINARY" ]]  || die "missing $BINARY; run without --no-build (or ./gradlew -Pembedded.enabled=true :apps:embedded:$TASK)"
+[[ -f "$BINARY" ]]  || die "missing $BINARY; run without --no-build (or ./gradlew -Pembedded.enabled=true :$APP_PROJECT:$TASK)"
 [[ -f "$SIDECAR" ]] || die "no build-info sidecar next to the binary; run without --no-build"
-[[ -d "$OUT_DIR/compose-resources" ]] || die "missing $OUT_DIR/compose-resources; the app resolves it beside the executable, relink with :apps:embedded:$TASK"
+if [[ "$NEEDS_COMPOSE_RESOURCES" == 1 ]]; then
+  [[ -d "$OUT_DIR/compose-resources" ]] || die "missing $OUT_DIR/compose-resources; the app resolves it beside the executable, relink with :$APP_PROJECT:$TASK"
+fi
 [[ -f "$UNIT_FILE" ]] || die "missing $UNIT_FILE"
-[[ -f "$WAIT_SCRIPT" ]] || die "missing $WAIT_SCRIPT (bitchat.service runs it as ExecStartPre)"
+if [[ "$NEEDS_INPUT_WAIT" == 1 ]]; then
+  [[ -f "$WAIT_SCRIPT" ]] || die "missing $WAIT_SCRIPT ($SERVICE_NAME runs it as ExecStartPre)"
+fi
 [[ -f "$BT_DROPIN_SRC" ]] || die "missing $BT_DROPIN_SRC"
 # The last ExecStart= line is the command bluetoothd must be running with (the first one only resets it).
 BT_EXEC="$(sed -n 's/^ExecStart=\(..*\)$/\1/p' "$BT_DROPIN_SRC" | tail -n 1)"
@@ -173,22 +218,26 @@ TMP="${TMPDIR:-/tmp}"; TMP="${TMP%/}"
 STAGE="$(mktemp -d "$TMP/bitchat-deploy.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 # -p keeps the link-time mtimes so rsync of an unchanged release is a no-op.
-cp -p "$BINARY" "$STAGE/bitchat-embedded.kexe"
-chmod 755 "$STAGE/bitchat-embedded.kexe"
-cp -Rp "$OUT_DIR/compose-resources" "$STAGE/compose-resources"
-# bitchat.service ships with __BITCHAT_USER__/__BITCHAT_GROUP__ placeholders so no account
+cp -p "$BINARY" "$STAGE/$BINARY_BASENAME.kexe"
+chmod 755 "$STAGE/$BINARY_BASENAME.kexe"
+if [[ "$NEEDS_COMPOSE_RESOURCES" == 1 ]]; then
+  cp -Rp "$OUT_DIR/compose-resources" "$STAGE/compose-resources"
+fi
+# The selected unit ships with __BITCHAT_USER__/__BITCHAT_GROUP__ placeholders so no account
 # name is checked into the repository; fill them in here. touch -r restores the source mtime
 # so an unchanged release still rsyncs as a no-op, and the payload digest stays content-based.
 sed -e "s/__BITCHAT_USER__/$PI_USER/g" -e "s/__BITCHAT_GROUP__/$PI_GROUP/g" \
-  "$UNIT_FILE" > "$STAGE/bitchat.service"
-! grep -q '__BITCHAT_' "$STAGE/bitchat.service" \
+  "$UNIT_FILE" > "$STAGE/$SERVICE_NAME"
+! grep -q '__BITCHAT_' "$STAGE/$SERVICE_NAME" \
   || die "$UNIT_FILE still has an unsubstituted __BITCHAT_* placeholder"
-grep -q "^User=$PI_USER$" "$STAGE/bitchat.service" \
-  || die "staged bitchat.service has no User=$PI_USER line; check $UNIT_FILE"
-chmod 644 "$STAGE/bitchat.service"
-touch -r "$UNIT_FILE" "$STAGE/bitchat.service"
-cp -p "$WAIT_SCRIPT" "$STAGE/wait-for-input-devices.sh"
-chmod 755 "$STAGE/wait-for-input-devices.sh"
+grep -q "^User=$PI_USER$" "$STAGE/$SERVICE_NAME" \
+  || die "staged $SERVICE_NAME has no User=$PI_USER line; check $UNIT_FILE"
+chmod 644 "$STAGE/$SERVICE_NAME"
+touch -r "$UNIT_FILE" "$STAGE/$SERVICE_NAME"
+if [[ "$NEEDS_INPUT_WAIT" == 1 ]]; then
+  cp -p "$WAIT_SCRIPT" "$STAGE/wait-for-input-devices.sh"
+  chmod 755 "$STAGE/wait-for-input-devices.sh"
+fi
 cp -p "$BT_DROPIN_SRC" "$STAGE/$BT_DROPIN_NAME"
 chmod 644 "$STAGE/$BT_DROPIN_NAME"
 manifest() { ( cd "$STAGE" && find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 > SHA256SUMS ); }
@@ -241,7 +290,7 @@ sync_remote "after upload"
 
 # --- 9. verify on the device: checksums, then the exact identity line -------
 log "verifying checksums and --version on $HOST"
-rc=0; VERSION_OUT="$(remote "cd '$REMOTE_DIR' && sha256sum --quiet -c SHA256SUMS && ./bitchat-embedded.kexe --version")" || rc=$?
+rc=0; VERSION_OUT="$(remote "cd '$REMOTE_DIR' && sha256sum --quiet -c SHA256SUMS && ./$BINARY_BASENAME.kexe --version")" || rc=$?
 transport_check "$rc" "verification"
 [[ "$rc" == 0 ]] || die "on-device verification failed (exit $rc); $REMOTE_DIR left in place for inspection"
 IDENTITY="$(printf '%s\n' "$VERSION_OUT" | tail -n 1)"
@@ -264,39 +313,55 @@ CURRENT="$(printf '%s\n' "$SWITCH_OUT" | sed -n '2p')"
 # From here on every failure must say so: the device already runs from the new release dir.
 SWAPPED="current already points at $REMOTE_DIR (previous: $PREVIOUS)"
 
-# --- 10b. keep ~/bitchat-embedded.kexe pointing at the current release ------
+# --- 10b. keep the selected home link pointing at the current release -------
 # A symlink can never go stale, and /proc/self/exe resolves symlinks fully, so the Compose
 # resource reader still finds compose-resources/ in the release directory it points into.
-# Any pre-existing regular file there (a hand-copied binary from before build identity) is
-# renamed once with a .stale-<date> suffix. This step never fails the deploy: a home
-# directory we cannot write to is a warning, not a broken release.
-HOME_LINK_TARGET="$RELEASES/current/bitchat-embedded.kexe"
+# This step never fails the deploy: a home directory we cannot write to is a warning, not a
+# broken release.
+HOME_LINK_TARGET="$RELEASES/current/$BINARY_BASENAME.kexe"
 HOME_LINK_OK=0
-HOME_CMD='f="$HOME/bitchat-embedded.kexe"
-  if [ ! -w "$HOME" ]; then echo "__unwritable"; exit 0; fi
-  if [ ! -L "$f" ] && [ -f "$f" ]; then
+if [[ "$UI" == tui ]]; then
+  # Preserve the pre-release hand-installed TUI at its documented backup name without ever
+  # overwriting an existing backup. Later regular files use the normal dated stale name.
+  HOME_MIGRATE='if [ ! -L "$f" ] && [ -f "$f" ]; then
+    if [ ! -e "$f.prev.bak" ] && [ ! -L "$f.prev.bak" ]; then
+      mv -- "$f" "$f.prev.bak" || exit 44
+      echo "__moved=$f.prev.bak"
+    else
+      d=$(date -r "$f" +%Y-%m-%d 2>/dev/null) || d=""
+      [ -n "$d" ] || d=unknown
+      mv -- "$f" "$f.stale-$d" || exit 44
+      echo "__moved=$f.stale-$d"
+    fi
+  fi'
+else
+  HOME_MIGRATE='if [ ! -L "$f" ] && [ -f "$f" ]; then
     d=$(date -r "$f" +%Y-%m-%d 2>/dev/null) || d=""
     [ -n "$d" ] || d=unknown
     mv -- "$f" "$f.stale-$d" || exit 44
     echo "__moved=$f.stale-$d"
-  fi
+  fi'
+fi
+HOME_CMD='f="$HOME/'"$HOME_LINK_NAME"'"
+  if [ ! -w "$HOME" ]; then echo "__unwritable"; exit 0; fi
+  '"$HOME_MIGRATE"'
   ln -sfn '"'$HOME_LINK_TARGET'"' "$f.tmp" && mv -T "$f.tmp" "$f" || exit 45
   echo "__link=$(readlink "$f")"'
 rc=0; HOME_OUT="$(remote "$HOME_CMD")" || rc=$?
 transport_check "$rc" "home symlink" "$SWAPPED"
 if [[ "$rc" != 0 ]]; then
-  echo "WARNING: could not point ~/bitchat-embedded.kexe at $HOME_LINK_TARGET on $HOST (exit $rc): ${HOME_OUT:-no output}" >&2
+  echo "WARNING: could not point ~/$HOME_LINK_NAME at $HOME_LINK_TARGET on $HOST (exit $rc): ${HOME_OUT:-no output}" >&2
 else
   MOVED="$(printf '%s\n' "$HOME_OUT" | sed -n 's/^__moved=//p')"
   HOME_LINK="$(printf '%s\n' "$HOME_OUT" | sed -n 's/^__link=//p')"
   [[ -z "$MOVED" ]] || log "moved the old regular file aside: $MOVED (delete it by hand when you no longer want it)"
   case "$HOME_OUT" in
-    *__unwritable*) echo "WARNING: the home directory on $HOST is not writable; ~/bitchat-embedded.kexe not updated" >&2 ;;
+    *__unwritable*) echo "WARNING: the home directory on $HOST is not writable; ~/$HOME_LINK_NAME not updated" >&2 ;;
     *) if [[ "$HOME_LINK" == "$HOME_LINK_TARGET" ]]; then
          HOME_LINK_OK=1
-         log "home symlink: ~/bitchat-embedded.kexe -> $HOME_LINK_TARGET"
+         log "home symlink: ~/$HOME_LINK_NAME -> $HOME_LINK_TARGET"
        else
-         echo "WARNING: ~/bitchat-embedded.kexe points at '${HOME_LINK:-?}' on $HOST, expected $HOME_LINK_TARGET" >&2
+         echo "WARNING: ~/$HOME_LINK_NAME points at '${HOME_LINK:-?}' on $HOST, expected $HOME_LINK_TARGET" >&2
        fi ;;
   esac
 fi
@@ -307,18 +372,19 @@ STATE="not restarted (--no-restart)"
 ORDER_WARN=""
 add_order_warn() { if [[ -z "$ORDER_WARN" ]]; then ORDER_WARN="$1"; else ORDER_WARN="$ORDER_WARN; $1"; fi; }
 if [[ "$DO_RESTART" == 1 ]]; then
-  log "installing bitchat.service"
+  log "installing $SERVICE_NAME"
   rc=0
-  remote "cat '$REMOTE_DIR/bitchat.service' > /opt/bitchat/bitchat.service || exit 42
-    sudo -n install -m 644 -o root -g root /opt/bitchat/bitchat.service /etc/systemd/system/bitchat.service \
+  remote "cat '$REMOTE_DIR/$SERVICE_NAME' > '$OWNER_UNIT_FILE' || exit 42
+    sudo -n install -m 644 -o root -g root '$OWNER_UNIT_FILE' /etc/systemd/system/$SERVICE_NAME \
       && sudo -n systemctl daemon-reload" || rc=$?
   transport_check "$rc" "install" "$SWAPPED"
   if [[ "$rc" == 42 ]]; then
-    die "/opt/bitchat/bitchat.service is missing or not writable by $PI_USER; create it once with: sudo install -o $PI_USER -g $PI_GROUP -m 644 /dev/null /opt/bitchat/bitchat.service; $SWAPPED"
+    die "$OWNER_UNIT_FILE is missing or not writable by $PI_USER; create it once with: sudo install -o $PI_USER -g $PI_GROUP -m 644 /dev/null $OWNER_UNIT_FILE; $SWAPPED"
   elif [[ "$rc" != 0 ]]; then
-    die "installing bitchat.service failed (exit $rc); $SWAPPED"
+    die "installing $SERVICE_NAME failed (exit $rc); $SWAPPED"
   fi
 
+  if [[ "$UI" == compose ]]; then
   # Boot-ordering check: the actual cycle test, run against the unit systemd has just loaded.
   # systemd adds an implicit After= from a target to every unit that target Wants, unless an
   # ordering dependency between the two already exists. cardkb.service and xpt2046-touch.service
@@ -361,20 +427,21 @@ if [[ "$DO_RESTART" == 1 ]]; then
       log "boot ordering: no known bad After= edges (only a reboot proves autostart); After=$AFTER_UNIT"
     fi
   fi
+  fi
 
-  log "enabling and restarting bitchat.service"
+  log "enabling and restarting $SERVICE_NAME"
   rc=0
-  remote "sudo -n systemctl enable bitchat.service && sudo -n systemctl restart bitchat.service" || rc=$?
+  remote "sudo -n systemctl enable $SERVICE_NAME && sudo -n systemctl restart $SERVICE_NAME" || rc=$?
   transport_check "$rc" "enable/restart" "$SWAPPED"
-  [[ "$rc" == 0 ]] || die "enabling or restarting bitchat.service failed (exit $rc); $SWAPPED"
+  [[ "$rc" == 0 ]] || die "enabling or restarting $SERVICE_NAME failed (exit $rc); $SWAPPED"
 
   # The InvocationID identifies exactly the process systemd just started, so the journal
   # check cannot match an older run of the same SHA.
-  rc=0; INV="$(remote "systemctl show -p InvocationID --value bitchat.service")" || rc=$?
+  rc=0; INV="$(remote "systemctl show -p InvocationID --value $SERVICE_NAME")" || rc=$?
   transport_check "$rc" "reading InvocationID" "$SWAPPED"
-  [[ "$rc" == 0 ]] || die "systemctl show -p InvocationID bitchat.service failed on $HOST (exit $rc, output '$INV'); check: sudo -n systemctl status bitchat.service; $SWAPPED"
+  [[ "$rc" == 0 ]] || die "systemctl show -p InvocationID $SERVICE_NAME failed on $HOST (exit $rc, output '$INV'); check: sudo -n systemctl status $SERVICE_NAME; $SWAPPED"
   case "$INV" in
-    "" | *[!0-9a-f]*) die "bitchat.service has no InvocationID after restart (got '$INV'); check: sudo -n systemctl status bitchat.service; $SWAPPED" ;;
+    "" | *[!0-9a-f]*) die "$SERVICE_NAME has no InvocationID after restart (got '$INV'); check: sudo -n systemctl status $SERVICE_NAME; $SWAPPED" ;;
   esac
   # The identity line is printed before Koin, DRM and EGL initialise, so seeing it only
   # proves the process started. Once it is seen on attempt N, keep polling and accept only
@@ -386,8 +453,8 @@ if [[ "$DO_RESTART" == 1 ]]; then
   # own exit code and the journal follows a fixed five-line header: state, __rc1=<is-active
   # exit>, InvocationID, __rc2=<show exit>, __end_state. Empty output still takes its line.
   # INV was validated as hex above, so splicing it into the command is safe.
-  POLL_CMD="st=\$(systemctl is-active bitchat.service); rc1=\$?; echo \"\$st\"; echo \"__rc1=\$rc1\"
-    inv=\$(systemctl show -p InvocationID --value bitchat.service); rc2=\$?; echo \"\$inv\"; echo \"__rc2=\$rc2\"
+  POLL_CMD="st=\$(systemctl is-active $SERVICE_NAME); rc1=\$?; echo \"\$st\"; echo \"__rc1=\$rc1\"
+    inv=\$(systemctl show -p InvocationID --value $SERVICE_NAME); rc2=\$?; echo \"\$inv\"; echo \"__rc2=\$rc2\"
     echo __end_state
     journalctl _SYSTEMD_INVOCATION_ID='$INV' --no-pager -o cat"
   JOURNAL=""; OK=0; RESULT=""; SEEN=0; attempt=0; LIMIT=10
@@ -396,7 +463,7 @@ if [[ "$DO_RESTART" == 1 ]]; then
     [[ "$attempt" == 1 ]] || sleep 2
     rc=0
     POLL_OUT="$(remote "$POLL_CMD")" || rc=$?
-    transport_check "$rc" "polling bitchat.service" "$SWAPPED"
+    transport_check "$rc" "polling $SERVICE_NAME" "$SWAPPED"
     [[ "$rc" == 0 ]] || { RESULT="journalctl failed on $HOST (exit $rc): $POLL_OUT"; break; }
     STATE="$(printf '%s\n' "$POLL_OUT" | sed -n '1p')"
     RC1="$(printf '%s\n' "$POLL_OUT" | sed -n '2p')"
@@ -417,7 +484,7 @@ if [[ "$DO_RESTART" == 1 ]]; then
     case "$STATE" in
       active)     [[ "$RC1" == 0 ]] || { RESULT="systemctl is-active reported 'active' but exited $RC1"; break; } ;;
       activating) ;;
-      *)          RESULT="bitchat.service is '$STATE' (expected active; is-active exit $RC1)"; break ;;
+      *)          RESULT="$SERVICE_NAME is '$STATE' (expected active; is-active exit $RC1)"; break ;;
     esac
     # No grep -q: it would exit early and a SIGPIPE'd printf would read as "no match" under pipefail.
     if [[ "$SEEN" == 0 ]] && printf '%s\n' "$JOURNAL" | grep -xF -- "$IDENTITY_EXPECTED" >/dev/null; then
@@ -430,9 +497,9 @@ if [[ "$DO_RESTART" == 1 ]]; then
     fi
     if [[ "$attempt" -ge "$LIMIT" ]]; then
       if [[ "$SEEN" == 0 ]]; then
-        RESULT="bitchat.service is '$STATE' but the journal for invocation $INV never showed the identity line ($attempt polls)"
+        RESULT="$SERVICE_NAME is '$STATE' but the journal for invocation $INV never showed the identity line ($attempt polls)"
       else
-        RESULT="bitchat.service is '$STATE' after the identity line (seen on attempt $SEEN) but was not confirmed active"
+        RESULT="$SERVICE_NAME is '$STATE' after the identity line (seen on attempt $SEEN) but was not confirmed active"
       fi
       break
     fi
@@ -440,8 +507,8 @@ if [[ "$DO_RESTART" == 1 ]]; then
   if [[ "$OK" != 1 ]]; then
     echo "--- journal for invocation $INV ---"
     printf '%s\n' "$JOURNAL"
-    echo "--- journalctl -u bitchat.service -n 50 ---"
-    remote "journalctl -u bitchat.service -n 50 --no-pager" || true
+    echo "--- journalctl -u $SERVICE_NAME -n 50 ---"
+    remote "journalctl -u $SERVICE_NAME -n 50 --no-pager" || true
     die "${RESULT:-post-restart check failed}; $SWAPPED"
   fi
   echo "--- journal for invocation $INV (last 15 lines) ---"
@@ -456,7 +523,7 @@ fi
 # command and not a sudo -n here.
 log "checking bluetoothd against $BT_DROPIN"
 BT_WARN=""
-BT_APPLY="sudo systemctl daemon-reload && sudo systemctl restart bluetooth.service && sudo systemctl restart bitchat.service"
+BT_APPLY="sudo systemctl daemon-reload && sudo systemctl restart bluetooth.service && sudo systemctl restart $SERVICE_NAME"
 BT_INSTALL="ssh -t $HOST 'sudo install -D -m 644 -o root -g root $RELEASES/current/$BT_DROPIN_NAME $BT_DROPIN && $BT_APPLY'"
 # The running command line comes from /proc, which needs no privileges; its NULs become spaces.
 BT_CMD='d='"'$BT_DROPIN'"'
@@ -485,7 +552,7 @@ fi
 [[ -z "$BT_WARN" ]] || echo "WARNING: $BT_WARN" >&2
 
 # --- 11b. flush everything written since the upload -------------------------
-# The current symlink, ~/bitchat-embedded.kexe and /etc/systemd/system/bitchat.service are all
+# The current symlink, the selected home link and /etc/systemd/system/$SERVICE_NAME are all
 # written after the sync in step 8, and a release the device cannot find at boot is as broken
 # as one with empty files. Runs whatever --no-restart did, because the symlink swap happens
 # either way.
@@ -502,15 +569,15 @@ elif [[ "$PREVIOUS" == "$REMOTE_DIR" ]]; then
   echo "previous: $PREVIOUS (same release)"
 else
   echo "previous: $PREVIOUS"
-  echo "rollback: ssh $HOST \"ln -sfn '$PREVIOUS' '$RELEASES/current.tmp' && mv -T '$RELEASES/current.tmp' '$RELEASES/current' && sudo -n systemctl restart bitchat.service\""
+  echo "rollback: ssh $HOST \"ln -sfn '$PREVIOUS' '$RELEASES/current.tmp' && mv -T '$RELEASES/current.tmp' '$RELEASES/current' && sudo -n systemctl restart $SERVICE_NAME\""
 fi
 echo "identity: $IDENTITY"
 echo "service:  $STATE"
 if [[ "$HOME_LINK_OK" == 1 ]]; then
-  echo "home:     ~/bitchat-embedded.kexe -> current (run with the service stopped: sudo systemctl stop bitchat.service)"
+  echo "home:     ~/$HOME_LINK_NAME -> current (run with the service stopped: sudo systemctl stop $SERVICE_NAME)"
 else
-  echo "home:     ~/bitchat-embedded.kexe not updated (see the warning above)"
+  echo "home:     ~/$HOME_LINK_NAME not updated (see the warning above)"
 fi
 [[ -z "$ORDER_WARN" ]] || echo "WARNING:  $ORDER_WARN"
 [[ -z "$BT_WARN" ]] || echo "WARNING:  $BT_WARN"
-echo "autostart is only proven by a reboot: journalctl -b -u bitchat.service; journalctl -b -g 'ordering cycle'"
+echo "autostart is only proven by a reboot: journalctl -b -u $SERVICE_NAME; journalctl -b -g 'ordering cycle'"

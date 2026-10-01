@@ -1,0 +1,41 @@
+# Installed by scripts/deploy-pi.sh --ui tui as /etc/systemd/system/bitchat-tui.service.
+# The binary lives in /opt/bitchat-tui/releases/<release>/; the deploy script atomically swaps
+# /opt/bitchat-tui/releases/current. __BITCHAT_USER__ and __BITCHAT_GROUP__ are substituted
+# while staging so no device account name is checked in.
+#
+# After=multi-user.target is load-bearing. A target adds an implicit reverse After= edge to a
+# unit it Wants unless the unit already has an ordering relationship with that target. Removing
+# the target here can therefore restore multi-user.target -> bitchat-tui.service and form an
+# ordering cycle at boot; systemd resolves that by deleting a start job. Keep the target even
+# though this unit also orders after getty@tty1.service. Verify it on-device with:
+#   systemctl show -p After --value bitchat-tui.service
+#   systemctl show -p After --value multi-user.target
+#
+# tty1 belongs to this service, not a login getty. Conflicts= prevents a newly enabled getty
+# from competing for the console. StandardInput=tty and TTYPath establish tty1 as Mosaic's
+# controlling terminal; journal stdout/stderr keep diagnostics out of its rendered frame.
+[Unit]
+Description=Bitchat terminal UI (tty1, Orange Pi)
+After=multi-user.target getty@tty1.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+User=__BITCHAT_USER__
+Group=__BITCHAT_GROUP__
+WorkingDirectory=/opt/bitchat-tui/releases/current
+ExecStart=/opt/bitchat-tui/releases/current/bitchat-tui.kexe
+Environment=LANG=en_US.UTF-8
+Environment=TERM=linux
+StandardInput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+StandardOutput=journal
+StandardError=journal
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
