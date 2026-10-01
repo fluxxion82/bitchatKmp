@@ -21,6 +21,7 @@ The target is PI_HOST (an ssh destination, as for deploy-pi.sh) or --host; key-b
 Exit status is 0 when every check passed. python3 stdlib only.
 """
 import argparse
+import math
 import os
 import re
 import subprocess
@@ -34,6 +35,8 @@ LOOP_MARKER = "[Main] Entering event-driven loop"
 CRASH_MARKER = "Uncaught Kotlin exception"
 POLL_INTERVAL = 2.0
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=60"]
+# Upper bound for one ssh command, including a connected session that stops producing output.
+SSH_RUN_TIMEOUT = 120.0
 HEX_RE = re.compile(r"^[0-9a-f]+$")
 
 failures = []
@@ -99,8 +102,17 @@ class Device:
         self.host = host
 
     def run(self, command):
-        """Run `command` on the device (as the ssh argument, never via stdin); return (exit code, stdout)."""
-        result = subprocess.run(["ssh", "-n", *SSH_OPTS, self.host, command], text=True, capture_output=True)
+        """Run `command` on the device (as the ssh argument, never via stdin); return (exit code, stdout).
+
+        ConnectTimeout bounds only the handshake, so a connected-but-hung command needs its own
+        deadline: without one a single stuck ssh would hang the whole smoke for ever.
+        """
+        try:
+            result = subprocess.run(["ssh", "-n", *SSH_OPTS, self.host, command],
+                                    text=True, capture_output=True, timeout=SSH_RUN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise SystemExit(
+                f"embedded-smoke: ssh to {self.host} did not finish within {SSH_RUN_TIMEOUT:g} s: {command}")
         if result.returncode == 255:
             raise SystemExit(f"embedded-smoke: ssh transport failure talking to {self.host}: {result.stderr.strip()}")
         return result.returncode, result.stdout
@@ -132,6 +144,12 @@ def main():
                         help="how long the app must then stay up (default 30)")
     parser.add_argument("--no-restart", action="store_true", help=f"check the running invocation instead of restarting {SERVICE}")
     args = parser.parse_args()
+    for name in ("timeout", "hold"):
+        value = getattr(args, name)
+        # argparse's float accepts nan and inf, and both make the elapsed-time comparisons below
+        # never finish; reject them rather than hang.
+        if not math.isfinite(value) or value < 0:
+            parser.error(f"--{name} must be a finite, non-negative number of seconds (got {value})")
     if not args.host:
         parser.error("no target; set PI_HOST=user@host or pass --host")
 

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import unittest.mock
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / 'scripts/embedded-smoke.py'
@@ -77,6 +78,29 @@ class EvaluateTests(unittest.TestCase):
     def test_missing_markers_are_named(self):
         missing = smoke.missing_markers(IDENTITY, CRASHED)
         self.assertEqual(["'[Main] Entering event-driven loop'"], missing)
+
+
+class ArgumentTests(unittest.TestCase):
+    """--timeout/--hold feed elapsed-time comparisons, so nan/inf would never terminate."""
+
+    def _reject(self, *argv):
+        argv = ['embedded-smoke.py', '--host', 'nobody@127.0.0.1', *argv]
+        with unittest.mock.patch.object(sys, 'argv', argv), \
+                self.assertRaises(SystemExit) as caught, \
+                open(os.devnull, 'w') as devnull, \
+                unittest.mock.patch.object(sys, 'stderr', devnull):
+            smoke.main()
+        self.assertEqual(2, caught.exception.code)
+
+    def test_rejects_non_finite_timeout(self):
+        for value in ('inf', 'nan', '-inf'):
+            with self.subTest(value=value):
+                self._reject('--timeout', value)
+
+    def test_rejects_non_finite_or_negative_hold(self):
+        for value in ('inf', 'nan', '-1'):
+            with self.subTest(value=value):
+                self._reject('--hold', value)
 
 
 class ParseTests(unittest.TestCase):
