@@ -27,7 +27,9 @@ import com.jakewharton.mosaic.ui.unit.IntSize
  * Background mode is left out: it means nothing on a terminal. The theme row picks the colours
  * the whole app draws in, the same setting the Compose apps have.
  *
- * The last row is not a setting: it is where the emergency wipe is written down.
+ * The rows after the theme are not settings. The first is where the emergency wipe is written down;
+ * the rest say which build this is ([aboutRows]): the version and, where the build has one, its
+ * identity (commit, branch, clean or dirty, build time), so a board can be told from its own screen.
  *
  * Keys: `Up`/`Down` select a row (the selected one is reversed and shows `< value >`),
  * `Left`/`Right` step its value and emit the matching callback; nothing changes here until the
@@ -94,7 +96,7 @@ fun SettingsScreen(
         // Not a setting, and not something a stray Left or Right may do: the only place the
         // emergency wipe is written down, at the end of the list where a reader will meet it.
         SettingRow("Erase everything", WIPE_KEYS, enabled = false) {},
-    )
+    ) + aboutRows(displayText(state.appVersion), state.buildIdentity?.let { displayText(it) }, size.width)
     val status = statusLines(state, state.requestedTorMode == TorMode.ON)
     val theme = LocalTuiTheme.current
     var selected by remember { mutableIntStateOf(0) }
@@ -168,6 +170,19 @@ private class PendingSettings {
 /** One settings row; [change] gets -1 for `Left`, +1 for `Right`. */
 private class SettingRow(val label: String, val value: String, val enabled: Boolean, val change: (Int) -> Unit)
 
+/**
+ * What the build says about itself, as rows that cannot change: the [version], then, when the build
+ * has one, its [identity] under "Build", wrapped to what is left of a [width]-cell row after the
+ * label so none of it is cut (the end of it says whether the tree was dirty and when it was built).
+ * Both must already be sanitized.
+ */
+private fun aboutRows(version: String, identity: String?, width: Int): List<SettingRow> = buildList {
+    add(SettingRow("Version", version, enabled = false) {})
+    if (identity == null) return@buildList
+    val lines = wrapCells(identity, (width - ABOUT_VALUE_OFFSET).coerceAtLeast(MIN_ABOUT_CELLS))
+    lines.forEachIndexed { index, line -> add(SettingRow(if (index == 0) "Build" else "", line, enabled = false) {}) }
+}
+
 /** Lines explaining a failed or running radio switch and Tor's state; the texts may come from the radio or Tor. */
 private fun statusLines(state: SettingsState, torRequested: Boolean): List<String> = buildList {
     when (state.loraSwitchStatus) {
@@ -223,6 +238,15 @@ private const val TOR_ON_UNUSABLE = "on, unusable"
 private const val LABEL_CELLS = 17
 private const val PROOF_OF_WORK = "Proof of work"
 private const val MAX_POW_DIFFICULTY = 32
+
+/**
+ * What a selected row spends around its value: the space and the label, then `< ` before it and
+ * ` >` after. The build's identity is wrapped short of this, so the selected line is shown whole.
+ */
+private const val ABOUT_VALUE_OFFSET = 1 + LABEL_CELLS + 2 + 2
+
+/** The narrowest an identity line is wrapped to, whatever the width; a row still cuts at the screen's edge. */
+private const val MIN_ABOUT_CELLS = 8
 
 /** How a theme choice is named in the settings row. */
 internal fun themeLabel(theme: ThemePreference): String = when (theme) {

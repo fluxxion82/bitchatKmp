@@ -185,6 +185,23 @@ class InjectionTest {
         assertEquals(listOf("$dim LoRa: failed, $sanitized$reset", "$dim Tor: $sanitized$reset"), rows.drop(9))
     }
 
+    @Test fun settingsBuildIdentity() = runTest {
+        // A build's identity is written by the build, not a peer, but it is drawn through the same
+        // gate: nothing a branch name or a tool left in it may reach the terminal as a control.
+        val state = com.bitchat.viewvo.settings.SettingsState(appVersion = payload, buildIdentity = payload)
+        val rows = ansi {
+            SettingsScreen(state, IntSize(120, 14), {}, {}, {}, {}, {}, {}, {}, {}, {})
+        }.split("\n")
+        // Version, then Build: dim rows, the label and its gap taking 20 cells before the 38-cell text.
+        assertEquals(
+            listOf(
+                "$dim Version" + " ".repeat(12) + "$sanitized$reset",
+                "$dim Build" + " ".repeat(14) + "$sanitized$reset",
+            ),
+            rows.subList(11, 13),
+        )
+    }
+
     @Test fun locationsList() = runTest {
         val state = com.bitchat.viewvo.location.LocationChannelsState(
             availableChannels = listOf(

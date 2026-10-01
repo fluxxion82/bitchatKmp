@@ -10,6 +10,7 @@ import com.bitchat.domain.app.SetAppTheme
 import com.bitchat.domain.app.model.AppTheme
 import com.bitchat.domain.app.model.BackgroundMode
 import com.bitchat.domain.base.invoke
+import com.bitchat.domain.initialization.GetAppInformation
 import com.bitchat.domain.lora.GetLoRaSettings
 import com.bitchat.domain.lora.SetLoRaEnabled
 import com.bitchat.domain.lora.SetLoRaRegion
@@ -32,8 +33,10 @@ import com.bitchat.viewvo.settings.LoRaSwitchStatus
 import com.bitchat.viewvo.settings.LoRaSettingsOperation
 import com.bitchat.viewvo.settings.SettingsState
 import com.bitchat.viewvo.settings.ThemePreference
+import com.bitchat.viewvo.settings.toBuildIdentity
 import com.bitchat.viewvo.settings.toDomain
 import com.bitchat.viewvo.settings.toThemePreference
+import com.bitchat.viewvo.settings.toVersionLabel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -66,6 +69,7 @@ class SettingsViewModel(
     private val setLoRaTxPower: SetLoRaTxPower,
     private val setShowLoRaPeers: SetShowLoRaPeers,
     private val switchLoRaProtocol: SwitchLoRaProtocol,
+    private val getAppInformation: GetAppInformation,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsState())
     val state: StateFlow<SettingsState> = _state.asStateFlow()
@@ -93,9 +97,13 @@ class SettingsViewModel(
             // not, why - a missing native library, or an HTTP engine that ignores the proxy.
             val torAvailability = getTorAvailability()
 
+            // What this binary says it is, so a screen can tell one build from another.
+            val appInformation = getAppInformation()
+
             _state.update {
                 it.copy(
-                    appVersion = "1.5.1",
+                    appVersion = appInformation.toVersionLabel(),
+                    buildIdentity = appInformation.toBuildIdentity(),
                     selectedTheme = themePreference,
                     showBackgroundModeSetting = showBackgroundModeSetting,
                     proofOfWorkEnabled = powSettings.enabled,

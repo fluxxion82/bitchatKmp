@@ -148,6 +148,7 @@ val viewModelModule = module {
             setLoRaTxPower = get(),
             setShowLoRaPeers = get(),
             switchLoRaProtocol = get(),
+            getAppInformation = get(),
         )
     }
 

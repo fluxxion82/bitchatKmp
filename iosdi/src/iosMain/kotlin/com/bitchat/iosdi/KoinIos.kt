@@ -17,7 +17,9 @@ fun initKoinIos(
     module {
         single {
             AppInformation(
-                version = Version("1", "0", "0"),
+                // MARKETING_VERSION and CURRENT_PROJECT_VERSION in apps/iosApp/Configuration/Config.xcconfig.
+                // An app has no git identity of its own, so additionalInfo stays empty.
+                version = Version("1.0", "1", ""),
                 versionCode = 1,
                 id = "com.bitchat.Bitchat",
                 debug = true,

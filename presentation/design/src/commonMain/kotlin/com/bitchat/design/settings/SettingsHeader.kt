@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import bitchatkmp.presentation.design.generated.resources.Res
@@ -23,7 +24,8 @@ import org.jetbrains.compose.resources.stringResource
 @Composable
 fun SettingsHeader(
     appVersion: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    buildIdentity: String? = null,
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
@@ -50,6 +52,17 @@ fun SettingsHeader(
             fontFamily = FontFamily.Monospace,
             color = colorScheme.onBackground.copy(alpha = 0.5f)
         )
+        // Which binary this is (commit, branch, clean or dirty, build time), for telling two
+        // devices running the same app apart. Shown as the build wrote it.
+        if (buildIdentity != null) {
+            Text(
+                text = buildIdentity,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                textAlign = TextAlign.Center,
+                color = colorScheme.onBackground.copy(alpha = 0.5f)
+            )
+        }
         Text(
             text = stringResource(Res.string.about_tagline),
             fontSize = 13.sp,

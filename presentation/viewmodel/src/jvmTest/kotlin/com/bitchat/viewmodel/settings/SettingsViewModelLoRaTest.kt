@@ -7,6 +7,9 @@ import com.bitchat.domain.app.GetBackgroundMode
 import com.bitchat.domain.app.SetAppTheme
 import com.bitchat.domain.app.model.AppTheme
 import com.bitchat.domain.app.model.BackgroundMode
+import com.bitchat.domain.initialization.GetAppInformation
+import com.bitchat.domain.initialization.models.AppInformation
+import com.bitchat.domain.initialization.models.Version
 import com.bitchat.domain.lora.GetLoRaSettings
 import com.bitchat.domain.lora.SetLoRaEnabled
 import com.bitchat.domain.lora.SetLoRaRegion
@@ -73,6 +76,7 @@ class SettingsViewModelLoRaTest : BaseViewModelTest() {
             setLoRaTxPower = changePower,
             setShowLoRaPeers = mockk<SetShowLoRaPeers>(relaxed = true),
             switchLoRaProtocol = switchProtocol,
+            getAppInformation = GetAppInformation(AppInformation(Version("1.0.0", "0", ""), versionCode = 1, id = "test", debug = true)),
         ).also { instantExecutorRule.scheduler.runCurrent() }
     }
 

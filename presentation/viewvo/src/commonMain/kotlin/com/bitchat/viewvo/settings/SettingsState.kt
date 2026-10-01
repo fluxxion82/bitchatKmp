@@ -8,6 +8,12 @@ import com.bitchat.domain.tor.model.TorMode
 
 data class SettingsState(
     val appVersion: String = "1.0.0",
+    /**
+     * What this build says about itself (commit, branch, clean or dirty, debug or release, build
+     * time), or null when it has nothing to say. It is how one running binary is told from another,
+     * as `--version` does, so it is shown as given and never rebuilt from other fields.
+     */
+    val buildIdentity: String? = null,
     val selectedTheme: ThemePreference = ThemePreference.SYSTEM,
     val showBackgroundModeSetting: Boolean = false,
     val backgroundModeEnabled: Boolean = false,

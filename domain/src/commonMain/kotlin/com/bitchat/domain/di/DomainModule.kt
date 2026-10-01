@@ -44,6 +44,7 @@ import com.bitchat.domain.chat.SetChannelPassword
 import com.bitchat.domain.chat.eventbus.ChatEventBus
 import com.bitchat.domain.chat.eventbus.InMemoryChatEventBus
 import com.bitchat.domain.initialization.AppInitializer
+import com.bitchat.domain.initialization.GetAppInformation
 import com.bitchat.domain.initialization.InitializeApplication
 import com.bitchat.domain.location.BeginGeohashSampling
 import com.bitchat.domain.location.EndGeohashSampling
@@ -136,6 +137,8 @@ val domainModule = module {
     single { SetPowSettings(repository = get(), eventBus = get()) }
 
     single { InitializeApplication(initializers = getKoin().getAll<AppInitializer>().toSet(), contextFacade = get()) }
+    // AppInformation is supplied by each app's build-config module, never by a layer below.
+    single { GetAppInformation(appInformation = get()) }
 
     single { AppForegroundState() }
     single { InMemoryUserEventBus(contextFacade = get()) } bind UserEventBus::class

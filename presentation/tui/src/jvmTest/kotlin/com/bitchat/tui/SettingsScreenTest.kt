@@ -19,6 +19,7 @@ import com.jakewharton.mosaic.ui.Text
 import com.jakewharton.mosaic.ui.unit.IntSize
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
 /** Rows are written by hand: a space, the label padded to 17 cells, then "  value" or "< value >" when selected. */
@@ -29,6 +30,10 @@ class SettingsScreenTest {
     private val reset = "$esc[0m"
     private val theme = " Theme" + " ".repeat(14) + "terminal"
     private val erase = " Erase everything" + " ".repeat(3) + WIPE_KEYS
+    private val version = " Version" + " ".repeat(12) + "1.0.0"
+
+    // What bitchat-tui --version prints, which the embedded build hands the app as its identity.
+    private val identity = "bitchat-tui 1.0.0 (65d65087cd41, reentry/session-2, clean, debug, built 2026-09-06T20:25:33-07:00)"
     private val ready = SettingsState(loraAvailable = true, torAvailability = TorAvailability.AVAILABLE)
     private val changes = mutableStateListOf<String>()
 
@@ -90,7 +95,8 @@ class SettingsScreenTest {
         assertEquals(" PoW difficulty" + " ".repeat(5) + "16 bits", rows[8])
         assertEquals(theme, rows[9]) // The theme follows the app's own setting.
         assertEquals(erase, rows[10]) // And the emergency wipe is written down under it.
-        assertEquals(List(11) { "" }, rows.drop(11))
+        assertEquals(version, rows[11]) // And, last, which version this is.
+        assertEquals(List(10) { "" }, rows.drop(12))
     }
 
     @Test fun selectedRowIsInTheAccentColoursAndDisabledRowsAreDim() = runTest {
@@ -285,7 +291,7 @@ class SettingsScreenTest {
     @Test fun theThemeRowStepsThroughThePreferences() = runTest {
         val down = KeyboardEvent.Down
         val right = KeyboardEvent.Right
-        // Eight rows down is the theme, the last one; it steps SYSTEM, LIGHT, DARK and wraps.
+        // Eight rows down is the theme, the last setting; it steps SYSTEM, LIGHT, DARK and wraps.
         assertEquals(
             listOf("theme=LIGHT", "theme=DARK", "theme=SYSTEM"),
             keys(ready, down, down, down, down, down, down, down, down, right, right, right),
@@ -326,5 +332,73 @@ class SettingsScreenTest {
             listOf(" LoRa radio" + " ".repeat(7) + "< on >" + " ".repeat(16), " LoRa: failed, radio busy", " Tor: running, 45%", "^"),
             rows,
         )
+    }
+
+    @Test fun theBuildIdentityIsWrappedUnderTheVersion() = runTest {
+        val rows = render(AnsiLevel.NONE, ready.copy(buildIdentity = identity), IntSize(85, 22))
+        assertEquals(version, rows[11])
+        // 63 cells a line: the row's label and the selected row's brackets are kept clear of it.
+        assertEquals(" Build" + " ".repeat(14) + "bitchat-tui 1.0.0 (65d65087cd41, reentry/session-2, clean,", rows[12])
+        assertEquals(" ".repeat(20) + "debug, built 2026-09-06T20:25:33-07:00)", rows[13])
+        assertEquals(List(8) { "" }, rows.drop(14))
+    }
+
+    @Test fun aNarrowScreenWrapsTheIdentityAndStillShowsAllOfIt() = runTest {
+        val rows = render(AnsiLevel.NONE, ready.copy(buildIdentity = identity), IntSize(40, 30))
+        val build = rows.drop(12).takeWhile { it.isNotEmpty() }
+        assertTrue(build.size > 2, "the identity does not fit one line at 40 cells")
+        assertTrue(build.all { it.length <= 40 }, build.toString())
+        // After the 20 cells of label and gap. Cut at spaces, or inside a word wider than a line:
+        // nothing is dropped either way.
+        assertEquals(identity.replace(" ", ""), build.joinToString("") { it.drop(20) }.replace(" ", ""))
+    }
+
+    @Test fun withoutAnIdentityOnlyTheVersionIsShown() = runTest {
+        val rows = render(AnsiLevel.NONE, ready, IntSize(85, 22))
+        assertEquals(listOf(version) + List(10) { "" }, rows.drop(11))
+    }
+
+    @Test fun theVersionComesFromTheState() = runTest {
+        val rows = render(AnsiLevel.NONE, ready.copy(appVersion = "2.7.3"), IntSize(85, 22))
+        assertEquals(" Version" + " ".repeat(12) + "2.7.3", rows[11])
+    }
+
+    @Test fun scrollingDownReachesTheBuildIdentityOnASmallScreen() = runTest {
+        runMosaicTest {
+            setContentAndSnapshot { Screen(ready.copy(buildIdentity = identity), IntSize(85, 5)) }
+            repeat(13) { sendKeyEvent(KeyboardEvent(KeyboardEvent.Down)) }
+            val rows = awaitSnapshot().lines().drop(1)
+            assertEquals(erase, rows[1])
+            assertEquals(version, rows[2])
+            assertEquals(" Build" + " ".repeat(14) + "bitchat-tui 1.0.0 (65d65087cd41, reentry/session-2, clean,", rows[3])
+            // The last line is the selected row: its text between brackets, to the screen's edge.
+            assertEquals((" ".repeat(18) + "< debug, built 2026-09-06T20:25:33-07:00) >").padEnd(85), rows[4])
+        }
+    }
+
+    @Test fun theVersionAndBuildRowsCannotBeChanged() = runTest {
+        val selectedRows = listOf(
+            "< 1.0.0 >",
+            "< bitchat-tui 1.0.0 (65d65087cd41, reentry/session-2, clean, >",
+            "< debug, built 2026-09-06T20:25:33-07:00) >",
+        )
+        runMosaicTest {
+            setContentAndSnapshot { Screen(ready.copy(buildIdentity = identity), IntSize(85, 5)) }
+            // Ten rows down is the version, then each line of the identity.
+            repeat(10) { sendKeyEvent(KeyboardEvent(KeyboardEvent.Down)) }
+            var snapshot = awaitSnapshot()
+            for ((index, shown) in selectedRows.withIndex()) {
+                // The row is there to be selected, and says what it says whatever is pressed on it.
+                assertEquals(shown, snapshot.lines().single { "< " in it }.substringAfter(" ".repeat(10)).trim())
+                sendKeyEvent(KeyboardEvent(KeyboardEvent.Right))
+                sendKeyEvent(KeyboardEvent(KeyboardEvent.Left))
+                // A key that changes nothing draws no frame, so it is the move that is awaited.
+                if (index < selectedRows.lastIndex) {
+                    sendKeyEvent(KeyboardEvent(KeyboardEvent.Down))
+                    snapshot = awaitSnapshot()
+                }
+            }
+        }
+        assertEquals(emptyList(), changes.toList())
     }
 }

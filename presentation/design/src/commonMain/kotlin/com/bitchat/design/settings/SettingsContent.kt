@@ -63,7 +63,10 @@ fun SettingsContent(
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             item(key = "header") {
-                SettingsHeader(appVersion = state.appVersion)
+                SettingsHeader(
+                    appVersion = state.appVersion,
+                    buildIdentity = state.buildIdentity,
+                )
             }
 
             item(key = "features") {
