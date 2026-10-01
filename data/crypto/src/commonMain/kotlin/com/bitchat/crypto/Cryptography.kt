@@ -11,6 +11,13 @@ expect object Cryptography {
     fun encryptNIP44(plaintext: String, recipientPublicKeyHex: String, senderPrivateKeyHex: String): String
     fun decryptNIP44(ciphertext: String, senderPublicKeyHex: String, recipientPrivateKeyHex: String): String
     fun randomizeTimestampUpToPast(maxPastSeconds: Int = 172800): Int
+
+    /**
+     * [size] bytes from the platform CSPRNG: the default JCA `SecureRandom` on the JVM and
+     * Android, libsodium's `randombytes_buf` on Apple and Linux. Secret material created outside
+     * this object, such as the Nostr device seed, must come from here and nowhere else.
+     */
+    fun secureRandomBytes(size: Int): ByteArray
     fun isValidPrivateKey(privateKeyHex: String): Boolean
     fun isValidPublicKey(publicKeyHex: String): Boolean
     fun getDigestHash(data: ByteArray): ByteArray
@@ -25,10 +32,4 @@ expect object Cryptography {
 
     fun deriveX25519PublicKey(privateKeyHex: String): String
 
-    /**
-     * [size] bytes from the platform's cryptographically secure generator: `SecureRandom` on
-     * JVM and Android, libsodium's `randombytes_buf` on Apple and Linux. Use this, never
-     * `kotlin.random.Random`, for anything secret.
-     */
-    fun secureRandomBytes(size: Int): ByteArray
 }

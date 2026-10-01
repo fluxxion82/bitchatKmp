@@ -557,13 +557,39 @@ class NostrClient(
             val seedBase64 = identityProvider.loadOrMint(
                 key = DEVICE_SEED_KEY,
                 publicFormOf = { SEED_CLAIM },
-                mint = { Base64.encode(Cryptography.secureRandomBytes(DEVICE_SEED_BYTES)) },
+                mint = {
+                    val seed = Cryptography.secureRandomBytes(DEVICE_SEED_BYTES)
+                    validateDeviceSeed(seed)
+                    Base64.encode(seed)
+                },
             )
 
-            return Base64.decode(seedBase64) //android.util.Base64.decode(existingSeed, android.util.Base64.DEFAULT)
+            return try {
+                Base64.decode(seedBase64)
+            } catch (_: IllegalArgumentException) {
+                throw IdentityRefusedException(
+                    reason = "Nostr device seed is not valid base64",
+                    remedy = "restore the identity store from a backup",
+                )
+            }.also(::validateDeviceSeed)
         } catch (e: Exception) {
             // Log.e(TAG, "Failed to get/create device seed: ${e.message}")
             throw e
+        }
+    }
+
+    private fun validateDeviceSeed(seed: ByteArray) {
+        if (seed.size != DEVICE_SEED_BYTES) {
+            throw IdentityRefusedException(
+                reason = "Nostr device seed has the wrong length: it is ${seed.size} bytes",
+                remedy = "restore the identity store from a backup",
+            )
+        }
+        if (seed.all { it == 0.toByte() }) {
+            throw IdentityRefusedException(
+                reason = "Nostr device seed is all zero",
+                remedy = "restore the identity store from a backup",
+            )
         }
     }
 

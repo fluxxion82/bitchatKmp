@@ -317,6 +317,18 @@ actual object Cryptography {
         return now - offset
     }
 
+    actual fun secureRandomBytes(size: Int): ByteArray {
+        require(size >= 0) { "size must not be negative: $size" }
+        sodiumReady
+        val bytes = ByteArray(size)
+        if (size > 0) {
+            bytes.usePinned { pinned ->
+                randombytes_buf(pinned.addressOf(0).reinterpret<uint8_tVar>(), bytes.size.toULong())
+            }
+        }
+        return bytes
+    }
+
     actual fun isValidPrivateKey(privateKeyHex: String): Boolean {
         return try {
             val privateKey = privateKeyHex.hexToByteArray()
@@ -844,16 +856,4 @@ actual object Cryptography {
         return publicKeyBytes.toHexString()
     }
 
-    actual fun secureRandomBytes(size: Int): ByteArray {
-        require(size >= 0) { "size must not be negative: $size" }
-        sodiumReady
-        val bytes = ByteArray(size)
-        // addressOf(0) throws on an empty array, and there is nothing to fill anyway.
-        if (size > 0) {
-            bytes.usePinned { pinned ->
-                randombytes_buf(pinned.addressOf(0).reinterpret<uint8_tVar>(), size.toULong())
-            }
-        }
-        return bytes
-    }
 }

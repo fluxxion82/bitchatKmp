@@ -96,6 +96,32 @@ class CryptographyTest {
     }
 
     @Test
+    fun secureRandomBytes_returnsExactlyTheRequestedLength() {
+        for (size in listOf(0, 1, 12, 32, 1000)) {
+            assertEquals(size, Cryptography.secureRandomBytes(size).size)
+        }
+    }
+
+    @Test
+    fun secureRandomBytes_rejectsNegativeSize() {
+        assertFailsWith<IllegalArgumentException> { Cryptography.secureRandomBytes(-1) }
+    }
+
+    @Test
+    fun secureRandomBytes_fillsTheBuffer() {
+        // Catches a buffer handed back without being filled, on every platform including the
+        // native ones. It cannot tell a weak generator from a strong one - WeakRandomnessGuardTest
+        // and CsprngProvenanceTest do that - and is deliberately no stronger than this: a false
+        // failure needs two identical or all-zero 256-bit draws.
+        val first = Cryptography.secureRandomBytes(32)
+        val second = Cryptography.secureRandomBytes(32)
+
+        assertFalse(first.all { it == 0.toByte() })
+        assertFalse(second.all { it == 0.toByte() })
+        assertFalse(first.contentEquals(second))
+    }
+
+    @Test
     fun isValidPrivateKey_rejectsInvalidValues() {
         val zeroKey = "00".repeat(32)
         val tooLong = "00".repeat(33)

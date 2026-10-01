@@ -1,123 +1,130 @@
 package com.bitchat.nostr
 
+import com.bitchat.transport.IdentityRefusedException
 import com.bitchat.transport.IdentityStoreState
-import com.bitchat.transport.TransportIdentityProvider
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.io.encoding.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
+private const val SEED_KEY = "nostr_device_seed"
+private const val GEOHASH = "u4pruyd"
+
 /**
- * The device seed behind every geohash identity: new seeds come from the CSPRNG, and a seed
- * that is already stored is used exactly as it is.
+ * The device seed is the root secret of every geohash identity: each one is derived from it.
+ *
+ * Whatever goes wrong around it, the answer may never be a weak seed (short, zero, or made up on
+ * the spot) and may never be a replacement written over one that exists. Every failure below must
+ * surface as an exception with nothing written, so no geohash identity is ever derived from it.
+ * Where the bytes come from is `NostrSecretProvenanceTest`'s job; this is about custody.
  */
 class NostrDeviceSeedTest {
 
+    private fun client(store: FakeIdentityStore) = NostrClient(FakeNostrPreferences(), store)
+
     @Test
-    fun `a first run mints a 32-byte seed`() {
+    fun `a first run mints one 32-byte seed and every later derivation reuses it`() {
         val store = FakeIdentityStore()
 
-        NostrClient(FakeNostrPreferences(), store).deriveIdentity(GEOHASH)
+        val first = client(store).deriveIdentity(GEOHASH)
+        // A fresh client has no identity cache, so this goes back to the store.
+        val again = client(store).deriveIdentity(GEOHASH)
 
-        val stored = assertNotNull(store.values[DEVICE_SEED_KEY])
-        assertEquals(32, Base64.decode(stored).size)
-        assertEquals(1, store.mints)
+        assertEquals(1, store.mintCalls)
+        assertEquals(32, Base64.decode(store.values.getValue(SEED_KEY)).size)
+        assertEquals(first.privateKeyHex, again.privateKeyHex)
     }
 
     @Test
-    fun `every device mints a different seed`() {
-        val stores = List(8) { FakeIdentityStore() }
-
-        val identities = stores.map { NostrClient(FakeNostrPreferences(), it).deriveIdentity(GEOHASH) }
-
-        // A fixed or reseeded generator would hand two devices the same seed, and with it the
-        // same key for every geohash.
-        assertEquals(stores.size, stores.map { it.values.getValue(DEVICE_SEED_KEY) }.toSet().size)
-        assertEquals(stores.size, identities.map { it.publicKeyHex }.toSet().size)
-    }
-
-    @Test
-    fun `a stored seed is used as it is and never replaced`() {
-        // Seeds minted before the CSPRNG fix came from kotlin.random. Replacing one would change
-        // every geohash identity on the device and orphan its geohash DM threads.
-        val store = FakeIdentityStore(DEVICE_SEED_KEY to STORED_SEED_BASE64)
-
-        val identity = NostrClient(FakeNostrPreferences(), store).deriveIdentity(GEOHASH)
-
-        // HMAC-SHA256(seed = 00..1f, "u4pruyd" || 00000000), computed outside Kotlin.
-        assertEquals(
-            "cf5ac3b3b7c4374def478bcb8d927209a210726928e0a6f4d9cc148f33f8077d",
-            identity.privateKeyHex,
+    fun `a refusal from the custodian yields no identity and writes nothing`() {
+        // What the embedded custodian says when its ledger records a seed the store has lost:
+        // the seed must be recovered, not replaced. Swallowing this and carrying on with some
+        // other seed is exactly the silent weak seed this guards against.
+        val refusal = IdentityRefusedException(
+            reason = "this device has already created NOSTR_DEVICE_SEED (claim.nostr_seed=present " +
+                "in the identity ledger) but '$SEED_KEY' is not in the store; the private key must " +
+                "be recovered, not replaced",
+            remedy = "restore the identity store from a backup",
         )
-        assertEquals(STORED_SEED_BASE64, store.values[DEVICE_SEED_KEY])
-        assertEquals(0, store.mints)
-        assertTrue(store.writes.isEmpty(), "unexpected writes: ${store.writes}")
+        val store = FakeIdentityStore(mapOf("nostr_private_key" to "live"), refusal = refusal)
+
+        val thrown = assertFailsWith<IdentityRefusedException> { client(store).deriveIdentity(GEOHASH) }
+
+        assertSame(refusal, thrown)
+        assertEquals(0, store.mintCalls)
+        assertEquals(mapOf("nostr_private_key" to "live"), store.values)
     }
 
     @Test
-    fun `a stored seed gives the same identity on every start`() {
-        val store = FakeIdentityStore()
-        val first = NostrClient(FakeNostrPreferences(), store).deriveIdentity(GEOHASH)
+    fun `an unreadable store refuses to mint a seed`() {
+        val store = FakeIdentityStore(
+            mapOf("signing_private_key" to "signing"),
+            state = IdentityStoreState.UNREADABLE,
+        )
 
-        // A new client has an empty identity cache, so this goes back to the store.
-        val second = NostrClient(FakeNostrPreferences(), store).deriveIdentity(GEOHASH)
+        val refusal = assertFailsWith<IdentityRefusedException> { client(store).deriveIdentity(GEOHASH) }
 
-        // Keys, not the whole identity: NostrIdentity also carries its creation time.
-        assertEquals(first.privateKeyHex, second.privateKeyHex)
-        assertEquals(1, store.mints)
+        assertTrue(refusal.reason.contains(SEED_KEY), refusal.reason)
+        assertEquals(0, store.mintCalls)
+        assertFalse(SEED_KEY in store.values)
     }
 
-    /**
-     * Follows the [TransportIdentityProvider.loadOrMint] contract on a first run: the stored
-     * value when there is one, otherwise the minted value, which is then stored.
-     */
-    private class FakeIdentityStore(vararg initial: Pair<String, String>) : TransportIdentityProvider {
-        val values = mutableMapOf(*initial)
-        val writes = mutableListOf<String>()
-        var mints = 0
-            private set
+    @Test
+    fun `a seed that fails to persist yields no identity and does not poison the next attempt`() {
+        val failure = IllegalStateException("disk full")
+        val store = FakeIdentityStore(saveFailure = failure)
 
-        override fun loadKey(key: String): String? = values[key]
-        override fun saveKey(key: String, value: String) {
-            writes += "save $key"
-            values[key] = value
-        }
-        override fun hasKey(key: String) = key in values
-        override fun removeKeys(vararg keys: String) {
-            writes += "remove ${keys.joinToString()}"
-            keys.forEach(values::remove)
-        }
-        override fun clearAll() {
-            writes += "clearAll"
-            values.clear()
-        }
-        override fun loadOrMint(key: String, publicFormOf: (String) -> String, mint: () -> String): String =
-            values.getOrPut(key) {
-                mints++
-                mint()
+        assertSame(failure, assertFailsWith<IllegalStateException> { client(store).deriveIdentity(GEOHASH) })
+        assertFalse(SEED_KEY in store.values)
+
+        store.saveFailure = null
+        client(store).deriveIdentity(GEOHASH)
+
+        assertEquals(2, store.mintCalls)
+        assertEquals(32, Base64.decode(store.values.getValue(SEED_KEY)).size)
+    }
+
+    @Test
+    fun `a stored seed of the wrong length is refused and left where it is`() {
+        // A store truncated mid-record, or a seed written by a broken build. Deriving from it
+        // would make every geohash key guessable; replacing it would abandon them all.
+        for (size in listOf(0, 1, 16, 31, 33, 64)) {
+            val stored = Base64.encode(ByteArray(size) { (it + 1).toByte() })
+            val store = FakeIdentityStore(mapOf(SEED_KEY to stored))
+
+            val refusal = assertFailsWith<IdentityRefusedException>("$size bytes") {
+                client(store).deriveIdentity(GEOHASH)
             }
-        override fun storeState() = IdentityStoreState.FIRST_RUN
+
+            assertTrue(refusal.reason.contains("it is $size bytes"), refusal.reason)
+            assertEquals(stored, store.values[SEED_KEY], "$size bytes")
+            assertEquals(0, store.mintCalls, "$size bytes")
+        }
     }
 
-    private class FakeNostrPreferences : NostrPreferences {
-        override fun getLastUpdateMs() = 0L
-        override fun setLastUpdateMs(value: Long) = Unit
-        override fun setPowEnabled(enabled: Boolean) = Unit
-        override fun getPowEnabled() = false
-        override fun setPowDifficulty(difficulty: Int) = Unit
-        override fun getPowDifficulty() = 0
-        override fun setIsMining(isMining: Boolean) = Unit
-        override fun getIsMiningFlow() = MutableStateFlow(false)
+    @Test
+    fun `an all-zero stored seed is refused and left where it is`() {
+        val stored = Base64.encode(ByteArray(32))
+        val store = FakeIdentityStore(mapOf(SEED_KEY to stored))
+
+        val refusal = assertFailsWith<IdentityRefusedException> { client(store).deriveIdentity(GEOHASH) }
+
+        assertTrue(refusal.reason.contains("all zero"), refusal.reason)
+        assertEquals(stored, store.values[SEED_KEY])
+        assertEquals(0, store.mintCalls)
     }
 
-    private companion object {
-        /** NostrClient's storage key. Renaming it would orphan every stored seed just the same. */
-        const val DEVICE_SEED_KEY = "nostr_device_seed"
-        const val GEOHASH = "u4pruyd"
+    @Test
+    fun `a stored seed that is not base64 is refused and left where it is`() {
+        val store = FakeIdentityStore(mapOf(SEED_KEY to "not base64 at all!"))
 
-        /** Bytes 0x00..0x1f. */
-        const val STORED_SEED_BASE64 = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+        val refusal = assertFailsWith<IdentityRefusedException> { client(store).deriveIdentity(GEOHASH) }
+
+        assertTrue(refusal.reason.contains("not valid base64"), refusal.reason)
+        assertEquals("not base64 at all!", store.values[SEED_KEY])
+        assertEquals(0, store.mintCalls)
     }
 }

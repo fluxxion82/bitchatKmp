@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 private const val EPOCH = "0123456789abcdef0123456789abcdef"
@@ -75,6 +76,15 @@ private fun IdentityCustodian.mintString(
     claimOf = { claim },
     persist = { store.records[component.storeKey] = it },
     mint = { value },
+)
+
+/** Loads or mints the Nostr device seed the way `NostrClient` does, with the mint supplied. */
+private fun IdentityCustodian.loadOrMintSeed(store: FakeStore, mint: () -> String): String = loadOrMint(
+    component = IdentityComponent.NOSTR_DEVICE_SEED,
+    load = { store.records["nostr_device_seed"] },
+    claimOf = { IdentityLedger.CLAIM_PRESENT },
+    persist = { store.records["nostr_device_seed"] = it },
+    mint = mint,
 )
 
 class IdentityCustodianTest {
@@ -335,5 +345,99 @@ class IdentityCustodianTest {
             custodian(store, FakeInspector(inhabited), ledger)
                 .mintString(store, IdentityComponent.NOSTR_PRIVATE, "k"),
         )
+    }
+
+    @Test
+    fun `a device seed the ledger claims but the store lacks is refused and never generated`() {
+        // The truncation case for the seed: the store parses cleanly and still holds the other
+        // keys, but the seed record is gone. Every geohash identity was derived from that seed,
+        // so a replacement would silently abandon all of them.
+        val store = FakeStore(mapOf("signing_private_key" to "signing", "nostr_private_key" to "live"))
+        val ledger = FakeLedger(
+            IdentityLedger.withClaim(
+                IdentityLedger.create(EPOCH),
+                IdentityComponent.NOSTR_DEVICE_SEED,
+                IdentityLedger.CLAIM_PRESENT,
+            ),
+        )
+        val custodian = custodian(store, FakeInspector(DomainVerdict.Inhabited(emptyList())), ledger)
+        var mintCalls = 0
+
+        val refusal = assertFailsWith<IdentityRefusedException> {
+            custodian.loadOrMintSeed(store) { mintCalls++; "replacement" }
+        }
+
+        assertTrue(refusal.reason.contains("recovered, not replaced"), refusal.reason)
+        assertEquals(0, mintCalls, "a refused seed must not even be generated")
+        assertEquals(null, store.records["nostr_device_seed"])
+        assertEquals(0, ledger.writes)
+    }
+
+    @Test
+    fun `an unreadable store refuses the device seed with or without a ledger`() {
+        val configurations: List<Triple<String, DomainInspector, LedgerStore>> = listOf(
+            Triple("Android, Apple and JVM (no domain, no ledger)", NoDomainInspector, NoLedgerStore),
+            Triple(
+                "embedded, clean ledger without a seed claim",
+                FakeInspector(DomainVerdict.Inhabited(emptyList())),
+                FakeLedger(
+                    IdentityLedger.withClaim(IdentityLedger.create(EPOCH), IdentityComponent.MESH_SIGNING, "aa11"),
+                ),
+            ),
+        )
+
+        for ((name, inspector, ledger) in configurations) {
+            val store = FakeStore(mapOf("signing_private_key" to "signing"), damaged = true)
+            var mintCalls = 0
+
+            assertFailsWith<IdentityRefusedException>(name) {
+                custodian(store, inspector, ledger).loadOrMintSeed(store) { mintCalls++; "replacement" }
+            }
+
+            assertEquals(0, mintCalls, name)
+            assertEquals(null, store.records["nostr_device_seed"], name)
+        }
+    }
+
+    @Test
+    fun `a seed mint that throws leaves no record and no claim and does not block the retry`() {
+        // A CSPRNG that fails must fail the mint, not produce something to store. And it must
+        // leave no claim behind: a claim for a seed that never existed would refuse every
+        // later attempt on a device that has no seed at all.
+        val store = FakeStore()
+        val ledger = FakeLedger()
+        val custodian = custodian(store, FakeInspector(DomainVerdict.Virgin), ledger)
+        val failure = IllegalStateException("entropy source unavailable")
+
+        val thrown = assertFailsWith<IllegalStateException> { custodian.loadOrMintSeed(store) { throw failure } }
+
+        assertSame(failure, thrown)
+        assertTrue(store.records.isEmpty(), "nothing may have been persisted")
+        assertEquals(LedgerClaims.Absent, ledger.claims)
+
+        assertEquals("seed", custodian.loadOrMintSeed(store) { "seed" })
+        val claims = assertIs<LedgerClaims.Present>(ledger.claims)
+        assertEquals(IdentityLedger.CLAIM_PRESENT, IdentityLedger.claim(claims, IdentityComponent.NOSTR_DEVICE_SEED))
+    }
+
+    @Test
+    fun `a seed that cannot be persisted records no claim`() {
+        // Claim after key, never before: see the class KDoc of IdentityCustodian.
+        val store = FakeStore()
+        val ledger = FakeLedger()
+        val custodian = custodian(store, FakeInspector(DomainVerdict.Virgin), ledger)
+
+        assertFailsWith<IllegalStateException> {
+            custodian.loadOrMint(
+                component = IdentityComponent.NOSTR_DEVICE_SEED,
+                load = { store.records["nostr_device_seed"] },
+                claimOf = { IdentityLedger.CLAIM_PRESENT },
+                persist = { error("disk full") },
+                mint = { "seed" },
+            )
+        }
+
+        assertEquals(LedgerClaims.Absent, ledger.claims)
+        assertEquals(0, ledger.writes)
     }
 }

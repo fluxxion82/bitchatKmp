@@ -203,4 +203,54 @@ class IdentityMintGateTest {
             }
         }
     }
+
+    @Test
+    fun `a ledger claim for any component the store lacks refuses whatever the store says`() {
+        // The truncation case for every component, the device seed included: the ledger says
+        // this device made one, so its absence means it was lost. FIRST_RUN here is a store that
+        // lost everything, which is no more a reason to mint than losing one record.
+        for (component in IdentityComponent.entries) {
+            for (state in PreferenceStoreState.entries) {
+                val verdict = IdentityMintGate.decide(
+                    component = component,
+                    domain = INHABITED,
+                    store = state,
+                    ledger = ledgerWith(component to IdentityLedger.CLAIM_PRESENT),
+                )
+
+                assertIs<MintVerdict.Refuse>(verdict, "$component with a claim and store $state")
+            }
+        }
+    }
+
+    @Test
+    fun `an unreadable store never mints any component in any configuration`() {
+        val domains = listOf(
+            DomainVerdict.Virgin,
+            INHABITED,
+            DomainVerdict.Indeterminate(listOf("/prefs: Permission denied")),
+            DomainVerdict.NotApplicable,
+        )
+        val ledgers = listOf(
+            LedgerClaims.Absent,
+            LedgerClaims.Unavailable,
+            LedgerClaims.Damaged(listOf("no 'epoch' record")),
+            ledgerWith(),
+        )
+
+        for (component in IdentityComponent.entries) {
+            for (domain in domains) {
+                for (ledger in ledgers) {
+                    val verdict = IdentityMintGate.decide(
+                        component = component,
+                        domain = domain,
+                        store = PreferenceStoreState.UNREADABLE,
+                        ledger = ledger,
+                    )
+
+                    assertIs<MintVerdict.Refuse>(verdict, "$component / $domain / $ledger")
+                }
+            }
+        }
+    }
 }

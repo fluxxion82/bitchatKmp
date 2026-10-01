@@ -23,7 +23,14 @@ import kotlin.io.encoding.Base64.Default.decode
 import kotlin.io.encoding.Base64.Default.encode
 
 actual object Cryptography {
-    private val secureRandom = SecureRandom()
+    /**
+     * Every random byte this object uses comes from here: the platform's default CSPRNG, looked
+     * up through JCA on each use rather than held in a field. Resolving it per use keeps it the
+     * provider list's answer, and lets `CsprngProvenanceTest` watch it through JCA's own
+     * extension point instead of through a test seam in this object. Do not draw randomness any
+     * other way; `WeakRandomnessGuardTest` fails on the usual alternatives.
+     */
+    private fun platformRandom(): SecureRandom = SecureRandom()
     private val secp256k1Curve = CustomNamedCurves.getByName("secp256k1")
     private val secp256k1Params = ECDomainParameters(
         secp256k1Curve.curve,
@@ -34,7 +41,7 @@ actual object Cryptography {
 
     actual fun generateKeyPair(): Pair<String, String> {
         val generator = ECKeyPairGenerator()
-        val keyGenParams = ECKeyGenerationParameters(secp256k1Params, secureRandom)
+        val keyGenParams = ECKeyGenerationParameters(secp256k1Params, platformRandom())
         generator.init(keyGenParams)
 
         val keyPair = generator.generateKeyPair()
@@ -75,7 +82,7 @@ actual object Cryptography {
 
     actual fun generateEd25519KeyPair(): Pair<String, String> {
         val generator = Ed25519KeyPairGenerator()
-        val keyGenParams = Ed25519KeyGenerationParameters(secureRandom)
+        val keyGenParams = Ed25519KeyGenerationParameters(platformRandom())
         generator.init(keyGenParams)
 
         val keyPair = generator.generateKeyPair()
@@ -283,8 +290,13 @@ actual object Cryptography {
 
     actual fun randomizeTimestampUpToPast(maxPastSeconds: Int): Int {
         val now = (System.currentTimeMillis() / 1000).toInt()
-        val offset = if (maxPastSeconds > 0) secureRandom.nextInt(maxPastSeconds + 1) else 0
+        val offset = if (maxPastSeconds > 0) platformRandom().nextInt(maxPastSeconds + 1) else 0
         return now - offset
+    }
+
+    actual fun secureRandomBytes(size: Int): ByteArray {
+        require(size >= 0) { "size must not be negative: $size" }
+        return ByteArray(size).also { platformRandom().nextBytes(it) }
     }
 
     actual fun isValidPrivateKey(privateKeyHex: String): Boolean {
@@ -318,7 +330,7 @@ actual object Cryptography {
 
     private fun generateNonce(privateKey: BigInteger, messageHash: ByteArray, publicKeyBytes: ByteArray): BigInteger {
         val random = ByteArray(32)
-        secureRandom.nextBytes(random)
+        platformRandom().nextBytes(random)
 
         val privateKeyBytes = privateKey.toByteArray()
         val nonceInput = ByteArray(privateKeyBytes.size + messageHash.size + publicKeyBytes.size + random.size)
@@ -468,7 +480,7 @@ actual object Cryptography {
         val secretKey = javax.crypto.spec.SecretKeySpec(key, "AES")
 
         val iv = ByteArray(12)
-        secureRandom.nextBytes(iv)
+        platformRandom().nextBytes(iv)
 
         val gcmSpec = javax.crypto.spec.GCMParameterSpec(128, iv)
         cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, secretKey, gcmSpec)
@@ -515,8 +527,4 @@ actual object Cryptography {
         return publicKeyBytes.toHexString()
     }
 
-    actual fun secureRandomBytes(size: Int): ByteArray {
-        require(size >= 0) { "size must not be negative: $size" }
-        return ByteArray(size).also(secureRandom::nextBytes)
-    }
 }
