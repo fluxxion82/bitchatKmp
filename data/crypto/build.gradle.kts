@@ -118,6 +118,8 @@ kotlin {
         namespace = "com.bitchat.crypto"
         compileSdk = libs.versions.compileSdk.get().toInt()
         minSdk = 21
+        // The Android actual of Cryptography is its own file; without host tests nothing ever ran it.
+        withHostTest {}
     }
 
     sourceSets {
@@ -164,6 +166,14 @@ kotlin {
                 implementation(libs.kotlin.test)
                 implementation(libs.kotlin.test.junit)
 
+            }
+        }
+        // withHostTest runs commonTest against the Android actual. kotlin-test does not reach this
+        // compilation through commonTest on its own, so name it here.
+        val androidHostTest by getting {
+            dependencies {
+                implementation(libs.kotlin.test)
+                implementation(libs.kotlin.test.junit)
             }
         }
         val androidMain by getting {
