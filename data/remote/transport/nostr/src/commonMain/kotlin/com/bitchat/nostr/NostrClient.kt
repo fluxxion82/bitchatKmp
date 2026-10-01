@@ -1,6 +1,7 @@
 package com.bitchat.nostr
 
 import com.bitchat.domain.base.logBody
+import com.bitchat.nostr.logging.logNostrDebug
 import com.bitchat.crypto.Cryptography
 import com.bitchat.nostr.model.NostrEvent
 import com.bitchat.nostr.model.NostrIdentity
@@ -81,7 +82,8 @@ class NostrClient(
 
     /**
      * Decrypt a received NIP-17 message
-     * Returns (content, senderPubkey, timestamp) or null if decryption fails
+     * Returns (content, senderPubkey, timestamp) or null if decryption or authentication fails.
+     * senderPubkey is the key that signed the seal.
      */
     fun decryptPrivateMessage(
         giftWrap: NostrEvent,
@@ -123,18 +125,37 @@ class NostrClient(
 
             // Log.v(TAG, "Successfully unwrapped gift wrap from: ${seal.pubkey.take(16)}...")
 
-            // 2. Open the seal
+            // 5. Authenticate the seal. The wrap is signed by a throwaway key, so the seal's
+            // signature is the only thing that ties this message to a sender.
+            if (seal.kind != NostrKind.SEAL || seal.tags.isNotEmpty() || !seal.isValidSignature()) {
+                logNostrDebug("NostrClient", "Rejected seal: wrong kind, unexpected tags, or invalid signature")
+                return null
+            }
+
+            // 6. Open the seal
             val rumor = openSeal(seal, recipientIdentity.privateKeyHex)
                 ?: run {
-                    // Log.w(TAG, "❌ Failed to open seal")
+                    logNostrDebug("NostrClient", "Rejected private message: could not open authenticated seal")
                     return null
                 }
 
             // Log.v(TAG, "Successfully opened seal")
 
-            Triple(rumor.content, rumor.pubkey, rumor.createdAt)
+            // 7. The rumor is unsigned, so its pubkey is only a claim: it must name the seal's
+            // signer, or anyone could seal a rumor "from" someone else (e.g. a favourite).
+            // Same acceptance rules as upstream iOS: tags are [] or exactly [["p", us]].
+            if (rumor.kind != NostrKind.DIRECT_MESSAGE || rumor.sig != null || rumor.pubkey != seal.pubkey) {
+                logNostrDebug("NostrClient", "Rejected rumor: wrong kind, signed, or sender differs from seal signer")
+                return null
+            }
+            if (rumor.tags.isNotEmpty() && rumor.tags != listOf(listOf("p", recipientIdentity.publicKeyHex))) {
+                logNostrDebug("NostrClient", "Rejected rumor: unexpected recipient tags")
+                return null
+            }
+
+            Triple(rumor.content, seal.pubkey, rumor.createdAt)
         } catch (e: Exception) {
-            // Log.w(TAG, "Failed to decrypt private message: ${e.message}")
+            logNostrDebug("NostrClient", "Rejected private message: decrypt or authentication error")
             null
         }
     }
