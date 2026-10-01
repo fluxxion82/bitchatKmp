@@ -143,7 +143,8 @@ clone_arti() {
     rm -rf "$ARTI_SOURCE_DIR"
   fi
 
-  if [ -d "$ARTI_SOURCE_DIR/.git" ]; then
+  # A submodule checkout has a .git file (gitdir: pointer), a plain clone has a .git directory.
+  if [ -e "$ARTI_SOURCE_DIR/.git" ]; then
     print_info "Arti already cloned, updating..."
     cd "$ARTI_SOURCE_DIR"
     git fetch --tags
@@ -217,8 +218,8 @@ ls -lh "$WRAPPER_DIR"/arti_linux.h
 echo ""
 echo "Next steps:"
 echo "  1. Compile Kotlin module:"
-echo "     ./gradlew :data:remote:tor:compileKotlinLinuxArm64"
+echo "     ./gradlew -Pembedded.enabled=true :data:remote:tor:compileKotlinLinuxArm64 --console=plain"
 echo ""
 echo "  2. Link embedded app:"
-echo "     ./gradlew :apps:embedded:linkDebugExecutableLinuxArm64"
+echo "     ./gradlew -Pembedded.enabled=true :apps:embedded:linkDebugExecutableLinuxArm64 --console=plain"
 echo ""
