@@ -116,6 +116,8 @@ class LocationChannelsViewModel(
                 )
             }
 
+            refreshParticipantCounts()
+
             /*
              * Only now, and only if the user wants it. Reading the preference first fixed the
              * ordering but the fix was still taken unconditionally, so someone who had turned
@@ -137,15 +139,12 @@ class LocationChannelsViewModel(
     private suspend fun loadChannels(locationNames: Map<GeohashChannelLevel, String>, initial: Boolean) {
         try {
             val channels = getAvailableChannels(Unit)
-            val counts = getParticipantCounts(Unit)
             val freshNames = if (initial) locationNames else getLocationNames(Unit)
             val fixInfo = orDefault(null) { getLastFixInfo(Unit) }
 
             _state.update {
                 it.copy(
                     availableChannels = channels,
-                    participantCounts = counts.geohashCounts,
-                    meshParticipantCount = counts.meshCount,
                     locationNames = freshNames,
                     isLoading = false,
                     isRefreshing = false,
@@ -174,6 +173,25 @@ class LocationChannelsViewModel(
             }
         } catch (e: Exception) {
             _state.update { it.copy(isLoading = false, isRefreshing = false) }
+        }
+    }
+
+    /**
+     * The mesh and geohash participant counts, which need no fix: the mesh count is the peer list
+     * the chat header reads too, and the geohash counts come from sampling. So they are read
+     * whatever location is doing. They used to be read only beside the nearby channels, so with
+     * location services off, or with no fix to be had, the mesh and every bookmark showed 0 for
+     * ever while the chat header gave the real number.
+     *
+     * A failed read keeps the counts already on screen rather than dropping them to 0.
+     */
+    private suspend fun refreshParticipantCounts() {
+        val counts = orDefault(null) { getParticipantCounts(Unit) } ?: return
+        _state.update {
+            it.copy(
+                participantCounts = counts.geohashCounts,
+                meshParticipantCount = counts.meshCount
+            )
         }
     }
 
@@ -219,6 +237,7 @@ class LocationChannelsViewModel(
             while (isActive) {
                 delay(5000)
 
+                refreshParticipantCounts()
                 if (_state.value.locationServicesEnabled) {
                     refreshData()
                 }

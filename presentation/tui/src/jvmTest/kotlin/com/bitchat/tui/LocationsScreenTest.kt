@@ -195,6 +195,24 @@ class LocationsScreenTest {
         assertEquals("   finding nearby channels...", rows[2])
     }
 
+    @Test fun locationServicesOffStillShowsTheCounts() = runTest {
+        // The counts need no fix, so switching location off hides the nearby channels, not them.
+        assertEquals(
+            listOf(
+                " Locations",
+                pad(" > #mesh", "3 people ", 40),
+                "   location services are off",
+                "   t: join by code, g: browse by region",
+                pad("   * #9q8yy SF", "2 people ", 40),
+                "   Join a channel by geohash code...",
+                "   Browse the world by region...",
+                "",
+                "",
+            ),
+            render(AnsiLevel.NONE, pi.copy(locationUnavailableReason = null), IntSize(40, 9)),
+        )
+    }
+
     @Test fun enterJoinsAndBBookmarks() = runTest {
         runMosaicTest {
             setContentAndSnapshot { Screen(pi, IntSize(40, 9)) }

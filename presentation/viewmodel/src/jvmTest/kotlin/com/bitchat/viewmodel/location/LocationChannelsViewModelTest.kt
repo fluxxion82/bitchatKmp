@@ -293,4 +293,134 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
 
         viewModel.clearForTest()
     }
+    /**
+     * Runs [block], then clears the view model even if [block] failed. Otherwise a failed assertion
+     * leaves the five-second poll running on the scheduler runTest drains before it returns, and
+     * runTest steps through that poll for ever: the test hangs instead of failing.
+     */
+    private inline fun LocationChannelsViewModel.clearedAfter(block: () -> Unit) {
+        try {
+            block()
+        } finally {
+            clearForTest()
+        }
+    }
+
+    @Test
+    fun `counts are shown with location services off`() = runTest {
+        /*
+         * Regression: the counts were read only alongside the nearby channels, so with location
+         * services off the mesh and every bookmark read 0 for ever -- while the chat header, which
+         * reads the same mesh peer list, said "2 people". Neither count comes from a fix.
+         */
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns false
+            coEvery { getBookmarkedChannels(Unit) } returns listOf("9q8yy", "u4pru")
+            coEvery { getParticipantCounts(Unit) } returns
+                ParticipantCounts(geohashCounts = mapOf("9q8yy" to 3, "u4pru" to 1), meshCount = 2)
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+
+            val state = viewModel.state.value
+            assertEquals(2, state.meshParticipantCount)
+            assertEquals(mapOf("9q8yy" to 3, "u4pru" to 1), state.participantCounts)
+        }
+    }
+
+    @Test
+    fun `counts are shown when there is no fix, beside the reason`() = runTest {
+        // The Pi: no location source at all. The reason and the empty nearby list stay as they were.
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getBookmarkedChannels(Unit) } returns listOf("9q8yy")
+            coEvery { getAvailableChannels(Unit) } throws
+                LocationUnavailableException(LocationUnavailableException.Reason.NO_SOURCE)
+            coEvery { getParticipantCounts(Unit) } returns
+                ParticipantCounts(geohashCounts = mapOf("9q8yy" to 3), meshCount = 2)
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+
+            val state = viewModel.state.value
+            assertEquals(2, state.meshParticipantCount)
+            assertEquals(mapOf("9q8yy" to 3), state.participantCounts)
+            assertEquals(
+                LocationUnavailableException.Reason.NO_SOURCE.message,
+                state.locationUnavailableReason
+            )
+            assertTrue(state.availableChannels.isEmpty())
+            assertTrue(!state.isLoading)
+        }
+    }
+
+    @Test
+    fun `counts follow the poll with location services off`() = runTest {
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns false
+            coEvery { getBookmarkedChannels(Unit) } returns listOf("9q8yy")
+            coEvery { getParticipantCounts(Unit) } returns
+                ParticipantCounts(geohashCounts = mapOf("9q8yy" to 1), meshCount = 1)
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+
+            coEvery { getParticipantCounts(Unit) } returns
+                ParticipantCounts(geohashCounts = mapOf("9q8yy" to 4), meshCount = 2)
+            instantExecutorRule.scheduler.advanceTimeBy(6_000)
+            instantExecutorRule.scheduler.runCurrent()
+
+            val state = viewModel.state.value
+            assertEquals(2, state.meshParticipantCount)
+            assertEquals(mapOf("9q8yy" to 4), state.participantCounts)
+        }
+    }
+
+    @Test
+    fun `counts follow the poll when there is no fix`() = runTest {
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getBookmarkedChannels(Unit) } returns listOf("9q8yy")
+            coEvery { getAvailableChannels(Unit) } throws
+                LocationUnavailableException(LocationUnavailableException.Reason.NO_SOURCE)
+            coEvery { getParticipantCounts(Unit) } returns
+                ParticipantCounts(geohashCounts = mapOf("9q8yy" to 1), meshCount = 1)
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+
+            coEvery { getParticipantCounts(Unit) } returns
+                ParticipantCounts(geohashCounts = mapOf("9q8yy" to 4), meshCount = 2)
+            instantExecutorRule.scheduler.advanceTimeBy(6_000)
+            instantExecutorRule.scheduler.runCurrent()
+
+            val state = viewModel.state.value
+            assertEquals(2, state.meshParticipantCount)
+            assertEquals(mapOf("9q8yy" to 4), state.participantCounts)
+            assertEquals(
+                LocationUnavailableException.Reason.NO_SOURCE.message,
+                state.locationUnavailableReason
+            )
+            assertTrue(state.availableChannels.isEmpty())
+        }
+    }
+
+    @Test
+    fun `polling the counts never asks for a fix with location services off`() = runTest {
+        // Reading counts must not become a back door to the geolocation provider the user declined.
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns false
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+            // Three polls: at 5, 10 and 15 seconds.
+            instantExecutorRule.scheduler.advanceTimeBy(16_000)
+            instantExecutorRule.scheduler.runCurrent()
+
+            coVerify(atLeast = 4) { getParticipantCounts(Unit) }
+            coVerify(exactly = 0) { getAvailableChannels(Unit) }
+            coVerify(exactly = 0) { getLastFixInfo(Unit) }
+            coVerify(exactly = 0) { resolveLocationName(any()) }
+        }
+    }
 }
