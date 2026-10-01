@@ -20,14 +20,13 @@ import libsodium.crypto_aead_xchacha20poly1305_ietf_ABYTES
 import libsodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
 import libsodium.crypto_aead_xchacha20poly1305_ietf_decrypt
 import libsodium.crypto_aead_xchacha20poly1305_ietf_encrypt
-import libsodium.crypto_auth_hmacsha256
+import libsodium.crypto_auth_hmacsha256_final
+import libsodium.crypto_auth_hmacsha256_init
+import libsodium.crypto_auth_hmacsha256_state
+import libsodium.crypto_auth_hmacsha256_update
 import libsodium.crypto_auth_hmacsha256_BYTES
 import libsodium.crypto_hash_sha256
 import libsodium.crypto_hash_sha256_BYTES
-import libsodium.crypto_pwhash
-import libsodium.crypto_pwhash_ALG_ARGON2ID13
-import libsodium.crypto_pwhash_MEMLIMIT_INTERACTIVE
-import libsodium.crypto_pwhash_OPSLIMIT_INTERACTIVE
 import libsodium.crypto_scalarmult_base
 import libsodium.crypto_sign_ed25519_BYTES
 import libsodium.crypto_sign_ed25519_PUBLICKEYBYTES
@@ -390,53 +389,49 @@ actual object Cryptography {
 
     actual fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray {
         sodiumReady
-        // libsodium's crypto_auth_hmacsha256 requires a 32-byte key
-        // For variable-length keys, we need to use the full HMAC API
-        // or pad/hash the key appropriately
-        val normalizedKey = if (key.size > 32) {
-            getDigestHash(key)
-        } else {
-            key.copyOf(32) // Pad with zeros if shorter
-        }
-
+        // The multi-part API takes the key length, so libsodium does RFC 2104 key handling: pad to the
+        // 64-byte block, hash only a key longer than that. The previous code padded to 32 and hashed
+        // anything above it, which matches the standard for keys up to 32 bytes - every caller here
+        // today - but not for 33..64, where it produced a non-standard MAC. PBKDF2 below keys HMAC
+        // with the password, so that range has to be right.
         val mac = ByteArray(crypto_auth_hmacsha256_BYTES.toInt())
-        normalizedKey.usePinned { keyPinned ->
+        memScoped {
+            val state = alloc<crypto_auth_hmacsha256_state>()
+            key.usePinnedWithNonEmptyStorage { keyPinned ->
+                crypto_auth_hmacsha256_init(
+                    state.ptr,
+                    keyPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                    key.size.toULong()
+                )
+            }
             message.usePinnedWithNonEmptyStorage { msgPinned ->
-                mac.usePinned { macPinned ->
-                    crypto_auth_hmacsha256(
-                        macPinned.addressOf(0).reinterpret<uint8_tVar>(),
-                        msgPinned.addressOf(0).reinterpret<uint8_tVar>(),
-                        message.size.toULong(),
-                        keyPinned.addressOf(0).reinterpret<uint8_tVar>()
-                    )
-                }
+                crypto_auth_hmacsha256_update(
+                    state.ptr,
+                    msgPinned.addressOf(0).reinterpret<uint8_tVar>(),
+                    message.size.toULong()
+                )
+            }
+            mac.usePinned { macPinned ->
+                crypto_auth_hmacsha256_final(state.ptr, macPinned.addressOf(0).reinterpret<uint8_tVar>())
             }
         }
         return mac
     }
 
     actual fun createAESSecretKey(password: String, salt: ByteArray): ByteArray {
-        sodiumReady
-        val output = ByteArray(32)
-
-        // Use Argon2id for key derivation (more secure than PBKDF2)
-        // The cinterop binding accepts password as String directly
-        val result = output.usePinned { outputPinned ->
-            salt.usePinned { saltPinned ->
-                crypto_pwhash(
-                    outputPinned.addressOf(0).reinterpret<uint8_tVar>(),
-                    output.size.toULong(),
-                    password,
-                    password.length.toULong(),
-                    saltPinned.addressOf(0).reinterpret<uint8_tVar>(),
-                    crypto_pwhash_OPSLIMIT_INTERACTIVE.toULong(),
-                    crypto_pwhash_MEMLIMIT_INTERACTIVE.toULong(),
-                    crypto_pwhash_ALG_ARGON2ID13
-                )
-            }
+        // PBKDF2-HMAC-SHA256, 100 000 iterations, 32-byte key: byte-for-byte what the JVM, Android and
+        // Apple actuals produce. This used to be Argon2id, which derived a different key from the same
+        // password and so made every password-protected channel silently unreadable between this
+        // platform and the others (ChatRepo swallows the failed decrypt). libsodium has no PBKDF2, so
+        // it is built from the HMAC above; a 32-byte key is exactly one block, hence the single INT(1).
+        val passwordBytes = password.encodeToByteArray()
+        var u = hmacSha256(passwordBytes, salt + byteArrayOf(0, 0, 0, 1))
+        val key = u.copyOf()
+        repeat(PBKDF2_ITERATIONS - 1) {
+            u = hmacSha256(passwordBytes, u)
+            for (i in key.indices) key[i] = (key[i].toInt() xor u[i].toInt()).toByte()
         }
-        check(result == 0) { "crypto_pwhash failed: $result" }
-        return output
+        return key
     }
 
     actual fun encryptAESGCM(plaintext: String, key: ByteArray): ByteArray {
@@ -870,4 +865,6 @@ actual object Cryptography {
         return publicKeyBytes.toHexString()
     }
 
+    /** The iteration count the JVM, Android and Apple actuals use; changing it changes every key. */
+    private const val PBKDF2_ITERATIONS = 100_000
 }
