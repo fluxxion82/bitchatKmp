@@ -8,8 +8,11 @@
 #                                # + the Darwin SOCKS capture harness (rest client macosArm64Test, iosSimulatorArm64Test;
 #                                #   the simulator run needs CoreSimulatorService, so run it outside a sandbox; the DNS
 #                                #   leak cases skip loudly without /etc/resolver/bitchat-leak.test)
-#   scripts/verify.sh embedded   # -Pembedded.enabled=true linuxArm64 link + compose resources
-#   scripts/verify.sh tui        # -Pembedded.enabled=true :presentation:tui JVM tests + linuxArm64 compile + TUI link
+#   scripts/verify.sh embedded   # -Pembedded.enabled=true linuxArm64 debug and release links + compose resources,
+#                                # + the release-mode Kotlin/Native canary on the build host (:apps:embedded-canary);
+#                                #   on-device startup check after a deploy: scripts/embedded-smoke.py
+#   scripts/verify.sh tui        # -Pembedded.enabled=true :presentation:tui JVM tests + linuxArm64 compile + TUI debug
+#                                # and release links
 #   scripts/verify.sh desktop-tui # JVM desktop TUI tests and installDist
 #   scripts/verify.sh full       # all of the above (desktop packaging included)
 #
@@ -46,8 +49,10 @@ case "$MODE" in
     ;;
   android)  gradle :apps:droid:assembleDebug ;;
   ios)      gradle :iosdi:linkDebugFrameworkIosSimulatorArm64 :iosdi:linkDebugFrameworkIosArm64 :data:crypto:macosArm64Test :data:crypto:iosSimulatorArm64Test :data:remote:rest:client:macosArm64Test :data:remote:rest:client:iosSimulatorArm64Test ;;
-  embedded) gradle_embedded :apps:embedded:linkDebugExecutableLinuxArm64 ;;
-  tui)      gradle_embedded :presentation:tui:jvmTest :presentation:tui:compileKotlinLinuxArm64 :apps:embedded-tui:linkDebugExecutableLinuxArm64 ;;
+  # Release links too: the deployed binaries are release builds, and only an optimized link runs the
+  # whole-program passes that miscompiled the release bitchat-embedded (KT-88544, see gradle.properties).
+  embedded) gradle_embedded :apps:embedded:linkDebugExecutableLinuxArm64 :apps:embedded:linkReleaseExecutableLinuxArm64 :apps:embedded-canary:hostReleaseTest ;;
+  tui)      gradle_embedded :presentation:tui:jvmTest :presentation:tui:compileKotlinLinuxArm64 :apps:embedded-tui:linkDebugExecutableLinuxArm64 :apps:embedded-tui:linkReleaseExecutableLinuxArm64 ;;
   desktop-tui)
     gradle_tui :presentation:tui:jvmTest :presentation:tui:binding:jvmTest :apps:desktop-common:test :apps:desktop-tui:test :apps:desktop-tui:installDist
     version_line="$(apps/desktop-tui/build/install/bitchat-tui/bin/bitchat-tui --version)"

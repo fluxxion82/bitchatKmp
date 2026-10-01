@@ -107,6 +107,7 @@ include(":presentation:viewmodel")
 include(":presentation:viewvo")
 if (embeddedEnabled) {
     include(":apps:embedded")
+    include(":apps:embedded-canary")
     include(":apps:embedded-common")
     include(":apps:embedded-tui")
     include(":presentation:tui")

@@ -127,6 +127,20 @@ PI_USER=pi scripts/deploy-pi.sh --host orangepi   # ssh alias: name the account 
 
 In order: runs `./gradlew -Pembedded.enabled=true :apps:embedded:link{Debug,Release}ExecutableLinuxArm64`; reads the `bitchat-embedded.build-info` sidecar the link task writes next to the kexe and checks the executable's SHA-256 against it; stages the kexe, `compose-resources/`, `systemd/bitchat.service` (with its `__BITCHAT_USER__`/`__BITCHAT_GROUP__` placeholders filled in from `PI_USER`/`PI_GROUP`), `systemd/wait-for-input-devices.sh`, `BUILD_INFO` and a `SHA256SUMS` manifest; rsyncs them to `/opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/`; runs `sha256sum -c` and `bitchat-embedded.kexe --version` on the device and requires the output to equal the sidecar's `identity=` line; swaps the `/opt/bitchat/releases/current` symlink atomically; installs the unit through the sudoers rule and reloads systemd; re-reads `After=` of both `bitchat.service` and `multi-user.target` and warns loudly (never fatally) if the boot ordering cycle is back (see "Boot ordering" below); enables and restarts it; then polls the new invocation's journal until it logs that same identity line, and keeps polling for about four more seconds (two 2 s polls) to confirm the unit is still `active` under the same invocation before declaring success. On a clean tree a second run is UP-TO-DATE in Gradle, reuses the same release directory and rewrites only `BUILD_INFO` and `SHA256SUMS`.
 
+Those four seconds only prove the process started: Koin, DRM/EGL, Skia and input setup come later. After a deploy,
+especially a `--release` one, run the startup smoke, which restarts the unit and requires the identity line,
+`[Renderer] Skia DirectContext created` and `[Main] Entering event-driven loop` from one invocation, then 30 s more
+with the same invocation and no `Uncaught Kotlin exception` (`--help` for the options):
+
+```bash
+scripts/embedded-smoke.py --build release   # uses $PI_HOST like deploy-pi.sh; exit 0 only if it came all the way up
+```
+
+Release links pass `embedded.kotlinNativeReleaseArgs` (gradle.properties) to the compiler. In Kotlin/Native 2.4.20
+it switches off a pass that miscompiled the release binary (KT-88544: it died right after `[Main] Touch input ready`).
+`scripts/verify.sh embedded` links both builds and runs `:apps:embedded-canary:hostReleaseTest`, which fails
+whenever the release compiler settings reproduce that miscompilation.
+
 Release layout on the device:
 
 ```
