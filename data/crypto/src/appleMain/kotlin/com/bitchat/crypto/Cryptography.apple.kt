@@ -2,6 +2,7 @@ package com.bitchat.crypto
 
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.Pinned
 import kotlinx.cinterop.ULongVar
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
@@ -170,7 +171,7 @@ actual object Cryptography {
         memScoped {
             val sigLen = alloc<ULongVar>()
             val result = signature.usePinned { sigPinned ->
-                message.usePinned { msgPinned ->
+                message.usePinnedWithNonEmptyStorage { msgPinned ->
                     secretKey.usePinned { skPinned ->
                         crypto_sign_ed25519_detached(
                             sigPinned.addressOf(0).reinterpret<uint8_tVar>(),
@@ -195,7 +196,7 @@ actual object Cryptography {
 
         return memScoped {
             val result = signature.usePinned { sigPinned ->
-                message.usePinned { msgPinned ->
+                message.usePinnedWithNonEmptyStorage { msgPinned ->
                     publicKey.usePinned { pkPinned ->
                         crypto_sign_ed25519_verify_detached(
                             sigPinned.addressOf(0).reinterpret<uint8_tVar>(),
@@ -344,7 +345,7 @@ actual object Cryptography {
             val digestLength = CC_SHA256_DIGEST_LENGTH
             val hashBytes = UByteArray(digestLength)
 
-            data.usePinned { pinnedData ->
+            data.usePinnedWithNonEmptyStorage { pinnedData ->
                 hashBytes.usePinned { pinnedHash ->
                     CC_SHA256(
                         pinnedData.addressOf(0),
@@ -360,8 +361,8 @@ actual object Cryptography {
 
     actual fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray {
         val mac = ByteArray(CC_SHA256_DIGEST_LENGTH)
-        key.usePinned { keyPinned ->
-            message.usePinned { messagePinned ->
+        key.usePinnedWithNonEmptyStorage { keyPinned ->
+            message.usePinnedWithNonEmptyStorage { messagePinned ->
                 mac.usePinned { macPinned ->
                     CCHmac(
                         kCCHmacAlgSHA256,
@@ -414,7 +415,7 @@ actual object Cryptography {
 
         memScoped {
             val clen = alloc<ULongVar>()
-            val result = message.usePinned { msgPinned ->
+            val result = message.usePinnedWithNonEmptyStorage { msgPinned ->
                 cipher.usePinned { cipherPinned ->
                     nonce.usePinned { noncePinned ->
                         key.usePinned { keyPinned ->
@@ -649,7 +650,7 @@ actual object Cryptography {
         val message = ByteArray(cipher.size - crypto_aead_aes256gcm_ABYTES.toInt())
         memScoped {
             val mlen = alloc<ULongVar>()
-            val result = message.usePinned { msgPinned ->
+            val result = message.usePinnedWithNonEmptyStorage { msgPinned ->
                 cipher.usePinned { cipherPinned ->
                     nonce.usePinned { noncePinned ->
                         key.usePinned { keyPinned ->
@@ -671,6 +672,11 @@ actual object Cryptography {
             check(result == 0) { "AES-GCM decryption failed" }
             return message.copyOf(mlen.value.toInt())
         }
+    }
+
+    private inline fun <T> ByteArray.usePinnedWithNonEmptyStorage(block: (Pinned<ByteArray>) -> T): T {
+        val storage = if (isEmpty()) ByteArray(1) else this
+        return storage.usePinned(block)
     }
 
     private fun isValidPrivateKey(privateKey: ByteArray): Boolean {

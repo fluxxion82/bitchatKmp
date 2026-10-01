@@ -42,7 +42,7 @@ case "$MODE" in
     gradle "${desktop_tasks[@]}"
     ;;
   android)  gradle :apps:droid:assembleDebug ;;
-  ios)      gradle :iosdi:linkDebugFrameworkIosSimulatorArm64 :iosdi:linkDebugFrameworkIosArm64 ;;
+  ios)      gradle :iosdi:linkDebugFrameworkIosSimulatorArm64 :iosdi:linkDebugFrameworkIosArm64 :data:crypto:macosArm64Test :data:crypto:iosSimulatorArm64Test ;;
   embedded) gradle_embedded :apps:embedded:linkDebugExecutableLinuxArm64 ;;
   tui)      gradle_embedded :presentation:tui:jvmTest :presentation:tui:compileKotlinLinuxArm64 :apps:embedded-tui:linkDebugExecutableLinuxArm64 ;;
   desktop-tui)

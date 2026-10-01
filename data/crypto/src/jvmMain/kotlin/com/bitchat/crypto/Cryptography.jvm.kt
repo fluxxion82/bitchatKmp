@@ -443,7 +443,8 @@ actual object Cryptography {
 
     actual fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray {
         val mac = javax.crypto.Mac.getInstance("HmacSHA256")
-        val secretKeySpec = javax.crypto.spec.SecretKeySpec(key, "HmacSHA256")
+        val providerKey = if (key.isEmpty()) byteArrayOf(0) else key
+        val secretKeySpec = javax.crypto.spec.SecretKeySpec(providerKey, "HmacSHA256")
         mac.init(secretKeySpec)
         return mac.doFinal(message)
     }

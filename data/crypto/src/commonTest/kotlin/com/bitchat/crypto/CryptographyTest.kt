@@ -64,6 +64,28 @@ class CryptographyTest {
     }
 
     @Test
+    fun encryptDecryptNIP44_oneCharacterPlaintextRoundTrip() {
+        val senderPrivateKeyHex = "0000000000000000000000000000000000000000000000000000000000000001"
+        val recipientPrivateKeyHex = "0000000000000000000000000000000000000000000000000000000000000002"
+        val senderPublicKeyHex = Cryptography.derivePublicKey(senderPrivateKeyHex)
+        val recipientPublicKeyHex = Cryptography.derivePublicKey(recipientPrivateKeyHex)
+        val plaintext = "x"
+
+        val ciphertext = Cryptography.encryptNIP44(
+            plaintext = plaintext,
+            recipientPublicKeyHex = recipientPublicKeyHex,
+            senderPrivateKeyHex = senderPrivateKeyHex
+        )
+        val decrypted = Cryptography.decryptNIP44(
+            ciphertext = ciphertext,
+            senderPublicKeyHex = senderPublicKeyHex,
+            recipientPrivateKeyHex = recipientPrivateKeyHex
+        )
+
+        assertEquals(plaintext, decrypted)
+    }
+
+    @Test
     fun randomizeTimestampUpToPast_withinRange() {
         val baseline = Cryptography.randomizeTimestampUpToPast(maxPastSeconds = 0)
         val randomized = Cryptography.randomizeTimestampUpToPast(maxPastSeconds = 60)
@@ -101,6 +123,15 @@ class CryptographyTest {
     }
 
     @Test
+    fun getDigestHash_emptyInput_matchesVector() {
+        val expectedHex = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+        val digest = Cryptography.getDigestHash(ByteArray(0))
+
+        assertEquals(expectedHex, digest.toHexString())
+    }
+
+    @Test
     fun hmacSha256_matchesVector() {
         val expectedHex = "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
         val key = "key".encodeToByteArray()
@@ -109,6 +140,35 @@ class CryptographyTest {
         val mac = Cryptography.hmacSha256(key, message)
 
         assertEquals(expectedHex, mac.toHexString())
+    }
+
+    @Test
+    fun hmacSha256_emptyKeyAndMessage_matchesVector() {
+        val expectedHex = "b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad"
+
+        val mac = Cryptography.hmacSha256(ByteArray(0), ByteArray(0))
+
+        assertEquals(expectedHex, mac.toHexString())
+    }
+
+    @Test
+    fun hmacSha256_emptyMessage_matchesVector() {
+        val expectedHex = "5d5d139563c95b5967b9bd9a8c9b233a9dedb45072794cd232dc1b74832607d0"
+
+        val mac = Cryptography.hmacSha256("key".encodeToByteArray(), ByteArray(0))
+
+        assertEquals(expectedHex, mac.toHexString())
+    }
+
+    @Test
+    fun ed25519SignAndVerify_emptyMessageRoundTrip() {
+        val privateKeyHex = "0000000000000000000000000000000000000000000000000000000000000001"
+        val publicKeyHex = Cryptography.deriveEd25519PublicKey(privateKeyHex)
+        val message = ByteArray(0)
+
+        val signature = Cryptography.ed25519Sign(message, privateKeyHex)
+
+        assertTrue(Cryptography.ed25519Verify(message, signature, publicKeyHex))
     }
 
     @Test
@@ -135,6 +195,18 @@ class CryptographyTest {
     fun encryptDecryptAESGCM_roundTrip() {
         val key = ByteArray(32) { it.toByte() }
         val plaintext = "hello aes gcm"
+
+        val encrypted = Cryptography.encryptAESGCM(plaintext, key)
+        val decrypted = Cryptography.decryptAESGCM(encrypted, key)
+
+        assertNotNull(decrypted)
+        assertEquals(plaintext, decrypted)
+    }
+
+    @Test
+    fun encryptDecryptAESGCM_emptyPlaintextRoundTrip() {
+        val key = ByteArray(32) { it.toByte() }
+        val plaintext = ""
 
         val encrypted = Cryptography.encryptAESGCM(plaintext, key)
         val decrypted = Cryptography.decryptAESGCM(encrypted, key)
