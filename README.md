@@ -134,7 +134,9 @@ For iOS, open `apps/iosApp/iosApp.xcodeproj` in Xcode. The shared framework is `
 ```bash
 ./gradlew :iosdi:linkDebugFrameworkIosSimulatorArm64  # simulator
 ./gradlew :iosdi:linkDebugFrameworkIosArm64           # device
+./gradlew :iosdi:linkReleaseFrameworkIosArm64         # device, release (what an archive ships)
 ```
+Release Apple links carry a Kotlin/Native 2.4.20 miscompile workaround (KT-88544, `apple.kotlinNativeReleaseArgs` in `gradle.properties`); `:apps:apple-canary` holds its release-mode tests.
 
 ### 4. Verify
 

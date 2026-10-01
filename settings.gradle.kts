@@ -80,6 +80,7 @@ plugins {
 rootProject.name = "bitchatKmp"
 
 include(":apps:droid")
+include(":apps:apple-canary")
 include(":apps:desktop")
 include(":apps:desktop-common")
 include(":data:cache")

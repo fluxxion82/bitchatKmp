@@ -19,6 +19,12 @@ val composeSnapshotVersion = providers.gradleProperty("embedded.composeForkVersi
 val embeddedKoinVersion = providers.gradleProperty("embedded.koinForkVersion")
     .orElse("4.2.2")
     .get()
+// KT-88544 workaround for release Apple binaries, see apple.kotlinNativeReleaseArgs in gradle.properties.
+val appleKotlinNativeReleaseArgs = providers.gradleProperty("apple.kotlinNativeReleaseArgs")
+    .orElse("")
+    .get()
+    .split(' ')
+    .filter(String::isNotBlank)
 
 subprojects {
     configurations.all {
@@ -64,6 +70,28 @@ subprojects {
     tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask<*>>().configureEach {
         compilerOptions {
             freeCompilerArgs.add("-opt-in=kotlin.time.ExperimentalTime")
+        }
+    }
+
+    // Every release link for an Apple target: the iOS frameworks (Xcode's Release configuration, so an
+    // archive, links them through :iosdi:embedAndSignAppleFrameworkForXcode), the macOS dylibs and the
+    // release test binaries :apps:apple-canary runs. The backend passes run at link time, so this is
+    // where -Xdisable-phases has to go. Debug links keep the default pipeline.
+    // It goes through linkTaskProvider.configure, not tasks.withType<KotlinNativeLink>().configureEach:
+    // configureEach runs before the Kotlin plugin's own registration action, which resets
+    // toolOptions.freeCompilerArgs to the compilation's, so an arg added there never reaches konanc.
+    plugins.withId("org.jetbrains.kotlin.multiplatform") {
+        extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension> {
+            targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>().configureEach {
+                if (konanTarget.family.isAppleFamily) {
+                    binaries.matching { it.buildType == org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType.RELEASE }
+                        .configureEach {
+                            linkTaskProvider.configure {
+                                toolOptions.freeCompilerArgs.addAll(appleKotlinNativeReleaseArgs)
+                            }
+                        }
+                }
+            }
         }
     }
 

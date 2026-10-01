@@ -122,6 +122,8 @@ App modules are intentionally thin shells that assemble the same shared applicat
 
 `apps/iosApp` is the native iOS app folder. `iosdi` exposes shared Kotlin DI/framework wiring to iOS and includes domain, data, presentation, and app-facing modules.
 
+`apps/apple-canary` has no app code: its macosArm64 and iosSimulatorArm64 release-mode tests guard the Kotlin/Native compiler workaround (KT-88544, `apple.kotlinNativeReleaseArgs`) that every release Apple link, the iOS frameworks included, is built with.
+
 ## Dependency Injection Pattern
 
 Koin is the cross-platform dependency injection mechanism.
