@@ -125,7 +125,7 @@ scripts/deploy-pi.sh --host user@host   # one-off target, overrides $PI_HOST
 PI_USER=pi scripts/deploy-pi.sh --host orangepi   # ssh alias: name the account explicitly
 ```
 
-In order: runs `./gradlew -Pembedded.enabled=true :apps:embedded:link{Debug,Release}ExecutableLinuxArm64`; reads the `bitchat-embedded.build-info` sidecar the link task writes next to the kexe and checks the executable's SHA-256 against it; stages the kexe, `compose-resources/`, `systemd/bitchat.service` (with its `__BITCHAT_USER__`/`__BITCHAT_GROUP__` placeholders filled in from `PI_USER`/`PI_GROUP`), `systemd/wait-for-input-devices.sh`, `BUILD_INFO` and a `SHA256SUMS` manifest; rsyncs them to `/opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/`; runs `sha256sum -c` and `bitchat-embedded.kexe --version` on the device and requires the output to equal the sidecar's `identity=` line; swaps the `/opt/bitchat/releases/current` symlink atomically; installs the unit through the sudoers rule and reloads systemd; re-reads `After=` of both `bitchat.service` and `multi-user.target` and warns loudly (never fatally) if the boot ordering cycle is back (see "Boot ordering" below); enables and restarts it; then polls the new invocation's journal until it logs that same identity line, and keeps polling for about four more seconds (two 2 s polls) to confirm the unit is still `active` under the same invocation before declaring success. On a clean tree a second run is UP-TO-DATE in Gradle, reuses the same release directory and rewrites only `BUILD_INFO` and `SHA256SUMS`.
+In order: runs `./gradlew -Pembedded.enabled=true :apps:embedded:link{Debug,Release}ExecutableLinuxArm64`; reads the `bitchat-embedded.build-info` sidecar the link task writes next to the kexe and checks the executable's SHA-256 against it; stages the kexe, `compose-resources/`, `systemd/bitchat.service` (with its `__BITCHAT_USER__`/`__BITCHAT_GROUP__` placeholders filled in from `PI_USER`/`PI_GROUP`), `systemd/wait-for-input-devices.sh`, `systemd/bluetooth.service.d/bitchat-ble.conf` (as `bluetooth-bitchat-ble.conf`), `BUILD_INFO` and a `SHA256SUMS` manifest; rsyncs them to `/opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/`; runs `sha256sum -c` and `bitchat-embedded.kexe --version` on the device and requires the output to equal the sidecar's `identity=` line; swaps the `/opt/bitchat/releases/current` symlink atomically; installs the unit through the sudoers rule and reloads systemd; re-reads `After=` of both `bitchat.service` and `multi-user.target` and warns loudly (never fatally) if the boot ordering cycle is back (see "Boot ordering" below); enables and restarts it; then polls the new invocation's journal until it logs that same identity line, and keeps polling for about four more seconds (two 2 s polls) to confirm the unit is still `active` under the same invocation before declaring success; and finally checks that the installed bluetoothd drop-in matches the shipped copy and that the running `bluetoothd` has its command line, warning (never failing) with the command that fixes it otherwise (see "Pairing prompts on iPhones" below). On a clean tree a second run is UP-TO-DATE in Gradle, reuses the same release directory and rewrites only `BUILD_INFO` and `SHA256SUMS`.
 
 Those four seconds only prove the process started: Koin, DRM/EGL, Skia and input setup come later. After a deploy,
 especially a `--release` one, run the startup smoke, which restarts the unit and requires the identity line,
@@ -150,6 +150,7 @@ Release layout on the device:
 │   ├── compose-resources/            # must sit beside the binary (resolved via /proc/self/exe)
 │   ├── bitchat.service
 │   ├── wait-for-input-devices.sh     # ExecStartPre=; waits for CardKB and touch, always exits 0
+│   ├── bluetooth-bitchat-ble.conf    # bluetoothd drop-in; installed once by hand (see "Pairing prompts on iPhones")
 │   ├── BUILD_INFO                    # sidecar fields + release, deployed_from, deployed_at
 │   └── SHA256SUMS
 └── current -> /opt/bitchat/releases/73fdbbf4f5ce-debug-5222940b
@@ -256,6 +257,49 @@ Keyboard logging: `BITCHAT_INPUT_DEBUG` is read once at startup and only after `
 | `keys` | `[Keyboard] evdev=... key=... codePoint=... mods=... consumed=...` | the typed text itself |
 
 The journal is persistent, so per-key logging is opt-in: even the class-only trace leaks message and password length, the capitalisation pattern and inter-keystroke timing, and `=keys` keylogs everything typed. Never set either while typing messages, passwords or other secrets, and unset it afterwards. The startup banner names the active mode. `KeyboardEventData.toString()` is redacted (no key code, no code point) so a stray `println("$event")` cannot quietly reintroduce a keylogger.
+
+### Pairing prompts on iPhones
+
+bitchat never needs an encrypted or bonded link (Noise encrypts the payload), but bluetoothd's own GATT client
+reads more than the bitchat service. On every LE link, the one gattlib opens with `Device1.Connect()` and a phone's
+link to our GATT server alike, bluetoothd discovers the peer's whole database and hands each service it recognises
+(Battery, GAP, Device Information, HID, LE Audio, ...) to that service's profile plugin, which reads and subscribes.
+An iPhone answers some of those with `Insufficient Authentication`; bluetoothd then raises the link's security by
+itself, the kernel sends `SMP: Pairing Request`, and the phone shows a pairing dialog that cannot succeed (no agent
+is registered here; bluetoothd logs `new_auth() No agent available for request type 2`), again on every reconnect.
+Neither our code nor gattlib can narrow that discovery: it happens inside `Device1.Connect()`.
+
+`systemd/bluetooth.service.d/bitchat-ble.conf` starts bluetoothd without those plugins. It overrides `ExecStart=`,
+so check the path first, then install it once (needs the password) after a deploy has put the copy in the release
+directory:
+
+```bash
+systemctl cat bluetooth.service | grep '^ExecStart='    # must be /usr/libexec/bluetooth/bluetoothd
+sudo install -D -m 644 -o root -g root /opt/bitchat/releases/current/bluetooth-bitchat-ble.conf \
+  /etc/systemd/system/bluetooth.service.d/bitchat-ble.conf
+sudo systemctl daemon-reload && sudo systemctl restart bluetooth.service && sudo systemctl restart bitchat.service
+journalctl -b -u bluetooth.service | grep 'Excluding (cli)'    # one line per disabled plugin this BlueZ has
+```
+
+Restarting bluetoothd drops bitchat's advertisement and GATT application, hence the bitchat restart. Every deploy
+re-checks the installed file and the running command line and prints a WARNING with the fix if either has drifted
+(a reflash, a BlueZ package that moves bluetoothd).
+
+To confirm on hardware, capture while an iPhone running bitchat connects and exchanges messages, then read it back
+on the device:
+
+```bash
+sudo btmon -w /tmp/ble.btsnoop                                                  # Ctrl-C when done
+btmon -r /tmp/ble.btsnoop | grep -c 'SMP:'                                      # must print 0
+btmon -r /tmp/ble.btsnoop | grep -E 'Insufficient (Authentication|Encryption)'  # must print nothing
+btmon -r /tmp/ble.btsnoop | grep -iE -A2 'f47b5e2d|ATT: (Read|Write) Request'   # bitchat's handle range, then every handle read or written
+sudo rm /tmp/ble.btsnoop                                                        # btmon writes it as root
+```
+
+The capture still shows bluetoothd discovering the phone's whole database (`Read By Group Type`, `Read By Type`,
+`Find Information`) and using the phone's Generic Attribute service (Service Changed, Database Hash, Client
+Supported Features), as every GATT client does; none of that is protected. Every other read or write has to fall
+inside the bitchat service's handle range.
 
 ## Architecture
 

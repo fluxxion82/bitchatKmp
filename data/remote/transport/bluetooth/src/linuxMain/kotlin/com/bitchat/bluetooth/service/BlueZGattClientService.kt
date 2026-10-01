@@ -20,6 +20,12 @@ import platform.posix.size_t
  * - Writing characteristics (with chunking for large payloads)
  * - Receiving notifications
  *
+ * Discovery here only walks the D-Bus objects bluetoothd exported. bluetoothd discovers the peer's whole
+ * database itself, inside `Device1.Connect()`, and neither gattlib nor this class can narrow that; every
+ * gattlib call below targets the bitchat characteristic alone. What keeps bluetoothd's own profile plugins
+ * from reading an iPhone's protected attributes, and so from raising a pairing dialog on it, is the
+ * bluetoothd drop-in in apps/embedded/systemd/bluetooth.service.d/bitchat-ble.conf.
+ *
  * Threading: gattlib runs the connect callback on a thread it spawns per connection
  * (`_gattlib_connected_device_thread`) and the disconnect callback synchronously on the GLib
  * main-loop thread, while application code calls in from coroutine threads. Everything shared

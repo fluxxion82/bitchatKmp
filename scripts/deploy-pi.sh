@@ -4,7 +4,8 @@
 # Release layout on the device:
 #   /opt/bitchat/releases/<sha12>[-dirty]-<build>-<digest8>/   binary, compose-resources/,
 #                                                              SHA256SUMS, BUILD_INFO, bitchat.service,
-#                                                              wait-for-input-devices.sh
+#                                                              wait-for-input-devices.sh,
+#                                                              bluetooth-bitchat-ble.conf
 #   /opt/bitchat/releases/current -> <release dir>             swapped atomically (ln + mv -T)
 #   /opt/bitchat/bitchat.service                               copy owned by the deploy user
 #                                                              that the sudoers rule lets us install
@@ -13,7 +14,7 @@
 #
 # <digest8> is the first 8 hex chars of sha256 over the SHA256SUMS lines minus the
 # ./BUILD_INFO line, so a release name is a pure function of the shipped payload
-# (executable, compose-resources/, unit, ExecStartPre script) and an existing release directory is never
+# (executable, compose-resources/, unit, ExecStartPre script, bluetoothd drop-in) and an existing release directory is never
 # rewritten with a different payload.
 #
 # Identity comes from the bitchat-embedded.build-info sidecar that every link task writes
@@ -37,11 +38,12 @@ usage() {
 Usage: scripts/deploy-pi.sh [options]
 
 Builds the linuxArm64 embedded binary, stages it with compose-resources/,
-a SHA256SUMS manifest, BUILD_INFO, bitchat.service and
-wait-for-input-devices.sh, uploads it to
+a SHA256SUMS manifest, BUILD_INFO, bitchat.service,
+wait-for-input-devices.sh and the bluetoothd drop-in, uploads it to
 \$PI_HOST:$RELEASES/<sha12>[-dirty]-<build>-<digest8>/,
-verifies it on the device, swaps $RELEASES/current and
-restarts bitchat.service.
+verifies it on the device, swaps $RELEASES/current,
+restarts bitchat.service and warns if bluetoothd is not
+running with the drop-in.
 
 The target is not baked into this repository. Set PI_HOST (an ssh
 destination: user@host, or a Host alias from ~/.ssh/config) or pass
@@ -103,6 +105,11 @@ UNIT_FILE="$REPO/apps/embedded/systemd/bitchat.service"
 # The unit's ExecStartPre= references this through /opt/bitchat/releases/current/, so it ships
 # inside the release directory (and therefore counts towards the payload digest).
 WAIT_SCRIPT="$REPO/apps/embedded/systemd/wait-for-input-devices.sh"
+# Installed by hand, once (README, "Pairing prompts on iPhones"); shipped so that copy is on the device and
+# so step 11a can tell whether the installed one and the running bluetoothd still match it.
+BT_DROPIN_SRC="$REPO/apps/embedded/systemd/bluetooth.service.d/bitchat-ble.conf"
+BT_DROPIN_NAME="bluetooth-bitchat-ble.conf"
+BT_DROPIN="/etc/systemd/system/bluetooth.service.d/bitchat-ble.conf"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=60)
 # -n: ssh must never read this script's stdin. Only here, never in the rsync -e string.
 remote() { ssh -n "${SSH_OPTS[@]}" "$HOST" "$@"; }
@@ -143,6 +150,10 @@ fi
 [[ -d "$OUT_DIR/compose-resources" ]] || die "missing $OUT_DIR/compose-resources; the app resolves it beside the executable, relink with :apps:embedded:$TASK"
 [[ -f "$UNIT_FILE" ]] || die "missing $UNIT_FILE"
 [[ -f "$WAIT_SCRIPT" ]] || die "missing $WAIT_SCRIPT (bitchat.service runs it as ExecStartPre)"
+[[ -f "$BT_DROPIN_SRC" ]] || die "missing $BT_DROPIN_SRC"
+# The last ExecStart= line is the command bluetoothd must be running with (the first one only resets it).
+BT_EXEC="$(sed -n 's/^ExecStart=\(..*\)$/\1/p' "$BT_DROPIN_SRC" | tail -n 1)"
+[[ -n "$BT_EXEC" ]] || die "$BT_DROPIN_SRC has no non-empty ExecStart= line"
 field() { sed -n "s/^$1=//p" "$SIDECAR"; }
 VERSION="$(field version)"; GIT_SHA="$(field git_sha)"; GIT_BRANCH="$(field git_branch)"
 GIT_DIRTY="$(field git_dirty)"; BUILT_AT="$(field built_at)"; SIDECAR_BUILD="$(field build)"
@@ -178,6 +189,8 @@ chmod 644 "$STAGE/bitchat.service"
 touch -r "$UNIT_FILE" "$STAGE/bitchat.service"
 cp -p "$WAIT_SCRIPT" "$STAGE/wait-for-input-devices.sh"
 chmod 755 "$STAGE/wait-for-input-devices.sh"
+cp -p "$BT_DROPIN_SRC" "$STAGE/$BT_DROPIN_NAME"
+chmod 644 "$STAGE/$BT_DROPIN_NAME"
 manifest() { ( cd "$STAGE" && find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 > SHA256SUMS ); }
 
 # --- 5. release name: <sha12>[-dirty]-<build>-<digest8 of the payload> ------
@@ -435,6 +448,42 @@ if [[ "$DO_RESTART" == 1 ]]; then
   printf '%s\n' "$JOURNAL" | tail -n 15
 fi
 
+# --- 11a. bluetoothd must stay off everything a phone exposes but bitchat --
+# Read-only and never fatal: messaging works either way, but without the drop-in bluetoothd's profile
+# plugins read protected attributes on every iPhone this device connects to, and the phone shows a
+# pairing dialog on every reconnect (README, "Pairing prompts on iPhones"). This checks the device, not
+# the release, so it runs whatever --no-restart did. Installing needs the password, hence a printed
+# command and not a sudo -n here.
+log "checking bluetoothd against $BT_DROPIN"
+BT_WARN=""
+BT_APPLY="sudo systemctl daemon-reload && sudo systemctl restart bluetooth.service && sudo systemctl restart bitchat.service"
+BT_INSTALL="ssh -t $HOST 'sudo install -D -m 644 -o root -g root $RELEASES/current/$BT_DROPIN_NAME $BT_DROPIN && $BT_APPLY'"
+# The running command line comes from /proc, which needs no privileges; its NULs become spaces.
+BT_CMD='d='"'$BT_DROPIN'"'
+  if cmp -s "$d" '"'$REMOTE_DIR/$BT_DROPIN_NAME'"'; then echo __dropin=current
+  elif [ -e "$d" ]; then echo __dropin=differs
+  else echo __dropin=missing; fi
+  pid=$(systemctl show -p MainPID --value bluetooth.service 2>/dev/null) || pid=
+  if [ -n "$pid" ] && [ "$pid" != 0 ] && [ -r "/proc/$pid/cmdline" ]; then
+    echo "__cmd=$(tr "\0" " " < "/proc/$pid/cmdline")"
+  else
+    echo "__cmd="
+  fi'
+rc=0; BT_OUT="$(remote "$BT_CMD")" || rc=$?
+transport_check "$rc" "bluetoothd check" "$SWAPPED"
+BT_STATE="$(printf '%s\n' "$BT_OUT" | sed -n 's/^__dropin=//p')"
+BT_RUNNING="$(printf '%s\n' "$BT_OUT" | sed -n 's/^__cmd=//p' | sed 's/ *$//')"
+if [[ "$rc" != 0 || -z "$BT_STATE" ]]; then
+  BT_WARN="could not check bluetoothd on $HOST (exit $rc, output '$BT_OUT')"
+elif [[ "$BT_STATE" != current ]]; then
+  BT_WARN="$BT_DROPIN is $BT_STATE on $HOST, so iPhones it connects to keep getting pairing dialogs; check the ExecStart path against systemctl cat bluetooth.service, then install it with: $BT_INSTALL"
+elif [[ "$BT_RUNNING" != "$BT_EXEC" ]]; then
+  BT_WARN="$BT_DROPIN is installed but bluetoothd on $HOST runs '${BT_RUNNING:-nothing, or /proc is unreadable}', not '$BT_EXEC'; apply it with: ssh -t $HOST '$BT_APPLY'"
+else
+  log "bluetoothd runs with $BT_DROPIN"
+fi
+[[ -z "$BT_WARN" ]] || echo "WARNING: $BT_WARN" >&2
+
 # --- 11b. flush everything written since the upload -------------------------
 # The current symlink, ~/bitchat-embedded.kexe and /etc/systemd/system/bitchat.service are all
 # written after the sync in step 8, and a release the device cannot find at boot is as broken
@@ -463,4 +512,5 @@ else
   echo "home:     ~/bitchat-embedded.kexe not updated (see the warning above)"
 fi
 [[ -z "$ORDER_WARN" ]] || echo "WARNING:  $ORDER_WARN"
+[[ -z "$BT_WARN" ]] || echo "WARNING:  $BT_WARN"
 echo "autostart is only proven by a reboot: journalctl -b -u bitchat.service; journalctl -b -g 'ordering cycle'"
