@@ -319,7 +319,7 @@ class NostrClient(
     ): NostrEvent {
         val rumorJSON = json.encodeToString(rumor) //gson.toJson(rumor)
 
-        val encrypted = Cryptography.encryptNIP44(
+        val encrypted = Cryptography.sealBitchatEnvelope(
             plaintext = rumorJSON,
             recipientPublicKeyHex = recipientPubkey,
             senderPrivateKeyHex = senderPrivateKey
@@ -348,7 +348,7 @@ class NostrClient(
         // Log.v(TAG, "Creating gift wrap with ephemeral key")
 
         // Encrypt the seal with the new ephemeral key
-        val encrypted = Cryptography.encryptNIP44(
+        val encrypted = Cryptography.sealBitchatEnvelope(
             plaintext = sealJSON,
             recipientPublicKeyHex = recipientPubkey,
             senderPrivateKeyHex = wrapPrivateKey
@@ -375,7 +375,7 @@ class NostrClient(
         if (!withinEnvelopeBound(giftWrap.content)) return null
 
         return try {
-            val decrypted = Cryptography.decryptNIP44(
+            val decrypted = Cryptography.openBitchatEnvelope(
                 ciphertext = giftWrap.content,
                 senderPublicKeyHex = giftWrap.pubkey,
                 recipientPrivateKeyHex = recipientPrivateKey
@@ -414,7 +414,7 @@ class NostrClient(
         if (!withinEnvelopeBound(seal.content)) return null
 
         return try {
-            val decrypted = Cryptography.decryptNIP44(
+            val decrypted = Cryptography.openBitchatEnvelope(
                 ciphertext = seal.content,
                 senderPublicKeyHex = seal.pubkey,
                 recipientPrivateKeyHex = recipientPrivateKey

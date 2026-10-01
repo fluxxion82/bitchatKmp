@@ -176,7 +176,7 @@ class PrivateMessageSenderTest {
         createdAt = now(),
         kind = kind,
         tags = tags,
-        content = Cryptography.encryptNIP44(Json.encodeToString(rumor), recipient.publicKeyHex, sealer.privateKeyHex),
+        content = Cryptography.sealBitchatEnvelope(Json.encodeToString(rumor), recipient.publicKeyHex, sealer.privateKeyHex),
     )
 
     private fun seal(
@@ -190,7 +190,7 @@ class PrivateMessageSenderTest {
 
     /** Puts an upstream client's seal, byte for byte, into a fresh wrap that passes the age check. */
     private fun rewrap(wrapPubkey: String, wrapContent: String, to: NostrIdentity): NostrEvent {
-        val sealJson = Cryptography.decryptNIP44(wrapContent, wrapPubkey, to.privateKeyHex)
+        val sealJson = Cryptography.openBitchatEnvelope(wrapContent, wrapPubkey, to.privateKeyHex)
         return giftWrap(sealJson, to.publicKeyHex)
     }
 
@@ -201,7 +201,7 @@ class PrivateMessageSenderTest {
             createdAt = now(),
             kind = NostrKind.GIFT_WRAP,
             tags = listOf(listOf("p", recipientPubkey)),
-            content = Cryptography.encryptNIP44(sealJson, recipientPubkey, wrapPrivateKey),
+            content = Cryptography.sealBitchatEnvelope(sealJson, recipientPubkey, wrapPrivateKey),
         ).sign(wrapPrivateKey)
     }
 
