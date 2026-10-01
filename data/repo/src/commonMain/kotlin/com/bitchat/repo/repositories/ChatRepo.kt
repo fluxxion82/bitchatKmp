@@ -62,6 +62,7 @@ import com.bitchat.nostr.model.NostrFilter
 import com.bitchat.nostr.model.NostrIdentity
 import com.bitchat.nostr.model.NostrKind
 import com.bitchat.nostr.participant.NostrParticipantTracker
+import com.bitchat.nostr.util.HandledGiftWraps
 import com.bitchat.nostr.util.hexStringToByteArray
 import com.bitchat.nostr.util.toHexString
 import com.bitchat.lora.LoRaPeer
@@ -148,7 +149,8 @@ class ChatRepo(
     private val lastReadTimestamps = mutableMapOf<String, Long>().apply {
         putAll(userPreferences.getAllLastReadTimestamps())
     }
-    private val handledGiftWrapIds = mutableSetOf<String>()
+    /** Gift wraps whose envelope decryptPrivateMessage accepted; see [HandledGiftWraps] for the bound. */
+    private val handledGiftWraps = HandledGiftWraps()
     private val activeDmSubscriptions = mutableSetOf<String>()
     private val activeGeohashDmSubscriptions = mutableSetOf<String>()
     private val deliveredMessageIds = mutableSetOf<String>()
@@ -936,9 +938,9 @@ class ChatRepo(
         identity: NostrIdentity,
         sourceGeohash: String?
     ) {
-        if (!handledGiftWrapIds.add(event.id)) return
-
-        val decrypted = nostrClient.decryptPrivateMessage(event, identity) ?: return
+        // Recorded only once the envelope authenticates, so a forged copy carrying a real DM's id
+        // cannot have the real DM dropped as its duplicate.
+        val decrypted = handledGiftWraps.acceptOnce(event) { nostrClient.decryptPrivateMessage(it, identity) } ?: return
         val (content, senderPubkey, timestamp) = decrypted
         if (!content.startsWith("bitchat1:")) return
 
@@ -2692,7 +2694,7 @@ class ChatRepo(
         knownPrivatePeers.clear()
         peerDisplayNames.clear()
         lastReadTimestamps.clear()
-        handledGiftWrapIds.clear()
+        handledGiftWraps.clear()
         activeDmSubscriptions.clear()
         activeGeohashDmSubscriptions.clear()
         deliveredMessageIds.clear()

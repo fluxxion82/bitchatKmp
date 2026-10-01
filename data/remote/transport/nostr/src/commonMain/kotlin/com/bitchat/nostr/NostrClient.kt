@@ -107,7 +107,7 @@ class NostrClient(
 
             // 3. Verify timestamp is recent (prevent replay attacks)
             // NIP-17 randomizes timestamps up to 2 days in the past, so allow 48h + 15min buffer
-            val maxAgeSeconds = 48 * 3600 + 15 * 60 // 48 hours + 15 minutes
+            val maxAgeSeconds = GIFT_WRAP_MAX_AGE_SECONDS
             val currentTime = Clock.System.now().epochSeconds.toInt()
             val age = currentTime - giftWrap.createdAt
 
@@ -565,5 +565,14 @@ class NostrClient(
             // Log.e(TAG, "Failed to get/create device seed: ${e.message}")
             throw e
         }
+    }
+
+    companion object {
+        /**
+         * The oldest gift wrap [decryptPrivateMessage] accepts: 48 hours, since NIP-59 backdates a
+         * wrap's created_at by up to two days, plus 15 minutes. HandledGiftWraps remembers an
+         * accepted wrap's id until its wrap is this old.
+         */
+        const val GIFT_WRAP_MAX_AGE_SECONDS = 48 * 3600 + 15 * 60
     }
 }

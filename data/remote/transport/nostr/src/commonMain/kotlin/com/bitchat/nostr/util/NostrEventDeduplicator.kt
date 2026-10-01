@@ -1,6 +1,7 @@
 package com.bitchat.nostr.util
 
 import com.bitchat.nostr.model.NostrEvent
+import com.bitchat.nostr.model.NostrKind
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 import kotlin.concurrent.Volatile
@@ -90,11 +91,18 @@ class NostrEventDeduplicator(
     /**
      * Process a Nostr event with deduplication
      *
+     * A gift wrap is dropped without being recorded unless its id and signature verify. Its id is
+     * otherwise only a claim: a forged copy carrying a real DM's id that got here first would have
+     * the real DM dropped as its duplicate before ChatRepo ever saw it. NostrClient rejects such a
+     * wrap anyway, so no genuine DM is lost. Other kinds are deduplicated by their claimed id as
+     * before; verifying them here would change which geohash messages are shown.
+     *
      * @param event The Nostr event to process
      * @param processor Function to call if the event is not a duplicate
-     * @return true if the event was processed (not a duplicate), false if it was deduplicated
+     * @return true if the event was processed (not a duplicate), false if it was deduplicated or rejected
      */
     fun processEvent(event: NostrEvent, processor: (NostrEvent) -> Unit): Boolean {
+        if (event.kind == NostrKind.GIFT_WRAP && !event.isValidSignature()) return false
         return if (!isDuplicate(event.id)) {
             processor(event)
             true
