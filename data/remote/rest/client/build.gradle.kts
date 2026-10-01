@@ -100,6 +100,16 @@ val publicLeakProbe = providers.gradleProperty("bitchat.publicLeakProbe")
     .orElse(false)
     .get()
 
+// RouteAwareSocksCaptureTest asserts that a routed client still reaches the SOCKS proxy while the
+// environment tells every HTTP library to bypass proxies, so the whole suite runs with that hostile
+// environment set. Without it the test fails on a plain checkout rather than proving anything.
+tasks.matching { it.name == "jvmTest" }.configureEach {
+    (this as? org.gradle.api.tasks.testing.Test)?.apply {
+        environment("NO_PROXY", "*")
+        environment("no_proxy", "*")
+    }
+}
+
 // Both native suites bind the leak detector's UDP port on the host loopback, and the configuration
 // cache lets tasks of one project run in parallel: keep the simulator suite after the macOS one.
 tasks.matching { it.name == "iosSimulatorArm64Test" }.configureEach {
