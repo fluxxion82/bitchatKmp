@@ -372,12 +372,14 @@ class NostrClient(
     ): NostrEvent? {
         // Log.d(TAG, "Unwrapping gift wrap; content prefix='${giftWrap.content.take(3)}' length=${giftWrap.content.length}")
 
+        if (!withinEnvelopeBound(giftWrap.content)) return null
+
         return try {
             val decrypted = Cryptography.decryptNIP44(
                 ciphertext = giftWrap.content,
                 senderPublicKeyHex = giftWrap.pubkey,
                 recipientPrivateKeyHex = recipientPrivateKey
-            )
+            ).takeIf(::withinEnvelopeBound) ?: return null
 
 //            val jsonElement = JsonParser.parseString(decrypted)
 //            if (!jsonElement.isJsonObject) {
@@ -409,12 +411,14 @@ class NostrClient(
         seal: NostrEvent,
         recipientPrivateKey: String
     ): NostrEvent? {
+        if (!withinEnvelopeBound(seal.content)) return null
+
         return try {
             val decrypted = Cryptography.decryptNIP44(
                 ciphertext = seal.content,
                 senderPublicKeyHex = seal.pubkey,
                 recipientPrivateKeyHex = recipientPrivateKey
-            )
+            ).takeIf(::withinEnvelopeBound) ?: return null
 
 //            val jsonElement = JsonParser.parseString(decrypted)
 //            if (!jsonElement.isJsonObject) {
@@ -593,7 +597,21 @@ class NostrClient(
         }
     }
 
+    /**
+     * Whether [text] is small enough to decode. Applied to each layer's ciphertext before base64
+     * and ChaCha run over it, and to the plaintext before it is parsed as JSON, so a relay cannot
+     * make this client decrypt or parse an arbitrarily large payload.
+     */
+    private fun withinEnvelopeBound(text: String): Boolean = text.length <= MAX_ENVELOPE_CHARS
+
     companion object {
+        /**
+         * The largest envelope layer this client will decode, matching the 64 KiB cap upstream
+         * bitchat applies to wraps, seals and rumors, so the bound cannot reject traffic those
+         * clients send. A bitchat DM is a short `bitchat1:` packet, far below this.
+         */
+        const val MAX_ENVELOPE_CHARS = 64 * 1024
+
         /**
          * The oldest gift wrap [decryptPrivateMessage] accepts: 48 hours, since NIP-59 backdates a
          * wrap's created_at by up to two days, plus 15 minutes. HandledGiftWraps remembers an
