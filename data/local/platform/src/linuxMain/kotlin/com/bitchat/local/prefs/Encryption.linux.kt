@@ -231,11 +231,30 @@ class LinuxEncryptionSettingsFactory : EncryptionSettingsFactory {
 
     // Cache of loaded settings to avoid re-reading files
     private val settingsCache = mutableMapOf<String, LinuxFileSettings>()
+    private var warnedAboutPlaintextStorage = false
 
     override fun createEncrypted(name: String): Settings {
+        warnOncePlaintextStorage()
         return settingsCache.getOrPut(name) {
             LinuxFileSettings("$prefsDir/$name.prefs")
         }
+    }
+
+    /**
+     * Says once, at startup, that this platform's `createEncrypted` does not encrypt. The name comes
+     * from the shared `EncryptionSettingsFactory` contract, which Apple and Android do honour, so
+     * nothing in the type tells an operator that these records are readable. Names the directory and
+     * never a key or a value.
+     */
+    private fun warnOncePlaintextStorage() {
+        if (warnedAboutPlaintextStorage) return
+        warnedAboutPlaintextStorage = true
+        println(
+            "[STORAGE] WARNING: identity storage is NOT encrypted on this platform. " +
+                "Secrets are plaintext records in $prefsDir, protected only by filesystem permissions " +
+                "(0600 files in a 0700 directory). Root, a copied home directory, a backup, or anyone " +
+                "holding the disk can read them."
+        )
     }
 }
 

@@ -13,7 +13,6 @@ import com.bitchat.bluetooth.service.CentralScanningService
 import com.bitchat.bluetooth.service.GattClientConnectionDelegate
 import com.bitchat.bluetooth.service.GattClientService
 import com.bitchat.bluetooth.service.GattServerService
-import com.bitchat.bluetooth.service.OnPacketReceivedCallback
 import com.bitchat.domain.connectivity.eventbus.ConnectionEventBus
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.bind
@@ -45,14 +44,7 @@ actual val platformBleModule = module {
             coroutineContextFacade = get(),
             gattServer = get<AndroidGattServerService>(),
             gattClient = get<AndroidGattClientService>(),
-        ).apply {
-            setOnPacketReceivedCallback(object : OnPacketReceivedCallback {
-                override fun onPacketReceived(data: ByteArray, deviceAddress: String) {
-                    val meshService: BluetoothMeshService = get()
-                    meshService.onPacketReceived(data, deviceAddress)
-                }
-            })
-        }
+        )
 
         val gattClient = get<AndroidGattClientService>()
         gattClient.setConnectionDelegate(object : GattClientConnectionDelegate {
