@@ -53,7 +53,9 @@ sudo install -d -o sterling -g sterling -m 755 /opt/bitchat-tui /opt/bitchat-tui
 sudo install -o sterling -g sterling -m 644 /dev/null /opt/bitchat-tui/bitchat-tui.service
 sudo usermod -aG systemd-journal sterling
 sudo systemctl enable --now getty@tty2.service
-sudo systemctl disable --now getty@tty1.service
+# Only give tty1 away once tty2 really has a login on it: the && is load-bearing. Run this over SSH,
+# or from tty2 itself - stopping tty1's getty kills a login session on tty1.
+systemctl is-active getty@tty2.service && sudo systemctl disable --now getty@tty1.service
 ```
 
 `bitchat-tui.service` owns tty1. Enable `getty@tty2.service` before disabling tty1's getty to

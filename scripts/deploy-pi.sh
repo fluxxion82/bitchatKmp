@@ -384,33 +384,35 @@ if [[ "$DO_RESTART" == 1 ]]; then
     die "installing $SERVICE_NAME failed (exit $rc); $SWAPPED"
   fi
 
-  if [[ "$UI" == compose ]]; then
   # Boot-ordering check: the actual cycle test, run against the unit systemd has just loaded.
   # systemd adds an implicit After= from a target to every unit that target Wants, unless an
+  # Runs for whichever unit this deploy installed: both carry After=multi-user.target plus another
+  # unit that is itself After=multi-user.target (cardkb/xpt2046-touch for compose, getty@tty1 for the
+  # TUI), so both can form the cycle below.
   # ordering dependency between the two already exists. cardkb.service and xpt2046-touch.service
   # both declare After=multi-user.target, which suppresses that implicit edge for them;
-  # bitchat.service must do the same. Without it, multi-user.target ends up ordered after
-  # bitchat.service and an After=cardkb.service here closes the cycle
+  # $SERVICE_NAME must do the same. Without it, multi-user.target ends up ordered after
+  # $SERVICE_NAME and an After=cardkb.service here closes the cycle
   # bitchat -> cardkb -> multi-user.target -> bitchat. systemd breaks a cycle by deleting a job,
-  # and at boot it deleted bitchat.service/start. A restart never exercises this, so the
+  # and at boot it deleted $SERVICE_NAME/start. A restart never exercises this, so the
   # post-restart check below cannot catch it: warn loudly, do not fail.
   rc=0
-  ORDER_OUT="$(remote "systemctl show -p After --value bitchat.service; echo __after_sep__
+  ORDER_OUT="$(remote "systemctl show -p After --value $SERVICE_NAME; echo __after_sep__
     systemctl show -p After --value multi-user.target")" || rc=$?
   transport_check "$rc" "reading After=" "$SWAPPED"
   AFTER_UNIT="$(printf '%s\n' "$ORDER_OUT" | sed -n '1p')"
   ORDER_SEP="$(printf '%s\n' "$ORDER_OUT" | sed -n '2p')"
   AFTER_TARGET="$(printf '%s\n' "$ORDER_OUT" | sed -n '3p')"
   if [[ "$rc" != 0 || "$ORDER_SEP" != "__after_sep__" ]]; then
-    echo "WARNING: could not read After= of bitchat.service / multi-user.target on $HOST (exit $rc, output '$ORDER_OUT'); boot-ordering check skipped" >&2
+    echo "WARNING: could not read After= of $SERVICE_NAME / multi-user.target on $HOST (exit $rc, output '$ORDER_OUT'); boot-ordering check skipped" >&2
     add_order_warn "boot-ordering check skipped (could not read After= on $HOST)"
   else
     # The implicit reverse edge is present exactly when multi-user.target is ordered after us.
     IMPLICIT_EDGE=0
-    case " $AFTER_TARGET " in *" bitchat.service "*) IMPLICIT_EDGE=1 ;; esac
+    case " $AFTER_TARGET " in *" $SERVICE_NAME "*) IMPLICIT_EDGE=1 ;; esac
     OFFENDERS=""
     if [[ "$IMPLICIT_EDGE" == 1 ]]; then
-      log "note: multi-user.target is ordered after bitchat.service (implicit edge; the unit does not declare After=multi-user.target)"
+      log "note: multi-user.target is ordered after $SERVICE_NAME (implicit edge; the unit does not declare After=multi-user.target)"
       for unit in cardkb.service xpt2046-touch.service; do
         case " $AFTER_UNIT " in
           *" $unit "*) OFFENDERS="${OFFENDERS:+$OFFENDERS, }$unit" ;;
@@ -418,7 +420,7 @@ if [[ "$DO_RESTART" == 1 ]]; then
       done
     fi
     if [[ -n "$OFFENDERS" ]]; then
-      ORDER_MSG="ordering cycle at boot: multi-user.target is ordered after bitchat.service (implicit edge) and bitchat.service is ordered after $OFFENDERS, which is itself After=multi-user.target; systemd will delete the bitchat.service/start job. Remedy: add multi-user.target to After= in bitchat.service, which suppresses the implicit multi-user.target->bitchat.service edge; verify after a reboot with journalctl -b -g 'ordering cycle'"
+      ORDER_MSG="ordering cycle at boot: multi-user.target is ordered after $SERVICE_NAME (implicit edge) and $SERVICE_NAME is ordered after $OFFENDERS, which is itself After=multi-user.target; systemd will delete the $SERVICE_NAME/start job. Remedy: add multi-user.target to After= in $SERVICE_NAME, which suppresses the implicit multi-user.target->$SERVICE_NAME edge; verify after a reboot with journalctl -b -g 'ordering cycle'"
       echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
       echo "!!! ERROR: $ORDER_MSG" >&2
       echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
@@ -426,7 +428,6 @@ if [[ "$DO_RESTART" == 1 ]]; then
     else
       log "boot ordering: no known bad After= edges (only a reboot proves autostart); After=$AFTER_UNIT"
     fi
-  fi
   fi
 
   log "enabling and restarting $SERVICE_NAME"
