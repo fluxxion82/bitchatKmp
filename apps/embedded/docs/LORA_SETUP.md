@@ -2,6 +2,8 @@
 
 Use the [current PCB profile](ORANGEPI_ZERO3_PCB.md) for pin numbers and reset policy. The RFM95W radio uses SPI1.1, DIO0 on GPIO 70/header 11, and **no software reset**. Its physical RESET connection reaches header 7/GPIO 73, also the PMIC interrupt. GPIO 71 is header 22 and must not be used as a substitute reset output.
 
+Both boards currently carry an Adafruit RFM9x breakout on those same pins with its RST pin unconnected. Everything below applies to it unchanged; see [Adafruit RFM9x breakout](ORANGEPI_ZERO3_PCB.md#adafruit-rfm9x-breakout).
+
 ## Existing device setup
 
 SPI1 must be enabled for the radio. A fresh board uses the `spi1-cs1-lora` overlay described in the [PCB profile](ORANGEPI_ZERO3_PCB.md#spi-and-reset-policy); the first board uses hand-built `spi1-enable` + `spi1-cs1-touch` overlays, which supply the same CS1 and should be kept there. Do not install an SPI0 overlay or disable the SPI0 flash binding.

@@ -10,8 +10,9 @@ This project keeps protocol-level compatibility with legacy clients while adding
 
 - `domain`: business logic contracts and models.
 - `data:*`: repositories + transport/crypto/network implementations.
-- `presentation:*`: shared design system, screens, and viewmodels.
-- `apps:*`: platform applications (`desktop`, `droid`, `iosApp`, `embedded`).
+- `presentation:*`: shared design system, screens, and viewmodels, plus the terminal UI screens (`presentation:tui`).
+- `apps:*`: platform applications (`droid`, `desktop`, `desktop-tui`, `iosApp`, `embedded`, `embedded-tui`), the code they
+  share (`desktop-common`, `embedded-common`) and the release-mode canaries (`apple-canary`, `embedded-canary`).
 - `iosdi`: shared KMP framework used by iOS.
 
 ## Prerequisites
@@ -29,7 +30,13 @@ This project keeps protocol-level compatibility with legacy clients while adding
 ### iOS
 
 - Xcode (with command-line tools: `xcode-select --install`)
-- Rust toolchain with iOS targets (`rustup target add aarch64-apple-ios x86_64-apple-ios aarch64-apple-ios-sim`)
+- Rust via `rustup`. The Arti build is pinned to the toolchain named in `data/remote/tor/native/RUST_TOOLCHAIN`, so
+  install that toolchain and add the iOS targets to it:
+  ```bash
+  RUST="$(cat data/remote/tor/native/RUST_TOOLCHAIN)"
+  rustup toolchain install "$RUST"
+  rustup target add --toolchain "$RUST" aarch64-apple-ios x86_64-apple-ios aarch64-apple-ios-sim
+  ```
 
 ### Desktop (macOS)
 
@@ -38,7 +45,8 @@ This project keeps protocol-level compatibility with legacy clients while adding
   ```bash
   brew install libsodium secp256k1
   ```
-- Rust toolchain (`rustup` — needed to build Arti/Tor)
+- Rust via `rustup`, with the toolchain named in `data/remote/tor/native/RUST_TOOLCHAIN` installed (needed to build
+  Arti/Tor; `rustup toolchain install "$(cat data/remote/tor/native/RUST_TOOLCHAIN)"`)
 
 ### Linux ARM64 (embedded)
 
@@ -86,7 +94,8 @@ Plain `./gradlew :apps:desktop:run` works without any native build.
 On **Linux** that includes working Bluetooth: the desktop talks to BlueZ over D-Bus from the JVM, so
 there is no native library to build. **macOS** still needs `-PbleNative=macos`, which bridges to a
 CoreBluetooth shared library. Location is IP-based on Linux either way, and Tor needs its native
-library built (see `data/remote/tor/native/build-desktop.sh`).
+library built and installed: `data/remote/tor/native/build-desktop.sh --install`, or `scripts/run-desktop.sh`
+(below), which does that and then launches the app.
 
 Add `--console=plain` when you want to capture or grep the output — it turns off Gradle's animated
 console so the app's own logging is the only thing on stdout. It changes nothing about how the app
@@ -114,15 +123,24 @@ so each installer must be built on its target OS. `apps/desktop/README.md` has t
 runtime requirements (`rpm-build`, `mesa-libGL libX11 fontconfig`, `libsecret gnome-keyring`, XWayland,
 `-Dskiko.renderApi=SOFTWARE`).
 
-### Desktop terminal UI
+### Desktop launcher and terminal UI
 
-One command builds and installs desktop Tor, builds the app, and launches it from a real terminal:
+`scripts/run-desktop.sh [compose|tui]` builds and installs the desktop Tor library, builds the app and launches it.
+`compose` is the default:
 
 ```bash
-scripts/run-desktop.sh tui
+scripts/run-desktop.sh compose    # Compose window
+scripts/run-desktop.sh tui        # terminal UI; refuses to start without an interactive terminal
 ```
 
-For Compose instead, use `scripts/run-desktop.sh compose`. Close the other desktop app first.
+- It runs `data/remote/tor/native/build-desktop.sh --install` on every invocation, so it needs `rustc` with the
+  pinned toolchain (`data/remote/tor/native/RUST_TOOLCHAIN`), the Arti submodule checked out exactly at the commit
+  in `data/remote/tor/native/ARTI_VERSION`, and a few GB free under `~/.cache/bitchat-arti`
+  (`BITCHAT_ARTI_BUILD_ROOT` moves it). The first run compiles Arti and is slow; later runs are incremental. The
+  library ends up in `data/remote/tor/native/libs/desktop/`, where both desktop apps load it.
+- It takes no other arguments, so the macOS native BLE and location options (`-PbleNative=macos`,
+  `-PlocationNative=macos`) are not applied. Use the Gradle commands above when you need them.
+- Only one desktop app runs at a time: both take `~/.bitchat/desktop.lock`, so close the other one first.
 
 See [Desktop TUI launch instructions](apps/desktop-tui/README.md) for IntelliJ/terminal launch,
 Tor library installation, logs, and the distinction from the ARM64 embedded TUI.
@@ -151,7 +169,7 @@ Release Apple links carry a Kotlin/Native 2.4.20 miscompile workaround (KT-88544
 
 ### 4. Verify
 
-`scripts/verify.sh [quick|desktop|android|ios|embedded|tui|desktop-tui|full]` runs the per-platform build gates (default `quick` = `:domain:jvmTest` + desktop compile); the last recorded results are written to `docs/baseline/`, which is untracked and local to each machine.
+`scripts/verify.sh [quick|desktop|android|ios|embedded|tui|desktop-tui|full]` runs the per-platform build gates (default `quick` = `:domain:jvmTest`, the desktop compile and `:apps:desktop-common:test`); the last recorded results are written to `docs/baseline/`, which is untracked and local to each machine.
 On a Homebrew JDK, `desktop`/`full` need `GRADLE_ARGS='-Pcompose.desktop.packaging.checkJdkVendor=false'` (see the `scripts/verify.sh` header).
 
 Agent/editor notes live in the gitignored CLAUDE.md; docs/architecture-summary.md is the tracked source for the module map.
@@ -161,8 +179,8 @@ Agent/editor notes live in the gitignored CLAUDE.md; docs/architecture-summary.m
 | Target | Submodules | Native build script | Homebrew packages | Notes |
 |--------|-----------|---------------------|-------------------|-------|
 | Android | No | No | No | Uses Maven deps (BouncyCastle). Just needs Android SDK. |
-| Desktop (JVM) | No | No | No | Compiles from Maven deps. Native BLE and native location are macOS-only opt-ins (`-PbleNative=macos`, `-PlocationNative=macos`); Linux gets BLE from BlueZ over D-Bus with no native library. Tor needs the Arti native library from `build-all-desktop.sh`. Linux desktop builds and runs but has never been shipped. |
-| Desktop (macOS native BLE/Tor) | Yes | `build-all-desktop.sh` | `libsodium secp256k1` | Needed for `-PbleNative=macos` and Arti/Tor. |
+| Desktop (JVM) | No | No | No | Compiles from Maven deps. Native BLE and native location are macOS-only opt-ins (`-PbleNative=macos`, `-PlocationNative=macos`); Linux gets BLE from BlueZ over D-Bus with no native library. Tor needs the Arti native library installed by `data/remote/tor/native/build-desktop.sh --install` (`scripts/run-desktop.sh` does this). Linux desktop builds and runs but has never been shipped. |
+| Desktop (macOS native BLE/Tor) | Yes | `build-all-desktop.sh` | `libsodium secp256k1` | Needed for `-PbleNative=macos` and Arti/Tor. `build-all-desktop.sh` builds the Arti library but does not install it: `data/remote/tor/native/build-desktop.sh --install` copies it into `data/remote/tor/native/libs/desktop/`, where the app loads it. |
 | iOS | Yes | `build-all-ios.sh` | No | Builds libsodium, secp256k1, noise-c, Arti from source via Xcode toolchain. |
 | Linux ARM64 (embedded) | Yes | `build-all-linux.sh` | No | Cross-compiles inside Docker. Requires `-Pembedded.enabled=true` (or `embedded.enabled=true` in `~/.gradle/gradle.properties`). |
 
@@ -178,14 +196,22 @@ Use wrapper scripts in `scripts/` rather than invoking per-module native scripts
 | Desktop (macOS) | `./scripts/build-all-desktop.sh` | Xcode, Rust |
 | Linux (ARM64) | `./scripts/build-all-linux.sh` | Docker |
 
-Linux ARM64 cross-compiles native deps inside Docker and writes outputs to `data/*/build/linux-arm64/`.
+Linux ARM64 builds the C libraries inside the Docker cross image and writes them to
+`data/crypto/native/{libsodium,secp256k1}/build/linux-arm64/`, `data/noise/native/noise-c/build/linux-arm64/` and
+`data/remote/transport/bluetooth/native/gattlib/build/linux-arm64/`. Arti goes to
+`data/remote/tor/native/libs/linux-arm64/lib/libarti_linux.a`; on an arm64 host it is built natively in a
+`rust:<pinned>-bookworm` container.
+
+Every Arti build uses the Rust version in `data/remote/tor/native/RUST_TOOLCHAIN` and refuses to run unless the Arti
+submodule sits exactly on the commit in `data/remote/tor/native/ARTI_VERSION` with no tracked changes. Rust targets
+have to be installed on that toolchain (`rustup target add --toolchain "$(cat data/remote/tor/native/RUST_TOOLCHAIN)" <target>`).
 
 ### Native submodules overview
 
 | Submodule | Path | Used by |
 |-----------|------|---------|
-| [libsodium](https://github.com/jedisct1/libsodium) | `data/crypto/native/libsodium` | iOS, macOS, Linux ARM64 crypto |
-| [secp256k1](https://github.com/bitcoin-core/secp256k1) | `data/crypto/native/secp256k1` | iOS, macOS, Linux ARM64 crypto |
+| [libsodium](https://github.com/jedisct1/libsodium) | `data/crypto/native/libsodium` | iOS and Linux ARM64 crypto (macOS links Homebrew's copy) |
+| [secp256k1](https://github.com/bitcoin-core/secp256k1) | `data/crypto/native/secp256k1` | iOS and Linux ARM64 crypto (macOS links Homebrew's copy) |
 | [noise-c](https://github.com/rweather/noise-c) | `data/noise/native/noise-c` | iOS, macOS, Linux ARM64 Noise protocol |
 | [Arti](https://gitlab.torproject.org/tpo/core/arti) | `data/remote/tor/native/arti` | iOS, macOS, Linux ARM64, Android Tor |
 | [gattlib](https://github.com/labapart/gattlib) | `data/remote/transport/bluetooth/native/gattlib` | Linux ARM64 BLE |
@@ -202,7 +228,7 @@ The native libraries haven't been built. Run the appropriate build script from `
 Install via Homebrew: `brew install libsodium secp256k1`. The macOS cinterop config expects headers at `/opt/homebrew/opt/`.
 
 ### `libarti_ios.a` / `libarti_macos.a` not found
-Run `./scripts/build-all-ios.sh` or `./scripts/build-all-desktop.sh`. You need Rust installed (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`).
+Run `./scripts/build-all-ios.sh` or `./scripts/build-all-desktop.sh`. You need Rust installed (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`) and the pinned toolchain (`rustup toolchain install "$(cat data/remote/tor/native/RUST_TOOLCHAIN)"`).
 
 ## Embedded Device Quickstart (Orange Pi)
 
@@ -233,9 +259,11 @@ For full setup (display, touch, CardKB, LoRa protocol stack), use the docs map b
 ### Known Hardware Baseline
 
 - Orange Pi Zero 3 (Armbian, linuxArm64)
-- Elecrow 5" HDMI display with XPT2046 resistive touch
+- 5" HDMI display with USB capacitive touch (`QDtech MPI5001`); the earlier Elecrow XPT2046 resistive screen is kept
+  as a historical record in [touch setup](apps/embedded/docs/TOUCH_SETUP.md)
 - M5Stack CardKB (I2C keyboard)
-- RFM95W / SX1276-class LoRa module (via RangePi HAT)
+- Adafruit RFM9x (SX1276) LoRa breakout on SPI1.1 with its RST pin left unconnected, on both boards; see the
+  [PCB profile](apps/embedded/docs/ORANGEPI_ZERO3_PCB.md#adafruit-rfm9x-breakout)
 
 > **RangePi status:** The RangePi LoRa HAT is **not working** — it can transmit data but received packets cannot be decoded on the other end. This is a work in progress and has been set aside for now.
 

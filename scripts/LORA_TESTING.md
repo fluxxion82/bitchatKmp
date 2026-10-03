@@ -1,6 +1,6 @@
 # RFM95W diagnostics on Orange Pi Zero 3
 
-Use [the current PCB profile](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md): **SPI1.1**, IRQ GPIO 70/header 11, software reset disabled. The header SPI pins are PH7/MOSI (19), PH8/MISO (21), PH6/SCK (23), and PH9/NSS (24).
+Use [the current PCB profile](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md): **SPI1.1**, IRQ GPIO 70/header 11, software reset disabled. The header SPI pins are PH7/MOSI (19), PH8/MISO (21), PH6/SCK (23), and PH9/NSS (24). The same applies to the Adafruit RFM9x breakout now fitted on both boards, whose RST pin is unconnected: the probe never needs a reset line.
 
 The September 9 instructions assigning these pins to SPI0 were incorrect. The SPI0 flash-unbinding overlay has been removed. Enable SPI1 with the `spi1-cs1-lora` overlay on a fresh board, or keep `spi1-enable` + `spi1-cs1-touch` on the first board; either supplies LoRa CS1 even with USB touch (see the PCB profile). RESET reaches header 7/GPIO 73, shared with the PMIC interrupt. Neither that line nor unrelated GPIO 71 is a diagnostic reset output.
 

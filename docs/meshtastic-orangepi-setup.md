@@ -42,6 +42,7 @@ Only one path can control the LoRa hardware at a time.
 - SX1276/RFM95W-class LoRa module on `spidev1.1`
 - IRQ: `gpiochip1` line `70`
 - Software reset disabled; PCB RESET reaches header 7/GPIO 73, shared with PMIC IRQ
+- Radio currently fitted on both boards: Adafruit RFM9x breakout on the same pins, RST unconnected ([details](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md#adafruit-rfm9x-breakout))
 
 See canonical wiring and overlay baseline:
 - [current PCB profile](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md)

@@ -8,7 +8,7 @@ See also:
 ## Hardware
 
 - **Orange Pi Zero 3** (Allwinner H618, aarch64)
-- **RFM95W / SX1276** LoRa radio module (915 MHz band)
+- **RFM95W / SX1276** LoRa radio module (915 MHz band). Both boards currently use an Adafruit RFM9x breakout on the pins below with RST unconnected; see [Adafruit RFM9x breakout](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md#adafruit-rfm9x-breakout).
 - Wiring: SPI1.1, DIO0 GPIO 70/header 11, software reset disabled. See the [current PCB profile](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md).
 
 ### SPI Wiring (Orange Pi Zero 3 to RFM95W)
@@ -20,7 +20,7 @@ See also:
 | SCK        | Header 23 / PH6 | GPIO 230 |
 | NSS/CS     | Header 24 / PH9 | Directly mapped to `/dev/spidev1.1` |
 | DIO0 (IRQ) | Header 11 / PC6 / offset 70 | Interrupt pin for RX/TX complete |
-| RESET      | Header 7 / PC9 / GPIO 73 | Shared PMIC IRQ; no software reset output |
+| RESET      | Header 7 / PC9 / GPIO 73 | Shared PMIC IRQ; no software reset output. Not connected at all on the Adafruit breakout |
 | VCC        | 3.3V          | |
 | GND        | GND           | |
 

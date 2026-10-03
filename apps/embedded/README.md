@@ -309,7 +309,7 @@ The display pipeline follows the DRM/KMS pattern with Compose Multiplatform:
 Compose UI (@Composable functions)
     |
     v
-MultiLayerComposeScene -- Compose scene management
+CanvasLayersComposeScene -- Compose scene management
     |
     v
 Skia DirectContext (EGL backend) -- 2D graphics rendering
@@ -334,11 +334,17 @@ HDMI Display (800x480 @ 60Hz)
 
 ```
 src/linuxArm64Main/kotlin/com/bitchat/embedded/
-    Main.kt      -- entry point, Compose scene, render loop
-    Drm.kt       -- DRM device, connector, CRTC, mode selection
-    Gbm.kt       -- GBM device + surface for buffer management
-    Egl.kt       -- EGL display, context, surface initialization
-    Renderer.kt  -- Skia DirectContext and per-frame rendering
+    Main.kt                     -- entry point, Compose scene, event loop (select on DRM, touch, keyboard)
+    State.kt                    -- render state: subsystems, scene, render-request flag, buffer tracking
+    PageFlip.kt                 -- page-flip handler, per-frame render, initial render
+    FlushCoroutineDispatcher.kt -- queues Compose tasks so they run on the main thread when flushed
+    Drm.kt                      -- DRM device, connector, CRTC, mode selection
+    DrmFramebuffer.kt           -- DRM framebuffer per GBM buffer object, cached in its user data
+    Gbm.kt                      -- GBM device + surface for buffer management
+    Egl.kt                      -- EGL display, context, surface initialization
+    Renderer.kt                 -- Skia DirectContext and per-frame rendering
+    TouchInput.kt               -- evdev touch device discovery, calibration, events
+    KeyboardInput.kt            -- evdev keyboard device discovery and key events
 ```
 
 ### cinterop definitions
@@ -349,8 +355,9 @@ src/nativeInterop/cinterop/
     gbm.def    -- gbm.h
     egl.def    -- EGL/egl.h, EGL/eglext.h
     gles2.def  -- GLES2/gl2.h
-    evdev.def  -- linux/input.h (touch input, future use)
-    i2c.def    -- linux/i2c-dev.h (CardKB keyboard, future use)
+    evdev.def  -- linux/input.h (touch and keyboard input)
+    select.def -- sys/select.h fd_set helpers for the event loop
+    i2c.def    -- linux/i2c-dev.h (defined but unused: CardKB reaches the app as an evdev device)
 ```
 
 ## Troubleshooting

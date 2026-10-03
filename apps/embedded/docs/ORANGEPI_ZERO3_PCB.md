@@ -15,6 +15,37 @@ This is the current hardware mapping for the RFM95W/SX1276 radio and CardKB PCB,
 
 Physical header numbers, SoC names, and GPIO line offsets are different numbering systems. On the investigated Pi the main GPIO controller is `gpiochip1`, and DIO0 is offset 70 on that chip. Verify the chip enumeration on other kernel/device-tree builds; `gpiochip1` is not a universal Linux guarantee. Physical header pin 22 is PC7/GPIO 71. It is not the PCB RESET connection.
 
+## Adafruit RFM9x breakout
+
+Both boards currently use an Adafruit RFM9x (SX1276) breakout as the radio, wired to the same header pins as the
+table above with its **RST pin left unconnected**. On the Compose rig the breakout is wired to the custom PCB, so its
+signals reach the header through the PCB; the terminal UI board uses the same header pins.
+
+| Breakout pin | Signal | Physical header pin | SoC pin / Linux GPIO |
+|---|---|---:|---|
+| VIN | 3.3 V | 1 | 3.3 V supply |
+| GND | GND | 6 | Ground |
+| MOSI | MOSI | 19 | PH7 / 231 |
+| MISO | MISO | 21 | PH8 / 232 |
+| SCK | SCK | 23 | PH6 / 230 |
+| CS | NSS | 24 | PH9 / 233 / SPI1 CS1 |
+| G0 | DIO0 / IRQ | 11 | PC6 / 70 |
+| RST | not connected | | |
+| EN | not connected | | |
+
+Nothing in the software profile changes for the breakout, because every stack here already runs without a reset
+line:
+
+- Meshtastic has no `Lora.Reset` entry, MeshCore has no `lora_reset_pin`, and the direct BitChat driver
+  (`LoRaRadio.linuxArm64.kt`) never had a reset GPIO. All three have been run on the breakout wired this way.
+- NRESET on the SX1276 is active low and floats in normal operation, so an unconnected RST leaves the radio running.
+  Power-on reset is the only reset the radio gets.
+- A radio stuck in a bad state can therefore only be reset by removing power from the breakout. A Pi reboot may not
+  do that.
+- With RST unconnected the radio has no connection to PC9 and the PMIC interrupt it shares. The rule below still
+  holds: do not assign GPIO 71 or 73 as a reset output for it.
+- Identification is unchanged: the read-only probe expects `RegVersion = 0x12` on `/dev/spidev1.1`.
+
 ## SPI and reset policy
 
 The radio uses **`/dev/spidev1.1`**, SPI mode 0, 500 kHz in the diagnostic/Meshtastic profile. The relevant controller is `5011000.spi`, using the PH-bank header pins. Do not replace the SPI0 flash binding or install an SPI0 LoRa overlay.
@@ -76,6 +107,6 @@ Successful chip identification, successful protocol initialization, and successf
 
 ## Documentation history
 
-February recovery records described an Adafruit breakout and a software change to GPIO 71. Both February PCB exports instead route RESET to header 7/PC9. The earlier claim “GPIO 71 = physical pin 7” was wrong. The September 9 SPI0 diagnosis was also wrong. Historical records retain their original observations with correction notices; copied Obsidian notes must not be mistaken for a newer hardware baseline.
+February recovery records described an Adafruit breakout and a software change to GPIO 71. The breakout in use now is wired without RST (see [Adafruit RFM9x breakout](#adafruit-rfm9x-breakout)), so those reset instructions do not apply to it either. Both February PCB exports instead route RESET to header 7/PC9. The earlier claim “GPIO 71 = physical pin 7” was wrong. The September 9 SPI0 diagnosis was also wrong. Historical records retain their original observations with correction notices; copied Obsidian notes must not be mistaken for a newer hardware baseline.
 
 See [LoRa setup](LORA_SETUP.md), [MeshCore setup](../../../docs/meshcore-orangepi-setup.md), [Meshtastic setup](../../../docs/meshtastic-orangepi-setup.md), and [touch input](TOUCH_SETUP.md).

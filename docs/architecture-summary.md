@@ -31,16 +31,16 @@ Modules are declared in `settings.gradle.kts`:
 
 | Area | Modules | Role |
 | --- | --- | --- |
-| Apps | `:apps:droid`, `:apps:desktop`, optional `:apps:embedded` | Platform entry points and dependency graph assembly. |
+| Apps | `:apps:droid`, `:apps:desktop`, `:apps:desktop-common`, `:apps:apple-canary`; with `embedded.enabled`: `:apps:embedded`, `:apps:embedded-tui`, `:apps:embedded-common`, `:apps:embedded-canary`; with `tui.enabled`: `:apps:desktop-tui` | Platform entry points and dependency graph assembly, the code the desktop and embedded apps share, and release-mode canary tests. |
 | Domain | `:domain` | Business use cases, domain models, repository interfaces, event bus contracts, and common DI. |
 | Data core | `:data:cache`, `:data:crypto`, `:data:local:platform`, `:data:mediautils`, `:data:noise`, `:data:repo` | Cache primitives, crypto/noise protocol bindings, platform services, media helpers, and repository implementations. |
 | Remote REST | `:data:remote:rest:client`, `:data:remote:rest:dto` | Ktor clients, websocket clients, DTOs, API errors, and mapping. |
 | Remote transport | `:data:remote:transport`, `:data:remote:transport:bluetooth`, `:data:remote:transport:nostr`, `:data:remote:transport:lora`, `:data:remote:transport:lora:bitchat`, `:data:remote:transport:lora:meshtastic`, `:data:remote:transport:lora:meshcore` | Transport abstractions and concrete mesh, Nostr, Bluetooth, and LoRa protocol implementations. |
 | Privacy/network | `:data:remote:tor` | Tor/Arti integration and platform-specific native setup. |
-| Presentation | `:presentation:viewvo`, `:presentation:viewmodel`, `:presentation:design`, `:presentation:design:imagepicker`, `:presentation:screens` | View state DTOs, viewmodels, reusable Compose UI, image picking, and navigation/screens. |
+| Presentation | `:presentation:viewvo`, `:presentation:viewmodel`, `:presentation:design`, `:presentation:design:imagepicker`, `:presentation:screens`; with `embedded.enabled` or `tui.enabled`: `:presentation:tui`, `:presentation:tui:binding` | View state DTOs, viewmodels, reusable Compose UI, image picking, and navigation/screens; the Mosaic terminal UI screens and their viewmodel binding. |
 | iOS bridge | `:iosdi` | Shared framework and DI setup consumed by iOS. |
 
-The embedded profile is opt-in: `embedded.enabled` defaults to `false` in `gradle.properties`, and passing `-Pembedded.enabled=true` (or setting it in `~/.gradle/gradle.properties`) turns on Linux ARM64 targets and includes `:apps:embedded`. Embedded builds use forked Compose/Koin/lifecycle artifacts published to `~/.m2` where linuxArm64 support is needed (see `docs/FORKED_LIBRARIES.md`).
+The embedded profile is opt-in: `embedded.enabled` defaults to `false` in `gradle.properties`, and passing `-Pembedded.enabled=true` (or setting it in `~/.gradle/gradle.properties`) turns on Linux ARM64 targets and includes `:apps:embedded`, `:apps:embedded-tui`, `:apps:embedded-common`, `:apps:embedded-canary`, `:presentation:tui` and `:presentation:tui:binding`. `tui.enabled` (also off by default, and mutually exclusive with `embedded.enabled`) includes `:apps:desktop-tui` with the two `:presentation:tui` modules for the JVM terminal UI. Embedded builds use forked Compose/Koin/lifecycle artifacts published to `~/.m2` where linuxArm64 support is needed (see `docs/FORKED_LIBRARIES.md`).
 
 ## Domain Layer
 
@@ -60,7 +60,7 @@ The embedded profile is opt-in: `embedded.enabled` defaults to `false` in `gradl
 
 Domain code defines repository interfaces such as `ChatRepository`, `UserRepository`, `LocationRepository`, `NostrRepository`, `TorRepository`, `LoRaSettingsRepository`, and `ConnectivityRepository`. Use cases are small classes named as actions or queries, for example `SendMessage`, `ObserveChannelMessages`, `SetAppTheme`, `EnableTor`, `GetLoRaSettings`, and `SaveUserStateAction`.
 
-Eventing is explicit and feature-scoped. Domain defines event bus interfaces and in-memory implementations for app, chat, foreground, location, Nostr, Tor, and user events. Many use cases depend on repositories plus event buses, which keeps viewmodels from directly coordinating infrastructure details.
+Eventing is explicit and feature-scoped. Domain defines event bus interfaces for app, chat, connectivity, location, Nostr, Tor, and user events, with in-memory implementations for all but connectivity, whose implementations are per platform. Foreground state is a plain `AppForegroundState` class, not a bus. Many use cases depend on repositories plus event buses, which keeps viewmodels from directly coordinating infrastructure details.
 
 ## Data Layer
 
@@ -85,7 +85,7 @@ The data layer is split by infrastructure concern and protocol boundary.
 - `lora:meshtastic`: Meshtastic interoperability implementation.
 - `lora:meshcore`: MeshCore interoperability implementation.
 
-`data:remote:tor` wraps Tor/Arti integration with platform-specific native setup. Desktop apps pass native library paths through JVM args.
+`data:remote:tor` wraps Tor/Arti integration with platform-specific native setup. On the desktop JVM the Arti library is staged into the app's resources directory and loaded from there (`compose.application.resources.dir`), falling back to `java.library.path`; no JVM argument carries its path.
 
 ## Presentation Layer
 
@@ -116,9 +116,9 @@ App modules are intentionally thin shells that assemble the same shared applicat
 
 `apps:droid` is a standard Android application. `BitchatApplication` starts Koin with app/build modules plus shared modules: `commonRepoModule`, `domainModule`, `commonLocal`, `localModule`, `clientModule`, `viewModelModule`, `bluetoothModule`, `nostrModule`, `torModule`, LoRa protocol modules, and the LoRa protocol manager. `MainActivity` hosts the Compose UI and obtains `MainViewModel` through Koin.
 
-`apps:desktop` is a Compose Desktop JVM app. It uses the same shared presentation/data/domain modules, adds desktop packaging, JVM args for native Tor/Chromium behavior, and optional native BLE/location loading through Gradle properties such as `-PbleNative=macos` and `-PlocationNative=macos`.
+`apps:desktop` is a Compose Desktop JVM app. It uses the same shared presentation/data/domain modules, adds desktop packaging, staging of the Arti library into the app resources, and optional native BLE/location loading through Gradle properties such as `-PbleNative=macos` and `-PlocationNative=macos` (passed to the app as `-Dble.native` / `-Dlocation.native`). `apps:desktop-tui` is the same application as a Mosaic terminal UI; the two share their data-layer modules and a single-instance lock through `apps:desktop-common`.
 
-`apps:embedded` is an optional Kotlin/Native linuxArm64 app for Orange Pi-style devices. It depends on the same core modules but also handles DRM/GBM/EGL rendering, touch, keyboard, and LoRa protocol selection. It is gated by `-Pembedded.enabled=true` (off by default).
+`apps:embedded` is an optional Kotlin/Native linuxArm64 app for Orange Pi-style devices. It depends on the same core modules but also handles DRM/GBM/EGL rendering, touch and keyboard. `apps:embedded-tui` is the terminal UI for the same hardware; build identity, the user-state initializer and LoRa protocol selection are shared by both through `apps:embedded-common`. It is gated by `-Pembedded.enabled=true` (off by default).
 
 `apps/iosApp` is the native iOS app folder. `iosdi` exposes shared Kotlin DI/framework wiring to iOS and includes domain, data, presentation, and app-facing modules.
 

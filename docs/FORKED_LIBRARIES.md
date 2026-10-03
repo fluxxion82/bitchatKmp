@@ -16,7 +16,7 @@ This document is the single reference for what needs to be cloned, built, and pu
 | 4 | MeshCore | [fluxxion82/MeshCore](https://github.com/fluxxion82/MeshCore) | `orangepi-zero3-sx1276` | N/A (native binary) | Built on-device | `/usr/local/bin/meshcored` |
 | 5 | Meshtastic Firmware | [fluxxion82/firmware](https://github.com/fluxxion82/firmware) | `orangepi-rfm95w` | 2.7.x (native binary) | Built on-device | `/usr/bin/meshtasticd` |
 | 6 | gattlib | [fluxxion82/gattlib](https://github.com/fluxxion82/gattlib) | `bitchat-null-guards` | N/A (native static lib) | `scripts/build-native-linux-arm64.sh` step 5 | `native/gattlib/build/linux-arm64/install/lib/libgattlib.a` |
-| 7 | Mosaic | [fluxxion82/mosaic](https://github.com/fluxxion82/mosaic) | `embedded` | `0.19.0-embedded-SNAPSHOT` | `publishToMavenLocal -PVERSION_NAME=…` | `~/.m2` (mavenLocal); only `:presentation:tui` and `:apps:embedded-tui` |
+| 7 | Mosaic | [fluxxion82/mosaic](https://github.com/fluxxion82/mosaic) | `embedded` | `0.19.0-embedded-SNAPSHOT` | `publishToMavenLocal -PVERSION_NAME=…` | `~/.m2` (mavenLocal); declared by `:presentation:tui`, `:presentation:tui:binding` and `:apps:desktop-tui` (`:apps:embedded-tui` gets it through `:presentation:tui`) |
 
 ## Build Configuration
 
@@ -24,7 +24,7 @@ All three layers below are active only when the embedded profile is on (`embedde
 
 bitchatKmp wires in the forked artifacts through three layers of Gradle configuration:
 
-### 1. Repository ordering (`settings.gradle.kts:42-45`, plus `:20-22` in `pluginManagement`)
+### 1. Repository ordering (`settings.gradle.kts:61-65`, plus `:20-22` in `pluginManagement`)
 
 ```kotlin
 if (embeddedEnabled) {
@@ -34,7 +34,7 @@ if (embeddedEnabled) {
 
 With the profile on, `mavenLocal()` is listed first in `dependencyResolutionManagement` (and added to `pluginManagement`) so that forked SNAPSHOT artifacts take priority over upstream releases. Skiko no longer matches anything in `~/.m2` and falls through to `mavenCentral()`. `settings.gradle.kts` also selects the Compose Gradle plugin version there: `embedded.composeForkVersion` (`9999.0.0-SNAPSHOT`) when embedded, `1.12.0` otherwise.
 
-### 2. Version forcing (`build.gradle.kts:26-63`)
+### 2. Version forcing (`build.gradle.kts:29-67`)
 
 The root `build.gradle.kts` uses `resolutionStrategy.eachDependency` (inside `if (embeddedEnabled)`) to force `embedded.composeForkVersion` (`9999.0.0-SNAPSHOT`) for:
 - `org.jetbrains.compose.ui`, `.foundation`, `.material`, `.material3`, `.animation`, `.runtime`
@@ -54,7 +54,7 @@ The embedded module declares explicit `-linuxarm64` artifacts because Kotlin/Nat
 - Koin: `koin-core-linuxarm64:4.2.2`, `koin-compose-linuxarm64:4.2.2`, `koin-compose-viewmodel-linuxarm64:4.2.2`
 - Lifecycle/Savedstate: `*-linuxarm64:9999.0.0-SNAPSHOT`
 
-The `presentation/screens/build.gradle.kts:136` also declares `components-resources-linuxArm64` explicitly (embedded builds only).
+The `presentation/screens/build.gradle.kts:133` also declares `components-resources-linuxArm64` explicitly (embedded builds only).
 
 ### Dependency Flow
 
@@ -211,7 +211,7 @@ Upstream fixed it in Compose Multiplatform Core v1.11.0 by dropping the spread o
 `forks/compose-multiplatform-core` and the forks republished.
 
 Full evidence (per-version `llvm-nm` over the published klibs) is in
-[`docs/reviews/2026-09-07-fork-drop-analysis.md`](reviews/2026-09-07-fork-drop-analysis.md) §Q1.
+`docs/reviews/2026-09-07-fork-drop-analysis.md` §Q1, which lives in the parent workspace next to this repository (`../docs/reviews/` from the repository root), not in this repository.
 
 ## 4. MeshCore
 
@@ -286,6 +286,10 @@ from upstream `labapart/gattlib` @ `1580056`.
 - `dbus/gattlib.c` (the compiled `BLUEZ_VERSION >= 5.38` branch only) — NULL guards on the four property
   getters; `g_clear_error()` in place of `g_error_free()` so a freed `GError` is not read again on the next
   iteration; `g_object_unref()` on the skip paths that leaked a proxy.
+- `dbus/gattlib.c`, connection teardown (`8482263`) — BlueZ can complete a connection whose `Connect()` call it has
+  already failed; the stale property handler then ran the success path against an attempt whose object path had
+  been freed. The fork finishes tearing the failed attempt down, ignores a signal arriving for an abandoned attempt
+  and NULLs `dbus_objects` after freeing it.
 
 **Behaviour change:** discovery now returns fewer entries where it used to crash. A peer missing the bitchat
 characteristic is already abandoned by `BlueZGattClientService.discoverCharacteristics()`, which is the
@@ -313,7 +317,7 @@ If the submodule is ever pointed back at `labapart/gattlib`, recover with:
 cd data/remote/transport/bluetooth/native/gattlib
 git remote set-url origin https://github.com/fluxxion82/gattlib.git
 git fetch origin bitchat-null-guards
-git checkout f647d32657207143b8acc9aa5ab264a07661fcb7
+git checkout 848226332b998ecb467b19f321b8156660b05602
 ```
 
 No upstream PR has been opened against `labapart/gattlib` yet.

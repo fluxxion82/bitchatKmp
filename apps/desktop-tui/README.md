@@ -6,11 +6,18 @@ time, enforced by `~/.bitchat/desktop.lock`.
 
 ## Build and launch
 
-From the repository root, build the required Tor library and launch with one command in a real terminal:
+Build the required Tor library and launch with one command in a real terminal:
 
 ```bash
 scripts/run-desktop.sh tui
 ```
+
+The launcher exits at once if its input is not a terminal, then runs
+`data/remote/tor/native/build-desktop.sh --install`, `installDist`, and the installed launcher. The Tor build runs
+on every start and needs `rustc` with the toolchain pinned in `data/remote/tor/native/RUST_TOOLCHAIN`, the Arti
+submodule checked out exactly at the commit in `data/remote/tor/native/ARTI_VERSION`, and a few GB free under
+`~/.cache/bitchat-arti`; the first run is slow. It passes no Gradle properties through, so the macOS native BLE
+and location options are not applied.
 
 Close Compose first. For separate build and launch steps:
 
@@ -31,6 +38,8 @@ launcher. To check the build without starting the app:
 ```bash
 apps/desktop-tui/build/install/bitchat-tui/bin/bitchat-tui --version
 ```
+
+It prints `bitchat-tui <version> (<git sha>)`. The Settings screen does not show this identity yet.
 
 ## Tor
 

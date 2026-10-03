@@ -11,6 +11,18 @@ Build and install the pinned desktop Tor library, stage resources, and launch Co
 scripts/run-desktop.sh compose
 ```
 
+`compose` is the default mode, so the argument can be omitted; `scripts/run-desktop.sh tui` launches the
+[terminal UI](../desktop-tui/README.md) instead. What the launcher needs and does not do:
+
+- It runs `data/remote/tor/native/build-desktop.sh --install` every time before starting the app. That needs
+  `rustc` with the toolchain pinned in `data/remote/tor/native/RUST_TOOLCHAIN`, the Arti submodule checked out
+  exactly at the commit in `data/remote/tor/native/ARTI_VERSION` with no tracked changes, and a few GB free under
+  `~/.cache/bitchat-arti` (`BITCHAT_ARTI_BUILD_ROOT` moves it). The first run compiles Arti and is slow.
+- It passes no Gradle properties through, so `-PbleNative=macos` and `-PlocationNative=macos` are not applied: on
+  macOS a launcher start has the BLE stubs and IP-based location. Use the Gradle command below for native BLE.
+- Only one desktop app runs at a time. Compose and the terminal UI both take `~/.bitchat/desktop.lock`
+  (`SingleInstanceLock` in `:apps:desktop-common`) and the second one exits with a message.
+
 For a Gradle-only launch using already installed native libraries:
 
 ```bash
@@ -66,10 +78,10 @@ so its JVM loads the new file.
 - Nostr relay traffic falls back to a direct connection and says so. Relay log lines only claim Tor when
   the socket really went through the SOCKS proxy: the claim is made from the proxy state read before the
   connect **and** re-read when the socket is reported open, since the engine picks the proxy in between
-  (`claimsTorRoute`). They never claim Tor at all on iOS or on the embedded `linuxArm64` build, whose
-  Darwin and Curl engines ignore the proxy entirely (`httpEngineSupportsTorProxy`). This desktop app is
-  **not** in that group on any OS, macOS included: it is a `kotlin("jvm")` application on the OkHttp
-  engine, which is the one engine that installs a `ProxySelector`, so Tor genuinely proxies here.
+  (`claimsTorRoute`). Whether an engine can proxy at all is `httpEngineSupportsTorProxy`,
+  which is true on every shipped engine today: OkHttp (this desktop app and Android) through a
+  `ProxySelector`, Curl (`linuxArm64`) through `socks5h://` with an empty no-proxy list, and Darwin (iOS)
+  through an owned `NSURLSession` carrying the SOCKS dictionary. So Tor genuinely proxies here, on any OS.
 
 ## Packaging
 
