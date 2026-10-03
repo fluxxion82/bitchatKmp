@@ -116,6 +116,17 @@ runtime requirements (`rpm-build`, `mesa-libGL libX11 fontconfig`, `libsecret gn
 
 ### Desktop terminal UI
 
+One command builds and installs desktop Tor, builds the app, and launches it from a real terminal:
+
+```bash
+scripts/run-desktop.sh tui
+```
+
+For Compose instead, use `scripts/run-desktop.sh compose`. Close the other desktop app first.
+
+See [Desktop TUI launch instructions](apps/desktop-tui/README.md) for IntelliJ/terminal launch,
+Tor library installation, logs, and the distinction from the ARM64 embedded TUI.
+
 Build the desktop terminal UI with:
 ```bash
 ./gradlew -Pembedded.enabled=false -Ptui.enabled=true :apps:desktop-tui:installDist

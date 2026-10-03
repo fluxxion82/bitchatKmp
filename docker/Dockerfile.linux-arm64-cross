@@ -56,7 +56,8 @@ RUN wget -q https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}
     rm -rf cmake-${CMAKE_VERSION}-linux-x86_64*
 
 # Install Rust toolchain for cross-compiling Arti
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ARG RUST_TOOLCHAIN=1.92.0
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain "$RUST_TOOLCHAIN"
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Add linuxArm64 target for Rust

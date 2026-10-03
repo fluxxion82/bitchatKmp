@@ -246,7 +246,7 @@ pub extern "C" fn arti_start(
             }
         };
         let client = match TorClient::create_bootstrapped(config).await {
-            Ok(client) => Arc::new(client),
+            Ok(client) => client,
             Err(error) => {
                 if is_current(generation) {
                     report_current(

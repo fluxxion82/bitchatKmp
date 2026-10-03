@@ -5,6 +5,14 @@ Linux builds and runs but has never been shipped, and Windows is untried.
 
 ## Run
 
+Build and install the pinned desktop Tor library, stage resources, and launch Compose:
+
+```bash
+scripts/run-desktop.sh compose
+```
+
+For a Gradle-only launch using already installed native libraries:
+
 ```bash
 ./gradlew :apps:desktop:run --console=plain                            # no native prerequisites
 ./gradlew :apps:desktop:run -PbleNative=macos -PlocationNative=macos   # macOS-only native BLE/location
@@ -15,10 +23,14 @@ resources; `NativeBleLoader` / `NativeLocationLoader` extract and `System.load` 
 non-macOS host. Without them macOS falls back to the desktop BLE stubs and IP-based location; Linux
 needs no native library for BLE (BlueZ over D-Bus, see the Linux notes below) and also uses IP-based location.
 
+IntelliJ can use a Gradle run configuration with task `:apps:desktop:run`; it follows the same
+resource staging as the command above. Running `AppKt` directly can bypass that staging. See
+[Desktop terminal UI](../desktop-tui/README.md) for the terminal app.
+
 ## Native libraries and app resources
 
 The Arti (Tor) JNI library is optional and is **not** found through an absolute build-directory path.
-`data/remote/tor/native/build-desktop.sh` writes `libarti_desktop.{dylib,so,dll}` into
+`data/remote/tor/native/build-desktop.sh --install` builds and installs `libarti_desktop.{dylib,so,dll}` into
 `data/remote/tor/native/libs/desktop/`; the `stageAppResources` task copies whatever is there into the
 Compose app-resources layout under `build/bitchatAppResources/`, splitting by extension into the
 per-OS directories that layout provides (`macos/`, `linux/`, `windows/`) so a host that has built
@@ -30,6 +42,11 @@ directories (`<os>/` and `<os>-<arch>/`) into a single staging directory and han
 directory at runtime, whichever per-OS directory it was staged from. `TorManager.jvm.kt` loads it from
 there, falling back to `System.loadLibrary` for hosts that put it on `java.library.path` themselves. If
 the library is missing, Tor reports itself unavailable and the rest of the app runs.
+
+Gradle stages the installed library; it does not rebuild Arti automatically. A build without
+`--install` leaves the result in the out-of-tree build directory and the app continues using any
+previously installed library. After installing an updated library, fully stop and restart the app
+so its JVM loads the new file.
 
 ### What the app shows when Tor is unavailable
 

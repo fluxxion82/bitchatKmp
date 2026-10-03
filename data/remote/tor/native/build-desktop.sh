@@ -22,6 +22,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/build-common.sh"
 ARTI_SOURCE_DIR="$SCRIPT_DIR/arti"
 WRAPPER_DIR="$SCRIPT_DIR/arti-desktop-wrapper"
 LIBS_DIR="$SCRIPT_DIR/libs/desktop"
@@ -183,24 +184,16 @@ prepare_sources() {
     if [ "$ALLOW_CLONE" != true ]; then
       print_error "$ARTI_SOURCE_DIR is empty (submodule not initialised)."
       print_info  "Preferred:  git submodule update --init --recursive $ARTI_SOURCE_DIR"
-      print_info  "Otherwise:  re-run with --allow-clone to fetch tag $VERSION instead,"
-      print_info  "            which is NOT guaranteed to match the pinned commit."
+      print_info  "Otherwise:  re-run with --allow-clone to clone and check out commit $VERSION,"
+      print_info  "            which must match ARTI_VERSION."
       exit 1
     fi
-    print_info "Cloning Arti from GitLab (tag $VERSION, not the pinned commit)..."
-    git clone --depth 1 --branch "$VERSION" \
-      https://gitlab.torproject.org/tpo/core/arti.git "$ARTI_SOURCE_DIR"
+    print_info "Cloning Arti from GitLab and checking out commit $VERSION..."
+    git clone https://gitlab.torproject.org/tpo/core/arti.git "$ARTI_SOURCE_DIR"
+    git -C "$ARTI_SOURCE_DIR" checkout --detach "$VERSION"
   fi
 
-  local head
-  head="$(git -C "$ARTI_SOURCE_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
-  local pinned
-  pinned="$(git -C "$SCRIPT_DIR" ls-tree HEAD arti 2>/dev/null | awk '{print $3}')"
-  if [ -n "$pinned" ] && [ "$head" != "$pinned" ]; then
-    print_info "Arti checkout is $head; this repository pins $pinned."
-  else
-    print_success "Arti at pinned commit $head"
-  fi
+  ensure_arti_source "$ARTI_SOURCE_DIR" "$VERSION" || exit 1
 
   # Both trees, keeping their relative layout: the wrapper reaches Arti through
   # ../arti/crates/..., so copying only the wrapper would not build.
@@ -208,10 +201,7 @@ prepare_sources() {
   mkdir -p "$BUILD_ROOT/src"
   rm -rf "$BUILD_ROOT/src/arti-desktop-wrapper"
   cp -a "$WRAPPER_DIR" "$BUILD_ROOT/src/arti-desktop-wrapper"
-  if [ ! -d "$BUILD_ROOT/src/arti" ] || [ "$CLEAN_BUILD" = true ]; then
-    rm -rf "$BUILD_ROOT/src/arti"
-    cp -a "$ARTI_SOURCE_DIR" "$BUILD_ROOT/src/arti"
-  fi
+  copy_arti_source "$ARTI_SOURCE_DIR" "$BUILD_ROOT/src/arti"
   print_success "Sources ready"
   echo ""
 }
@@ -227,7 +217,9 @@ build_desktop() {
   # -j is capped because a full Arti build will otherwise take every core and several GB of RAM.
   print_info "cargo build --locked --release -j$JOBS (this takes a while)"
   local started=$SECONDS
-  /usr/bin/time -v cargo build --locked --release -j"$JOBS" 2>"$BUILD_ROOT/build-time.log" || {
+  local time_flag=-v
+  [ "$(uname -s)" != Darwin ] || time_flag=-l
+  /usr/bin/time "$time_flag" cargo build --locked --release -j"$JOBS" 2>"$BUILD_ROOT/build-time.log" || {
     print_error "Build failed. Last lines of the log:"
     tail -30 "$BUILD_ROOT/build-time.log" >&2
     exit 1
@@ -235,7 +227,7 @@ build_desktop() {
   local elapsed=$(( SECONDS - started ))
 
   local peak_kb
-  peak_kb="$(awk '/Maximum resident set size/ {print $NF}' "$BUILD_ROOT/build-time.log" 2>/dev/null)"
+  peak_kb="$(awk '/Maximum resident set size/ {print $NF} /maximum resident set size/ {printf "%.0f", $1 / 1024}' "$BUILD_ROOT/build-time.log" 2>/dev/null)"
   print_success "Compiled in ${elapsed}s, peak RSS ${peak_kb:-unknown} KB"
 
   local LIB_SRC="$BUILD_ROOT/src/arti-desktop-wrapper/target/release/libarti_desktop.$LIB_EXT"

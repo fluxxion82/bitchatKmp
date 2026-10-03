@@ -51,7 +51,8 @@ make distclean >/dev/null 2>&1 || true
 # Always regenerate autotools files to avoid version mismatches
 # (host may have different automake version than Docker container)
 echo "==> Regenerating autotools files..."
-autoreconf -i
+libtoolize --force --copy
+autoreconf -fi
 
 echo "==> Configuring libsodium for aarch64-linux-gnu..."
 ./configure \

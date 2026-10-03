@@ -50,8 +50,15 @@ jobs:
           # have to clone a tag instead, which is not guaranteed to be the commit this repo pins.
           submodules: recursive
 
+      - name: Read Rust pin
+        id: rust
+        shell: bash
+        run: echo "toolchain=$(cat data/remote/tor/native/RUST_TOOLCHAIN)" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.toolchain }}
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -60,7 +67,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cache/bitchat-arti/src/arti-desktop-wrapper/target
-          key: arti-${{ matrix.label }}-${{ hashFiles('data/remote/tor/native/arti-desktop-wrapper/Cargo.lock', 'data/remote/tor/native/ARTI_VERSION') }}
+          key: arti-${{ matrix.label }}-${{ hashFiles('data/remote/tor/native/arti-desktop-wrapper/Cargo.lock', 'data/remote/tor/native/ARTI_VERSION', 'data/remote/tor/native/RUST_TOOLCHAIN') }}
           restore-keys: arti-${{ matrix.label }}-
 
       # --install puts the library where the desktop build stages it from. That is the whole

@@ -6,7 +6,10 @@ set -euo pipefail
 
 # ---- Configuration ----
 IOS_MIN=13.0
-BUILD_TRIPLE="$(uname -m)-apple-darwin"  # avoid executing test binaries
+BUILD_ARCH="$(uname -m)"
+# Autotools calls Apple's arm64 architecture aarch64; clang still needs -arch arm64.
+[[ "$BUILD_ARCH" != arm64 ]] || BUILD_ARCH=aarch64
+BUILD_TRIPLE="${BUILD_ARCH}-apple-darwin"  # avoid executing test binaries
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SECP256K1_DIR="${SCRIPT_DIR}/secp256k1"
@@ -37,11 +40,8 @@ build_one () {
   # Clean previous builds
   make distclean >/dev/null 2>&1 || true
 
-  # Run autogen if configure doesn't exist
-  if [[ ! -f "./configure" ]]; then
-    echo "Running autogen.sh..."
-    ./autogen.sh
-  fi
+  # Regenerate after a submodule update: ignored configure can belong to an older release.
+  ./autogen.sh
 
   ./configure \
     --build="${BUILD_TRIPLE}" \

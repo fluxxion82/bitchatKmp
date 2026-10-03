@@ -330,7 +330,7 @@ unsafe fn nativeInitialize_impl(env: *mut JNIEnv, data_dir: jstring) -> jint {
         };
 
         log_info!("Arti client created successfully");
-        *lock_ignoring_poison(&ARTI_CLIENT) = Some(Arc::new(client));
+        *lock_ignoring_poison(&ARTI_CLIENT) = Some(client);
 
         Ok(())
     });
@@ -392,7 +392,7 @@ unsafe fn nativeStartSocksProxy_impl(port: jint) -> jint {
     if let Some(handle) = previous {
         log_info!("Waiting for the previous SOCKS listener to release the port");
         handle.abort();
-        let _ = runtime.block_on(tokio::time::timeout(LISTENER_SHUTDOWN_TIMEOUT, handle));
+        let _ = runtime.block_on(async { tokio::time::timeout(LISTENER_SHUTDOWN_TIMEOUT, handle).await });
     }
 
     let addr = format!("127.0.0.1:{}", port);
@@ -663,7 +663,7 @@ unsafe fn nativeStop_impl() -> jint {
         // Awaited rather than slept past: a fixed 100ms was a guess that the task had finished,
         // and the port stayed bound whenever it had not.
         if let Some(rt) = lock_ignoring_poison(&TOKIO_RUNTIME).as_ref() {
-            let finished = rt.block_on(tokio::time::timeout(LISTENER_SHUTDOWN_TIMEOUT, handle));
+            let finished = rt.block_on(async { tokio::time::timeout(LISTENER_SHUTDOWN_TIMEOUT, handle).await });
             if finished.is_err() {
                 log_error!("SOCKS listener did not stop within {}s", LISTENER_SHUTDOWN_TIMEOUT.as_secs());
                 return -1;
@@ -695,7 +695,43 @@ unsafe fn nativeStop_impl() -> jint {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rustls_runtime_has_a_crypto_provider() {
+        // Runtime construction must not panic before Tor bootstrap can report an error.
+        tor_rtcompat::PreferredRuntime::create().expect("create Rustls runtime");
+    }
+
     use super::*;
+
+    #[test]
+    fn stopping_a_listener_outside_runtime_context_completes() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let task = runtime.spawn(std::future::pending::<()>());
+        *lock_ignoring_poison(&TOKIO_RUNTIME) = Some(runtime);
+        *lock_ignoring_poison(&SOCKS_TASK) = Some(task);
+        let outcome = std::panic::catch_unwind(|| unsafe { nativeStop_impl() });
+        // Leave globals clean even when the pre-fix code panics.
+        lock_ignoring_poison(&TOKIO_RUNTIME).take();
+        lock_ignoring_poison(&SOCKS_TASK).take();
+        assert_eq!(outcome.expect("shutdown must not panic outside runtime context"), 0);
+    }
+
+    #[test]
+    fn cancelling_previous_listener_releases_its_port() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = runtime.spawn(async move {
+            let _listener = listener;
+            std::future::pending::<()>().await;
+        });
+        task.abort();
+        let result = runtime.block_on(async {
+            tokio::time::timeout(LISTENER_SHUTDOWN_TIMEOUT, task).await
+        });
+        assert!(result.unwrap().unwrap_err().is_cancelled());
+        std::net::TcpListener::bind(address).expect("previous listener must release its port");
+    }
 
     // MARK: - JNI modified UTF-8
 

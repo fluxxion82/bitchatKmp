@@ -1,6 +1,6 @@
 [package]
 name = "arti-linux-wrapper"
-version = "1.7.0"
+version = "2.7.0"
 edition = "2021"
 
 [workspace]
@@ -11,6 +11,8 @@ crate-type = ["staticlib"]
 name = "arti_linux"
 
 [dependencies]
+# Arti library consumers must select a Rustls provider; keep the existing ring backend.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 arti-client = { path = "../arti/crates/arti-client", default-features = false, features = ["tokio", "rustls", "compression", "bridge-client", "onion-service-client", "static-sqlite"] }
 tor-rtcompat = { path = "../arti/crates/tor-rtcompat", features = ["tokio", "rustls"] }
 tokio = { version = "1", features = ["full"] }

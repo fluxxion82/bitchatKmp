@@ -191,7 +191,7 @@ pub extern "C" fn Java_com_bitchat_tor_TorManager_nativeInitialize(
         log_info!("Arti client created successfully");
 
         // Store client globally
-        *ARTI_CLIENT.lock().unwrap() = Some(Arc::new(client));
+        *ARTI_CLIENT.lock().unwrap() = Some(client);
 
         Ok(())
     });

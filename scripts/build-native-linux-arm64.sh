@@ -21,6 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${SCRIPT_DIR}/.."
 
 DOCKER_IMAGE="bitchat-linux-arm64-cross"
+RUST_TOOLCHAIN="$(tr -d '[:space:]' < "${PROJECT_ROOT}/data/remote/tor/native/RUST_TOOLCHAIN")"
 
 echo "=========================================="
 echo "Native Library Cross-Compilation for linuxArm64"
@@ -43,11 +44,12 @@ fi
 DOCKER_PLATFORM="linux/amd64"
 
 echo "==> Step 1: Building Docker image (if needed)..."
-if docker image inspect "${DOCKER_IMAGE}" &> /dev/null; then
+if docker image inspect "${DOCKER_IMAGE}" &> /dev/null &&
+   docker run --platform "${DOCKER_PLATFORM}" --rm "${DOCKER_IMAGE}" rustc --version | grep -q "rustc ${RUST_TOOLCHAIN} "; then
     echo "    Docker image '${DOCKER_IMAGE}' already exists, skipping build"
 else
     echo "    Building Docker image '${DOCKER_IMAGE}' (platform: ${DOCKER_PLATFORM})..."
-    docker build --platform "${DOCKER_PLATFORM}" -t "${DOCKER_IMAGE}" -f "${PROJECT_ROOT}/docker/Dockerfile.linux-arm64-cross" "${PROJECT_ROOT}"
+    docker build --platform "${DOCKER_PLATFORM}" --build-arg "RUST_TOOLCHAIN=${RUST_TOOLCHAIN}" -t "${DOCKER_IMAGE}" -f "${PROJECT_ROOT}/docker/Dockerfile.linux-arm64-cross" "${PROJECT_ROOT}"
     echo "    Docker image built successfully"
 fi
 echo
@@ -93,10 +95,34 @@ echo
 
 echo "==> Step 6: Building Arti (Tor client)..."
 echo "    NOTE: First build takes 15-30 minutes (large Rust codebase)"
-docker run --platform "${DOCKER_PLATFORM}" --rm \
-    -v "${PROJECT_ROOT}/data/remote/tor/native:/build" \
-    "${DOCKER_IMAGE}" \
+# Build Arti natively on ARM64: its Rust build crashes under amd64 QEMU on Apple Silicon.
+# Export only the reviewed Tor sources, with a self-contained shallow Git checkout.
+# Host submodule gitdir pointers otherwise point outside a narrow container mount.
+ARTI_NATIVE_DIR="${PROJECT_ROOT}/data/remote/tor/native"
+source "$ARTI_NATIVE_DIR/build-common.sh"
+ensure_arti_source "$ARTI_NATIVE_DIR/arti" "$(tr -d '[:space:]' < "$ARTI_NATIVE_DIR/ARTI_VERSION")" || exit 1
+ARTI_DOCKER_SOURCE="$(mktemp -d)"
+trap 'rm -rf "$ARTI_DOCKER_SOURCE"' EXIT
+git clone --quiet --no-local --depth 1 "$ARTI_NATIVE_DIR/arti" "$ARTI_DOCKER_SOURCE/arti"
+mkdir -p "$ARTI_DOCKER_SOURCE/arti-linux-wrapper"
+cp "$ARTI_NATIVE_DIR"/{build-common.sh,build-linux-arm64.sh,ARTI_VERSION,RUST_TOOLCHAIN} "$ARTI_DOCKER_SOURCE/"
+cp "$ARTI_NATIVE_DIR/arti-linux-wrapper"/{Cargo.toml,Cargo.lock,rust-toolchain.toml,arti_linux.h} "$ARTI_DOCKER_SOURCE/arti-linux-wrapper/"
+cp -R "$ARTI_NATIVE_DIR/arti-linux-wrapper/src" "$ARTI_DOCKER_SOURCE/arti-linux-wrapper/"
+cp -R "$ARTI_NATIVE_DIR/arti-lifecycle" "$ARTI_DOCKER_SOURCE/"
+ARTI_DOCKER_PLATFORM=linux/arm64
+ARTI_DOCKER_IMAGE="rust:${RUST_TOOLCHAIN}-bookworm"
+case "$(uname -m)" in
+    arm64|aarch64) ;;
+    *) ARTI_DOCKER_PLATFORM="${DOCKER_PLATFORM}"; ARTI_DOCKER_IMAGE="${DOCKER_IMAGE}" ;;
+esac
+docker run --platform "${ARTI_DOCKER_PLATFORM}" --rm \
+    -v "${ARTI_DOCKER_SOURCE}:/build" \
+    -v bitchat-cargo-registry:/usr/local/cargo/registry \
+    -v bitchat-arti-arm64-target:/build/arti-linux-wrapper/target \
+    "${ARTI_DOCKER_IMAGE}" \
     bash /build/build-linux-arm64.sh
+mkdir -p "$ARTI_NATIVE_DIR/libs/linux-arm64/lib"
+cp "$ARTI_DOCKER_SOURCE/libs/linux-arm64/lib/libarti_linux.a" "$ARTI_NATIVE_DIR/libs/linux-arm64/lib/"
 echo "    Arti built successfully"
 echo
 

@@ -24,6 +24,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/build-common.sh"
 ARTI_SOURCE_DIR="$SCRIPT_DIR/arti"
 WRAPPER_DIR="$SCRIPT_DIR/arti-ios-wrapper"
 LIBS_DIR="$SCRIPT_DIR/libs"
@@ -86,28 +87,9 @@ check_prerequisites() {
 }
 
 clone_arti() {
-  print_header "Cloning Arti $VERSION"
-
-  if [ "$CLEAN_BUILD" = true ] && [ -d "$ARTI_SOURCE_DIR" ]; then
-    print_info "Removing existing Arti source..."
-    rm -rf "$ARTI_SOURCE_DIR"
-  fi
-
-  # A submodule checkout has a .git file (gitdir: pointer), a plain clone has a .git directory.
-  if [ -e "$ARTI_SOURCE_DIR/.git" ]; then
-    print_info "Arti already cloned, updating..."
-    cd "$ARTI_SOURCE_DIR"
-    git fetch --tags
-  else
-    print_info "Cloning Arti from GitLab..."
-    git clone https://gitlab.torproject.org/tpo/core/arti.git "$ARTI_SOURCE_DIR"
-    cd "$ARTI_SOURCE_DIR"
-  fi
-
-  print_info "Checking out $VERSION..."
-  git checkout "$VERSION"
-  print_success "Arti $VERSION ready"
-  echo ""
+  print_header "Checking pinned Arti source"
+  ensure_arti_source "$ARTI_SOURCE_DIR" "$VERSION" || exit 1
+  print_success "Arti at reviewed commit $VERSION"
 }
 
 build_target() {
@@ -122,9 +104,9 @@ build_target() {
   cd "$WRAPPER_DIR"
 
   print_info "Running cargo build..."
-  cargo build --release --target "$TARGET"
+  cargo build --locked --release --target "$TARGET"
 
-  local LIB_SRC="$WRAPPER_DIR/target/$TARGET/release/libarti_ios.a"
+  local LIB_SRC="${CARGO_TARGET_DIR:-$WRAPPER_DIR/target}/$TARGET/release/libarti_ios.a"
   local LIB_DST="$OUTPUT_DIR/libarti_ios.a"
 
   if [ ! -f "$LIB_SRC" ]; then

@@ -44,6 +44,35 @@ sourceSets.main {
 }
 tasks.named("compileKotlin") { dependsOn(generateDesktopTuiBuildInfo) }
 
+// JetBrains Lifecycle forwards to AndroidX. Both desktop artifacts have identical JAR
+// filenames, so installDist otherwise overwrites the implementation with an empty forwarder.
+// Resolve this JVM application's graph directly to AndroidX at the shared Lifecycle version.
+val desktopLifecycleVersion = libs.versions.lifecycleViewmodel.get()
+configurations.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.jetbrains.androidx.lifecycle") {
+            useTarget("androidx.lifecycle:${requested.name}:$desktopLifecycleVersion")
+            because("Keep implementation JARs instead of colliding JetBrains forwarding JARs in installDist")
+        }
+    }
+}
+
+val checkRuntimeLibraryNames = tasks.register("checkRuntimeLibraryNames") {
+    group = "verification"
+    description = "Reject runtime JAR filename collisions that would lose classes in the installed TUI."
+    inputs.files(configurations.runtimeClasspath)
+    doLast {
+        val collisions = inputs.files.files.groupBy { it.name }.filterValues { it.size > 1 }
+        check(collisions.isEmpty()) {
+            "Runtime JAR filename collisions: " + collisions.entries.joinToString { (name, files) ->
+                "$name: ${files.joinToString()}"
+            }
+        }
+    }
+}
+tasks.named("installDist") { dependsOn(checkRuntimeLibraryNames) }
+tasks.named("check") { dependsOn(checkRuntimeLibraryNames) }
+
 val artiNativeDir = rootProject.layout.projectDirectory.dir("data/remote/tor/native/libs/desktop")
 
 // macOS native BLE and location libraries, opt-in exactly as in apps/desktop: -PbleNative=macos and
