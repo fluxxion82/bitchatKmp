@@ -20,6 +20,9 @@ import org.bouncycastle.util.BigIntegers
 import java.math.BigInteger
 import java.security.MessageDigest
 import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import kotlin.io.encoding.Base64.Default.decode
 import kotlin.io.encoding.Base64.Default.encode
 
@@ -474,7 +477,7 @@ actual object Cryptography {
     actual fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray {
         val mac = javax.crypto.Mac.getInstance("HmacSHA256")
         val providerKey = if (key.isEmpty()) byteArrayOf(0) else key
-        val secretKeySpec = javax.crypto.spec.SecretKeySpec(providerKey, "HmacSHA256")
+        val secretKeySpec = SecretKeySpec(providerKey, "HmacSHA256")
         mac.init(secretKeySpec)
         return mac.doFinal(message)
     }
@@ -494,14 +497,14 @@ actual object Cryptography {
     actual fun encryptAESGCM(plaintext: String, key: ByteArray): ByteArray {
         require(key.size == 32) { "AES key must be 32 bytes (256-bit)" }
 
-        val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
-        val secretKey = javax.crypto.spec.SecretKeySpec(key, "AES")
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val secretKey = SecretKeySpec(key, "AES")
 
         val iv = ByteArray(12)
         platformRandom().nextBytes(iv)
 
-        val gcmSpec = javax.crypto.spec.GCMParameterSpec(128, iv)
-        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, secretKey, gcmSpec)
+        val gcmSpec = GCMParameterSpec(128, iv)
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey, gcmSpec)
 
         val plainBytes = plaintext.toByteArray(Charsets.UTF_8)
         val ciphertext = cipher.doFinal(plainBytes)
@@ -514,14 +517,14 @@ actual object Cryptography {
             require(key.size == 32) { "AES key must be 32 bytes (256-bit)" }
             if (encryptedData.size < 12) return null // Minimum: 12 bytes IV
 
-            val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
-            val secretKey = javax.crypto.spec.SecretKeySpec(key, "AES")
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val secretKey = SecretKeySpec(key, "AES")
 
             val iv = encryptedData.sliceArray(0 until 12)
             val ciphertext = encryptedData.sliceArray(12 until encryptedData.size)
 
-            val gcmSpec = javax.crypto.spec.GCMParameterSpec(128, iv)
-            cipher.init(javax.crypto.Cipher.DECRYPT_MODE, secretKey, gcmSpec)
+            val gcmSpec = GCMParameterSpec(128, iv)
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, gcmSpec)
 
             val decryptedBytes = cipher.doFinal(ciphertext)
             String(decryptedBytes, Charsets.UTF_8)

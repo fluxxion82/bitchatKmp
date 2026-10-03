@@ -19,8 +19,9 @@ import kotlin.test.assertTrue
  * keys below, and recorded verbatim. The nonce is random per call, so these are samples of the
  * format, not reproducible outputs: never "fix" a failure by pasting a fresh payload.
  *
- * Recorded on: JVM `:data:crypto:jvmTest`; Android `:data:crypto:testAndroidHostTest` (its own
- * `Cryptography.android.kt`); Apple `:data:crypto:macosArm64Test` (`appleMain`, shared with iOS);
+ * Recorded on: JVM `:data:crypto:jvmTest`; Android `:data:crypto:testAndroidHostTest` (then its own
+ * `Cryptography.android.kt`, since merged with the JVM actual into `jvmAndroidMain`); Apple
+ * `:data:crypto:macosArm64Test` (`appleMain`, shared with iOS);
  * Linux `linuxArm64` `test.kexe` run on the Orange Pi, since there is no linuxArm64 host test gate.
  */
 class LegacyEnvelopeFixturesTest {
