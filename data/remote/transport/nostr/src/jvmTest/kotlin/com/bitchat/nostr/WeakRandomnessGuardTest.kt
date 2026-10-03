@@ -206,8 +206,7 @@ private val SCANNED_MODULES = listOf("data/crypto", "data/remote/transport/nostr
  * looking where it should, and must fail rather than pass on nothing.
  */
 private val MUST_SCAN = listOf(
-    "data/crypto/src/jvmMain/kotlin/com/bitchat/crypto/Cryptography.jvm.kt",
-    "data/crypto/src/androidMain/kotlin/com/bitchat/crypto/Cryptography.android.kt",
+    "data/crypto/src/jvmAndroidMain/kotlin/com/bitchat/crypto/Cryptography.jvmAndroid.kt",
     "data/crypto/src/appleMain/kotlin/com/bitchat/crypto/Cryptography.apple.kt",
     "data/crypto/src/linuxMain/kotlin/com/bitchat/crypto/Cryptography.linux.kt",
     "data/remote/transport/nostr/src/commonMain/kotlin/com/bitchat/nostr/NostrClient.kt",

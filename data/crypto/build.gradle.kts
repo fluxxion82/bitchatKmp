@@ -152,36 +152,50 @@ kotlin {
                 implementation(libs.turbine)
             }
         }
-        val jvmMain by getting {
+        // One Cryptography actual serves the JVM and Android. Both run BouncyCastle and Tink on a
+        // JVM, and the Android copy of the file differed from the JVM one in nothing but imports
+        // while every fix had to land twice. Tink stays per target (tink here, tink-android on
+        // Android): the artifacts differ, the classes the shared sources use do not, and each
+        // target's compilation brings its own.
+        val jvmAndroidMain by creating {
+            dependsOn(commonMain)
             dependencies {
                 implementation(libs.bcpg) // OpenPGP/BCPG
                 implementation(libs.bcprov) // Provider
                 implementation(libs.bcutil) // ASN.1 Utility Classes
                 implementation(libs.bcpkix)  // PKIX/CMS/EAC/PKCS / OCSP/TSP/OPENSSL
+            }
+        }
+        // Its tests. The CSPRNG provenance and BIP340 signing tests install their generator
+        // through JCA, which an Android host test on a JDK reaches the same way.
+        val jvmAndroidTest by creating {
+            dependsOn(commonTest)
+        }
+        val jvmMain by getting {
+            dependsOn(jvmAndroidMain)
+            dependencies {
                 implementation(libs.tink)
             }
         }
         val jvmTest by getting {
+            dependsOn(jvmAndroidTest)
             dependencies {
                 implementation(libs.kotlin.test)
                 implementation(libs.kotlin.test.junit)
-
             }
         }
         // withHostTest runs commonTest against the Android actual. kotlin-test does not reach this
         // compilation through commonTest on its own, so name it here.
         val androidHostTest by getting {
+            dependsOn(jvmAndroidTest)
             dependencies {
                 implementation(libs.kotlin.test)
                 implementation(libs.kotlin.test.junit)
             }
         }
         val androidMain by getting {
+            dependsOn(jvmAndroidMain)
             dependencies {
-                implementation(libs.bcpg) // OpenPGP/BCPG
-                implementation(libs.bcprov) // Provider
-                implementation(libs.bcutil) // ASN.1 Utility Classes
-                implementation(libs.bcpkix)  // PKIX/CMS/EAC/PKCS / OCSP/TSP/OPENSSL
                 implementation(libs.tink.android)
             }
         }
