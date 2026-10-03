@@ -169,8 +169,13 @@ kotlin {
             }
         }
         // withHostTest runs commonTest against the Android actual. kotlin-test does not reach this
-        // compilation through commonTest on its own, so name it here.
+        // compilation through commonTest on its own, so name it here. The JVM test sources come
+        // along too: the Android actual is a copy of the JVM one, host tests run on a JDK, and the
+        // CSPRNG provenance and BIP340 signing tests in jvmTest install their generator through
+        // JCA, which works the same here. A plain source directory, not a shared source set, so
+        // the hierarchy the default template built stays as it is.
         val androidHostTest by getting {
+            kotlin.srcDir("src/jvmTest/kotlin")
             dependencies {
                 implementation(libs.kotlin.test)
                 implementation(libs.kotlin.test.junit)
