@@ -16,6 +16,7 @@ import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.params.KeyParameter
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.bouncycastle.math.ec.ECPoint
+import org.bouncycastle.util.BigIntegers
 import java.math.BigInteger
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -346,33 +347,30 @@ actual object Cryptography {
         return MessageDigest.getInstance("SHA-256").digest(data)
     }
 
-    private fun generateNonce(privateKey: BigInteger, messageHash: ByteArray, publicKeyBytes: ByteArray): BigInteger {
-        val random = ByteArray(32)
-        platformRandom().nextBytes(random)
+    /**
+     * The nonce of BIP340's default signing algorithm:
+     * `k0 = int(hash(BIP0340/nonce, t || bytes(P) || m)) mod n`, with `t = bytes(d) xor hash(BIP0340/aux, a)`
+     * and `a` 32 fresh bytes from the platform CSPRNG.
+     *
+     * Learning one nonce, or seeing one repeated, gives away the private key, so this is the
+     * reviewed recipe rather than a hash of our own: the key goes into the hash, so even a failed
+     * CSPRNG still yields a secret nonce that differs per message, and the tags keep these hashes
+     * apart from every other use of SHA-256. It is also what libsecp256k1 does for Apple and
+     * Linux, so one set of vectors (`SchnorrSigningVectorsTest`) covers every platform.
+     *
+     * [d] is the private key already negated for an odd-Y public key, as BIP340 has it before `t`.
+     */
+    private fun generateNonce(d: BigInteger, messageHash: ByteArray, publicKeyBytes: ByteArray): BigInteger {
+        val auxRand = ByteArray(32)
+        platformRandom().nextBytes(auxRand)
 
-        val privateKeyBytes = privateKey.toByteArray()
-        val nonceInput = ByteArray(privateKeyBytes.size + messageHash.size + publicKeyBytes.size + random.size)
-        var offset = 0
+        val auxHash = taggedHash("BIP0340/aux", auxRand)
+        val t = BigIntegers.asUnsignedByteArray(32, d)
+        for (i in t.indices) t[i] = (t[i].toInt() xor auxHash[i].toInt()).toByte()
 
-        System.arraycopy(privateKeyBytes, 0, nonceInput, offset, privateKeyBytes.size)
-        offset += privateKeyBytes.size
-
-        System.arraycopy(messageHash, 0, nonceInput, offset, messageHash.size)
-        offset += messageHash.size
-
-        System.arraycopy(publicKeyBytes, 0, nonceInput, offset, publicKeyBytes.size)
-        offset += publicKeyBytes.size
-
-        System.arraycopy(random, 0, nonceInput, offset, random.size)
-
-        val nonceHash = getDigestHash(nonceInput)
-        val nonce = BigInteger(1, nonceHash)
-
-        return if (nonce >= secp256k1Params.n) {
-            nonce.mod(secp256k1Params.n)
-        } else {
-            nonce
-        }
+        val k0 = BigInteger(1, taggedHash("BIP0340/nonce", t + publicKeyBytes + messageHash)).mod(secp256k1Params.n)
+        check(k0.signum() != 0) { "BIP340 nonce derivation produced zero" }
+        return k0
     }
 
     actual fun schnorrSign(messageHash: ByteArray, privateKeyHex: String): String {
@@ -426,7 +424,13 @@ actual object Cryptography {
             System.arraycopy(sBytes, sBytes.size - 32, sPadded, 0, 32)
         }
 
-        return (rPadded + sPadded).toHexString()
+        val signature = (rPadded + sPadded).toHexString()
+        // BIP340's last signing step. A signature that does not verify means a fault or a bug in
+        // the arithmetic above, and releasing a faulty signature can expose the private key.
+        check(schnorrVerify(messageHash, signature, publicKeyBytes.toHexString())) {
+            "Schnorr signature failed verification before release"
+        }
+        return signature
     }
 
     actual fun schnorrVerify(messageHash: ByteArray, signatureHex: String, publicKeyHex: String): Boolean {

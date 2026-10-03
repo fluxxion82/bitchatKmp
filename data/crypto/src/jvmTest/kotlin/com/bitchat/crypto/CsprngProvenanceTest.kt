@@ -58,10 +58,24 @@ class CsprngProvenanceTest {
 
     @Test
     fun `Schnorr signing mixes in bytes from the platform CSPRNG`() {
-        withInstalledCsprng { csprng ->
-            Cryptography.schnorrSign(ByteArray(32), "00".repeat(31) + "03")
+        withInstalledCsprng(fill = InstalledCsprng.fillWithPattern) { csprng ->
+            val signature = Cryptography.schnorrSign(ByteArray(32), "00".repeat(31) + "03")
 
-            assertTrue(csprng.draws.any { it.size == 32 }, "schnorrSign drew no auxiliary randomness from the platform CSPRNG")
+            assertEquals(
+                listOf(32),
+                csprng.draws.map { it.size },
+                "schnorrSign drew no auxiliary randomness from the platform CSPRNG",
+            )
+            // BIP340 default signing of a 32-zero-byte message under private key 3 with aux_rand
+            // 0x01..0x20: computed with a port of the BIP's reference.py that reproduces the BIP's
+            // own vectors, and matching libsecp256k1 on Apple. Drawing the bytes is not enough;
+            // signing with zeros, or with bytes from any other generator, gives another signature.
+            assertEquals(
+                "e4fa35db6d095723c0e5db8e861d8384dc4721d4cbe7462a145a22eaa3b232b1" +
+                    "48747a05beece377b5aefb3b40b284dadbe58452b4348b2c1f59ea5c6048dd66",
+                signature,
+                "schnorrSign did not sign with the auxiliary bytes it drew from the platform CSPRNG",
+            )
         }
     }
 

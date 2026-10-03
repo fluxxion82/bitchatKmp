@@ -66,4 +66,24 @@ internal class InstalledCsprng(private val fill: (ByteArray) -> Unit) :
 
         override fun engineGenerateSeed(numBytes: Int): ByteArray = ByteArray(numBytes).also(::engineNextBytes)
     }
+
+    companion object {
+        /**
+         * The bytes a [size]-byte draw yields under [fillWithPattern]: 0x01, 0x02, ... The Apple
+         * stand-in hands out the same, so a test that fixes the generator this way can assert
+         * the same known answer on both platforms.
+         */
+        fun pattern(size: Int): ByteArray = ByteArray(size) { (it + 1).toByte() }
+
+        /** A `fill` that makes every draw [pattern]. */
+        val fillWithPattern: (ByteArray) -> Unit = { bytes -> pattern(bytes.size).copyInto(bytes) }
+
+        /** A `fill` that makes the one draw exactly [draw], for replaying a published test vector. */
+        fun fillWith(draw: ByteArray): (ByteArray) -> Unit = { bytes ->
+            require(bytes.size == draw.size) {
+                "the test generator holds ${draw.size} bytes but ${bytes.size} were drawn"
+            }
+            draw.copyInto(bytes)
+        }
+    }
 }
