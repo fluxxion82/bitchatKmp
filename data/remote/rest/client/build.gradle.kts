@@ -21,7 +21,6 @@ kotlin {
             isStatic = true
         }
     }
-    macosX64()
     macosArm64()
 
     if (embeddedEnabled) {

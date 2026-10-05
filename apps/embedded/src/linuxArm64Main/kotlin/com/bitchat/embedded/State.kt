@@ -6,6 +6,7 @@
 package com.bitchat.embedded
 
 import androidx.compose.ui.scene.ComposeScene
+import androidx.compose.ui.platform.FrameRecomposer
 import cnames.structs.gbm_bo
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.StableRef
@@ -25,9 +26,10 @@ class State(
     val egl: Egl,
     val renderer: Renderer,
     val scene: ComposeScene,
+    val frameRecomposer: FrameRecomposer,
+    val mainDispatcher: FlushCoroutineDispatcher,
     val touchInput: TouchInput?,
     val keyboardInput: KeyboardInput?,
-    val mainDispatcher: FlushCoroutineDispatcher,
 ) {
     /**
      * Flag indicating the Compose scene needs to be re-rendered.
@@ -75,6 +77,7 @@ class State(
     fun cleanup() {
         disposeStableRef()
         scene.close()
+        frameRecomposer.close()
         renderer.cleanup()
         egl.cleanup()
         gbm.cleanup()

@@ -42,7 +42,7 @@ fun pageFlipHandler(
     if (userData == null) return
     val state = userData.asStableRef<State>().get()
 
-    // Flush pending Compose tasks before render decision
+    // Flush before the render decision so queued recompositions can request a frame.
     state.mainDispatcher.flush()
 
     if (state.needsRender) {
@@ -76,10 +76,9 @@ fun renderFrame(state: State) {
     val frameTimeNanos = currentTimeNanos()
     state.renderer.renderFrame { skiaCanvas ->
         skiaCanvas.clear(Color.BLACK)
-        state.scene.render(
-            skiaCanvas.asComposeCanvas(),
-            frameTimeNanos,
-        )
+        state.frameRecomposer.performFrame(frameTimeNanos)
+        state.scene.measureAndLayout()
+        state.scene.draw(skiaCanvas.asComposeCanvas())
     }
 
     eglSwapBuffers(state.egl.display, state.egl.surface)
@@ -146,17 +145,16 @@ private fun requeuePageFlip(state: State) {
  * @param state The render state
  */
 fun initialRender(state: State) {
-    // Flush pending Compose tasks before initial render
+    // Flush before the first FrameRecomposer frame.
     state.mainDispatcher.flush()
     state.clearRenderRequest()
 
     val frameTimeNanos = currentTimeNanos()
     state.renderer.renderFrame { skiaCanvas ->
         skiaCanvas.clear(Color.BLACK)
-        state.scene.render(
-            skiaCanvas.asComposeCanvas(),
-            frameTimeNanos,
-        )
+        state.frameRecomposer.performFrame(frameTimeNanos)
+        state.scene.measureAndLayout()
+        state.scene.draw(skiaCanvas.asComposeCanvas())
     }
 
     eglSwapBuffers(state.egl.display, state.egl.surface)

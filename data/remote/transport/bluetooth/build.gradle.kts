@@ -24,9 +24,8 @@ kotlin {
             baseName = "bluetooth"
         }
     }
-    val macosX64 = macosX64()
     val macosArm64 = macosArm64()
-    listOf(macosX64, macosArm64).forEach { target ->
+    listOf(macosArm64).forEach { target ->
         target.binaries {
             sharedLib {
                 baseName = "bitchat_ble"
@@ -149,9 +148,6 @@ kotlin {
         val desktopMacMain by creating {
             dependsOn(appleMain)
         }
-        val macosX64Main by getting {
-            dependsOn(desktopMacMain)
-        }
         val macosArm64Main by getting {
             dependsOn(desktopMacMain)
         }
@@ -187,4 +183,3 @@ val bleSpike by tasks.registering(JavaExec::class) {
     // JavaExec forks its own JVM and does not inherit -D from the Gradle command line.
     providers.gradleProperty("bleTrace").orNull?.let { systemProperty("ble.trace", it) }
 }
-

@@ -10,7 +10,7 @@ plugins {
 // in the embedded profile (see settings.gradle.kts).
 
 val koinVersion = providers.gradleProperty("embedded.koinForkVersion")
-    .orElse("4.2.2")
+    .orElse("4.2.2-embedded-SNAPSHOT")
     .get()
 
 kotlin {

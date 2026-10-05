@@ -30,9 +30,9 @@ For a Gradle-only launch using already installed native libraries:
 ./gradlew :apps:desktop:run -PbleNative=macos -PlocationNative=macos   # macOS-only native BLE/location
 ```
 
-`-PbleNative=macos` / `-PlocationNative=macos` build Kotlin/Native dylibs and bundle them as classpath
+On Apple Silicon, `-PbleNative=macos` / `-PlocationNative=macos` build Kotlin/Native dylibs and bundle them as classpath
 resources; `NativeBleLoader` / `NativeLocationLoader` extract and `System.load` them, and both no-op on a
-non-macOS host. Without them macOS falls back to the desktop BLE stubs and IP-based location; Linux
+non-macOS host. Without them, Intel Macs and non-macOS hosts fall back to the desktop BLE stubs and IP-based location; Linux
 needs no native library for BLE (BlueZ over D-Bus, see the Linux notes below) and also uses IP-based location.
 
 IntelliJ can use a Gradle run configuration with task `:apps:desktop:run`; it follows the same

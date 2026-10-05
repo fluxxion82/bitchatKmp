@@ -1,234 +1,264 @@
 # Forked Libraries
 
-bitchatKmp targets `linuxArm64` (Orange Pi Zero 3), which is not an upstream-supported Kotlin/Native target for Compose Multiplatform or Koin. Those libraries had to be forked and patched to produce `-linuxarm64` artifacts. The forks live in the `forks/` directory at the repo root (`bitchat/forks/`).
+bitchatKmp targets `linuxArm64` (Orange Pi Zero 3), which Compose Multiplatform and parts of Koin do not support
+upstream. Those libraries are forked and patched to produce `-linuxarm64` artifacts; the terminal UI uses a Mosaic fork
+for Linux-console behaviour; and three native components (MeshCore, Meshtastic, gattlib) carry device patches. The
+Kotlin forks live in `bitchat/forks/` (worktrees under `bitchat/forks/.worktrees/`), except Mosaic, which lives beside
+the repo at `workspace/multiplatform/mosaic-wasm`.
 
-**Skiko is no longer forked.** See [Skiko: no longer forked](#skiko-no-longer-forked) below.
+Last refresh: 2026-10-02. Every Kotlin fork was rebased onto its newest upstream release and built with Kotlin
+`2.5.0-Beta1`. On every fork branch the Kotlin bump is the **last** commit, so moving to the next Kotlin release is a
+one-commit change per fork (see [Next Kotlin bump](#next-kotlin-bump)).
 
-This document is the single reference for what needs to be cloned, built, and published before bitchatKmp will compile for the embedded target.
+## Quick reference
 
-## Quick Reference
+| # | Library | Fork repo | Branch | Upstream base | Version published | Targets published |
+|---|---|---|---|---|---|---|
+| 1 | Compose Multiplatform Core | [fluxxion82/compose-multiplatform-core](https://github.com/fluxxion82/compose-multiplatform-core) | `linux-1.12.1` | `v1.12.1` (`a1a7f353336`) | per library, `<upstream>-embedded-SNAPSHOT` (below) | metadata, desktop (JVM), linuxArm64 |
+| 2 | Compose Multiplatform | [fluxxion82/compose-multiplatform](https://github.com/fluxxion82/compose-multiplatform) | `linux-1.12.1` | `v1.12.1` (`bdd8e879b2`) | `1.12.1-embedded-SNAPSHOT` | Gradle plugin; `components-resources` metadata, desktop, linuxArm64 |
+| 3 | Koin | [fluxxion82/koin](https://github.com/fluxxion82/koin) | `sa_linux_4.2.2-kotlin-2.5` | tag `4.2.2` (`dc86ef8d`) | `4.2.2-embedded-SNAPSHOT` | metadata, JVM, linuxArm64 (four modules) |
+| 4 | Mosaic | [fluxxion82/mosaic](https://github.com/fluxxion82/mosaic) | `embedded` | `trunk` (`abc611c9`) | `0.19.0-embedded-SNAPSHOT` | all Mosaic publications |
+| 5 | MeshCore | [fluxxion82/MeshCore](https://github.com/fluxxion82/MeshCore) | `orangepi-zero3-sx1276` | `ggodlewski/MeshCore` `linux` | native binary | built on the device |
+| 6 | Meshtastic firmware | [fluxxion82/firmware](https://github.com/fluxxion82/firmware) | `orangepi-rfm95w` | `meshtastic/firmware` 2.7.x | native binary | built on the device |
+| 7 | gattlib | [fluxxion82/gattlib](https://github.com/fluxxion82/gattlib) | `bitchat-null-guards` (`8482263`) | `labapart/gattlib` @ `1580056` | static library (submodule) | `scripts/build-native-linux-arm64.sh` |
 
-| # | Library | Fork Repo | Branch | Version | Publish | Consumed Via |
-|---|---------|-----------|--------|---------|---------|--------------|
-| 1 | Compose Multiplatform | [fluxxion82/compose-multiplatform](https://github.com/fluxxion82/compose-multiplatform) | `release/1.10` | `9999.0.0-SNAPSHOT` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
-| 2 | Compose Multiplatform Core | [fluxxion82/compose-multiplatform-core](https://github.com/fluxxion82/compose-multiplatform-core) | `linux-1.10.0` | `9999.0.0-SNAPSHOT` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
-| 3 | Koin | [fluxxion82/koin](https://github.com/fluxxion82/koin) | `sa_linux_4.2.2` | `4.2.2` | `publishToMavenLocal` | `~/.m2` (mavenLocal) |
-| 4 | MeshCore | [fluxxion82/MeshCore](https://github.com/fluxxion82/MeshCore) | `orangepi-zero3-sx1276` | N/A (native binary) | Built on-device | `/usr/local/bin/meshcored` |
-| 5 | Meshtastic Firmware | [fluxxion82/firmware](https://github.com/fluxxion82/firmware) | `orangepi-rfm95w` | 2.7.x (native binary) | Built on-device | `/usr/bin/meshtasticd` |
-| 6 | gattlib | [fluxxion82/gattlib](https://github.com/fluxxion82/gattlib) | `bitchat-null-guards` | N/A (native static lib) | `scripts/build-native-linux-arm64.sh` step 5 | `native/gattlib/build/linux-arm64/install/lib/libgattlib.a` |
-| 7 | Mosaic | [fluxxion82/mosaic](https://github.com/fluxxion82/mosaic) | `embedded` | `0.19.0-embedded-SNAPSHOT` | `publishToMavenLocal -PVERSION_NAME=…` | `~/.m2` (mavenLocal); declared by `:presentation:tui`, `:presentation:tui:binding` and `:apps:desktop-tui` (`:apps:embedded-tui` gets it through `:presentation:tui`) |
+Skiko is **not** forked: `org.jetbrains.skiko:skiko-linuxarm64:0.150.1` comes from Maven Central (see [Skiko](#skiko)).
 
-## Build Configuration
+Fork commits at the 2026-10-02 refresh (all pushed only when the owner decides):
 
-All three layers below are active only when the embedded profile is on (`embedded.enabled` defaults to `false` in `gradle.properties`; pass `-Pembedded.enabled=true` or set it in `~/.gradle/gradle.properties`). A plain build resolves Compose 1.12.0 and Koin 4.2.2 from Maven Central and never touches `~/.m2`. Skiko comes from Maven Central either way.
+| Fork | Commits on top of the upstream base |
+|---|---|
+| Core | `460352e37a2` Compose UI for Linux (Thomas Vos) · `4c3d3ecf4a0` Workaround for missing Dispatchers.Main (Thomas Vos) · `d1ac5634bf3` Port the Linux target to Compose 1.12 · `2d765d8dbac` Publish as `<upstream>-embedded-SNAPSHOT` · `5e437f50092` Update Kotlin to 2.5.0-Beta1 |
+| Compose Multiplatform | `fdb56b46da` Add linuxArm64 to compose-resources · `fbefc7db92` Limit compose-resources to embedded targets on request · `e8003428fa` Update the components Gradle wrapper to 8.14.3 · `d246a3b8a5` Update Kotlin to 2.5.0-Beta1 |
+| Koin | `b8559a3f` Add linuxArm64 support · `e491a64b` Update Kotlin to 2.5.0-Beta1 |
+| Mosaic | 15 commits ending `31ec507b` Parse CSI Z as Shift+Tab · `2e742093` Test binarySearch on an empty array · `3e96796e` Update Burst to 2.14.0 · `3c532d14` Fix WAsm animation actuals · `bb346538` Update Kotlin to 2.5.0-Beta1 |
 
-bitchatKmp wires in the forked artifacts through three layers of Gradle configuration:
+## Version names
 
-### 1. Repository ordering (`settings.gradle.kts:61-65`, plus `:20-22` in `pluginManagement`)
+Fork artifacts are named after the upstream release they are built from, with an `-embedded-SNAPSHOT` suffix, so a
+coordinate says what it is (`ui-linuxarm64:1.12.1-embedded-SNAPSHOT` is Compose UI 1.12.1 plus the Linux port). Before
+2026-10 the Compose fork published everything as `9999.0.0-SNAPSHOT` and Koin as plain `4.2.2`; those old artifacts
+are still in `~/.m2` and are what bitchatKmp `main` used before the refresh.
 
-```kotlin
-if (embeddedEnabled) {
-    mavenLocal()  // Forked libs published here first
-}
-```
+| Core fork library key | Version |
+|---|---|
+| `COMPOSE` (runtime, ui, foundation, animation, material) | `1.12.1-embedded-SNAPSHOT` |
+| `COMPOSE_MATERIAL3` | `1.12.1-embedded-SNAPSHOT` |
+| `LIFECYCLE` | `2.11.0-embedded-SNAPSHOT` |
+| `SAVEDSTATE` | `1.5.0-alpha01-embedded-SNAPSHOT` |
+| `NAVIGATION` | `2.10.0-alpha05-embedded-SNAPSHOT` |
+| `NAVIGATION_EVENT` | `1.1.1-embedded-SNAPSHOT` |
+| `NAVIGATION_3`, `COMPOSE_MATERIAL3_ADAPTIVE` | `1.1.7-…`, `1.3.0-beta02-…` (not published; not used) |
 
-With the profile on, `mavenLocal()` is listed first in `dependencyResolutionManagement` (and added to `pluginManagement`) so that forked SNAPSHOT artifacts take priority over upstream releases. Skiko no longer matches anything in `~/.m2` and falls through to `mavenCentral()`. `settings.gradle.kts` also selects the Compose Gradle plugin version there: `embedded.composeForkVersion` (`9999.0.0-SNAPSHOT`) when embedded, `1.12.0` otherwise.
+Material3 is versioned after the Compose release rather than after the `1.9.0` default that the 1.12.1 Gradle plugin
+bakes into its `compose.material3` accessor: the fork builds material3 from the `v1.12.1` tree.
 
-### 2. Version forcing (`build.gradle.kts:29-67`)
+**Consequence:** `1.12.1-embedded-SNAPSHOT` sorts *below* upstream `1.12.1`, so a fork version never wins a version
+conflict on its own (the old `9999.0.0-SNAPSHOT` did). Every consumer must force the fork versions explicitly; see
+[Build configuration](#build-configuration).
 
-The root `build.gradle.kts` uses `resolutionStrategy.eachDependency` (inside `if (embeddedEnabled)`) to force `embedded.composeForkVersion` (`9999.0.0-SNAPSHOT`) for:
-- `org.jetbrains.compose.ui`, `.foundation`, `.material`, `.material3`, `.animation`, `.runtime`
-- `org.jetbrains.compose.components:components-resources*`
-- `org.jetbrains.androidx.lifecycle`
-- `org.jetbrains.androidx.savedstate`
+## Build configuration
 
-and `embedded.koinForkVersion` (`4.2.2`) for every `io.insert-koin` artifact. The fork versions are declared in `gradle.properties` (`embedded.composeForkVersion`, `embedded.koinForkVersion`), alongside the non-fork `embedded.skikoVersion`.
+Everything below is active only with the embedded profile (`-Pembedded.enabled=true`); a flagless build resolves
+Compose 1.12.1 and Koin 4.2.2 from Maven Central and never touches `~/.m2`.
 
-This ensures every module in the project resolves to the forked Compose and Koin, not upstream releases.
+1. **Repositories** (`settings.gradle.kts`): `mavenLocal()` first. `embedded.composeForkVersion` also selects the
+   Compose Gradle plugin version (`1.12.1-embedded-SNAPSHOT`) in `pluginManagement`.
+2. **Versions** (`gradle.properties`): `embedded.composeForkVersion`, `embedded.material3ForkVersion`,
+   `embedded.lifecycleForkVersion`, `embedded.savedstateForkVersion`, `embedded.navigationForkVersion`,
+   `embedded.navigationEventForkVersion`, `embedded.koinForkVersion`, `embedded.skikoVersion`.
+3. **Forcing** (root `build.gradle.kts`, the only place that maps groups to fork versions): an allow-list of the
+   modules the forks actually publish, per group, each forced to its property. Modules the forks do not publish —
+   Apple-only `*-uikit` modules, upstream `annotation-internal`/`collection-internal` forwards, Koin modules other than
+   the four forked ones, `org.jetbrains.compose.desktop` — resolve from Maven Central as usual.
+4. **Explicit platform artifacts** (`apps/embedded/build.gradle.kts`, `presentation/*/build.gradle.kts`): Kotlin/Native
+   cannot resolve multiplatform metadata modules for an unsupported target, so the embedded modules declare
+   `-linuxarm64` coordinates directly, using the same properties.
 
-### 3. Explicit platform artifacts (`apps/embedded/build.gradle.kts`)
+The core fork publishes only metadata, desktop and linuxArm64, but its root `.module` files still advertise the other
+platforms' variants (Android, iOS, macOS, JS, Wasm, linuxX64). Nothing in the embedded build resolves those; a consumer
+that does (Koin's common-metadata transform, for example) must let the Apple-only modules resolve upstream.
+Restricting the fork's configured targets with `androidx.enabled.kmp.target.platforms=-mac` is not an option: the
+fork's own build scripts then fail (`KotlinTargetWithTests with name 'iosSimulatorArm64' not found`).
 
-The embedded module declares explicit `-linuxarm64` artifacts because Kotlin/Native can't resolve multiplatform metadata modules for unsupported targets:
-- Skiko: `org.jetbrains.skiko:skiko-linuxarm64:0.9.47` (upstream, Maven Central; `embedded.skikoVersion`)
-- Compose UI/Foundation/Material3: `*-linuxarm64:9999.0.0-SNAPSHOT`
-- Koin: `koin-core-linuxarm64:4.2.2`, `koin-compose-linuxarm64:4.2.2`, `koin-compose-viewmodel-linuxarm64:4.2.2`
-- Lifecycle/Savedstate: `*-linuxarm64:9999.0.0-SNAPSHOT`
+## 1. Compose Multiplatform Core
 
-The `presentation/screens/build.gradle.kts:133` also declares `components-resources-linuxArm64` explicitly (embedded builds only).
+**What:** Compose runtime, UI, foundation, animation, material, material3, plus the JetBrains lifecycle, savedstate,
+navigation and navigation-event artifacts.
 
-### Dependency Flow
+**Why:** upstream Compose UI has no Linux/Native target. The fork is based on Thomas Vos's Linux Compose work (his two
+commits are carried with authorship) and ported forward to 1.12.
 
-```
-forks/compose-multiplatform          ──┐
-forks/compose-multiplatform-core     ──┤  publishToMavenLocal
-forks/koin/projects                  ──┘        │
-                                                │
-                                                v
-                                          ~/.m2/repository/
-                                                │
-                                                v
-                                          Gradle resolves
-                                           ──> artifacts
-                                                │
-                                                v
-                                    bitchatKmp embedded binary
+**What the port contains** (`d1ac5634bf3`): the Linux targets on 25 modules; about forty Linux actuals (text input,
+key mapping, pointer and velocity tracking, focus, scrolling, selection, drag and drop, interop, URI handler, locale and
+string casing, date formatting for the material3 pickers); a process-local clipboard (paste, copy and cut work from the
+keyboard; there is no system clipboard on the device); a Linux owner-thread check for the UI dispatcher; the Apple
+dispatcher actual moved to `appleMain`; project substitutions so Linux resolves inside the fork; and a workaround in
+material3's `TextFieldDefaults.kt` for a Kotlin/Native 2.5 linkage bug with composable `fun interface` SAM
+conversions across klibs (state-based `TextField` failed with `IrLinkageError ... TextFieldDecorator.Decoration`).
 
-forks/meshcore-linux    ── build on device ──> /usr/local/bin/meshcored
-forks/meshtastic-firmware ── build on device ──> /usr/bin/meshtasticd
-```
+**Publishing** (`2d765d8dbac`): per-library versions in `gradle.properties`
+(`jetbrains.publication.version.<KEY>`); `Version.kt` treats any `-SNAPSHOT` suffix as a snapshot so
+`jbVerifyDependencyVersions` accepts the names; `publish-embedded.sh` publishes the closure bitchatKmp needs (29
+projects, metadata + desktop + linuxArm64).
 
----
+**Kotlin** (`5e437f50092`): Kotlin and the Compose compiler plugin at `2.5.0-Beta1`; buildSrc language level raised to
+2.3 and library floors below 2.3 raised (2.5 rejects them); the Kotlin ABI tooling API change; `watchosArm32` is gone
+in 2.5. The commit before it still builds on upstream's Kotlin 2.3.20.
 
-## 1. Compose Multiplatform
-
-**What:** JetBrains Compose gradle plugin + resource loading library.
-
-**Why:** Upstream has no `linuxArm64` resource reader. The fork adds runtime resource resolution via `/proc/self/exe` and a Gradle task to sync resources next to the executable at build time.
-
-**Repo & Branch:** [fluxxion82/compose-multiplatform](https://github.com/fluxxion82/compose-multiplatform) `release/1.10` (2 commits ahead of upstream)
-
-**Changes:**
-- `ResourceReader.linuxArm64.kt` — resolves resources relative to the executable using `/proc/self/exe`
-- `LinuxResources.kt` (new) — Gradle `Copy` task that syncs compose-resources next to the native executable
-- `ComposeResources.kt` — wired in `configureSyncLinuxComposeResources()` call
-
-See [`EMBEDDED_NOTES.md`](../apps/embedded/EMBEDDED_NOTES.md) for full patch details and the `readlink()` null-termination caveat.
-
-**Build & Publish:**
+**Build & publish** (JDK 21):
 
 ```bash
-cd forks/compose-multiplatform/gradle-plugins
-./gradlew publishToMavenLocal
+cd forks/.worktrees/core-linux-1.12.1
+STAGE="$HOME/.m2-fork-refresh/repository" ./publish-embedded.sh   # staging
+./publish-embedded.sh                                              # ~/.m2, only when promoting
+```
 
+**Running the Linux tests.** macOS cannot execute linuxArm64 test binaries, but Docker on Apple Silicon runs
+`linux/arm64` containers natively. Link the test binaries with the embedded sysroot's libraries (fontconfig,
+freetype, EGL/GLES, png, expat, bz2, `--allow-shlib-undefined`; an init script that adds these `linkerOpts` to the
+`linuxArm64` binaries is enough), then:
+
+```bash
+./gradlew --console=plain --no-daemon -I <linker-opts-init-script> \
+  :compose:ui:ui:linkDebugTestLinuxArm64 :compose:ui:ui-text:linkDebugTestLinuxArm64 :compose:ui:ui-test:linkDebugTestLinuxArm64
+docker run --rm --platform linux/arm64 -v "$PWD/out/compose-multiplatform-core/compose/ui:/t:ro" debian:bookworm bash -c \
+  'apt-get update -qq && apt-get install -y -qq libfontconfig1 libfreetype6 libegl1 libgles2 libpng16-16 libexpat1 libbz2-1.0 fonts-dejavu-core >/dev/null;
+   /t/ui/build/bin/linuxArm64/debugTest/test.kexe'
+```
+
+Results at the refresh: ui 228 passed, ui-test 141, ui-text 61 (1 skipped), foundation 587 passed / 5 failed,
+material3 50 passed / 2 failed. The remaining failures are test-environment issues, not product bugs: foundation's
+`ScrollableFocusableInteractionTest` expects a platform `Dispatchers.Main`; two material3 tests expect locale-specific
+hour cycles and date patterns where Linux uses an explicit en-US / 24-hour fallback.
+
+**Known issues:** the advertised-but-unpublished variants above; Kotlin 2.5 "future error" warnings at
+`CarouselState.kt:99` and `LegacyRenderNodeLayer.skiko.kt:389`.
+
+## 2. Compose Multiplatform
+
+**What:** the Compose Gradle plugin and `components-resources`.
+
+**Why:** upstream has no linuxArm64 resource reader. The fork adds runtime resource lookup relative to the executable
+(`/proc/self/exe`), a pure-Kotlin XML parser for vector drawables (used by desktop and Linux; Darwin keeps
+NSXMLParser), and a Gradle task that copies `compose-resources/` next to each Linux executable
+(`syncComposeResourcesForLinuxArm64DebugExecutable`, `…ReleaseExecutable`; the name includes target and binary).
+
+**Embedded target restriction:** `compose.resources.embeddedTargetsOnly=true` limits the components build to metadata,
+desktop and linuxArm64 (the core fork publishes nothing else); the default keeps upstream's targets. In that mode the
+linuxArm64 publication depends directly on the fork's `*-linuxarm64` coordinates.
+
+**Plugin defaults:** the plugin is published as `1.12.1-embedded-SNAPSHOT` and bakes Compose `1.12.1` and material3
+`1.9.0` (the released plugin's values) into `ComposeBuildConfig`. bitchatKmp's forcing replaces the library versions.
+The upstream release tag itself still says `compose.version=1.10.1` in `gradle-plugins/gradle.properties`; the fork
+sets the real values.
+
+**Build & publish** (plugin first; Koin and bitchatKmp need it):
+
+```bash
+cd forks/.worktrees/cmp-linux-1.12.1/gradle-plugins
+./gradlew --console=plain --no-daemon --no-configuration-cache -Dmaven.repo.local="$STAGE" publishToMavenLocal
 cd ../components
-./gradlew :resources:library:compileKotlinLinuxArm64 --rerun-tasks
-./gradlew :resources:library:publishLinuxArm64PublicationToMavenLocal
+./publish-embedded.sh -Dmaven.repo.local="$STAGE"
 ```
 
-## 2. Compose Multiplatform Core
-
-**What:** Compose UI runtime, foundation, lifecycle, and savedstate libraries.
-
-**Why:** Upstream Compose UI does not target `linuxArm64`. This fork (based on [Thomas-Vos's Linux Compose work](https://github.com/Thomas-Vos/compose-multiplatform-core)) adds the target and includes a `Dispatchers.Main` workaround needed on Linux native.
-
-**Repo & Branch:** [fluxxion82/compose-multiplatform-core](https://github.com/fluxxion82/compose-multiplatform-core) `linux-1.10.0` (forked from Thomas-Vos, with upstream JetBrains as `upstream` remote)
-
-**Changes:**
-- Compose UI for Linux native target
-- `Dispatchers.Main` fix for linuxArm64 (no Swing/Android looper available)
-- Kotlin/Compose version alignment to match bitchatKmp
-- Also produces `lifecycle-*-linuxarm64` and `savedstate-linuxarm64` artifacts
-
-**Build & Publish:**
-
-```bash
-cd forks/compose-multiplatform-core
-./gradlew publishToMavenLocal
-```
-
-This publishes all Compose UI, lifecycle, and savedstate artifacts to `~/.m2/`.
+**Tests:** `:resources:library:desktopTest` (54, including XML namespace inheritance) and the plugin's `:compose:test`.
+The components Gradle wrapper is 8.14.3 because KGP 2.5 rejects 8.13.
 
 ## 3. Koin
 
-**What:** Koin dependency injection framework.
+**What:** Koin dependency injection.
 
-**Why:** Upstream Koin has no `linuxArm64` target. The fork adds it while disabling JS/Wasm targets and aligning the Kotlin version.
+**Why:** upstream publishes `koin-core` for linuxArm64 but not `koin-core-viewmodel`, `koin-compose` or
+`koin-compose-viewmodel`. Only those four modules are forked and published; every other Koin module resolves upstream
+`4.2.2`.
 
-**Repo & Branch:** [fluxxion82/koin](https://github.com/fluxxion82/koin) `sa_linux_4.2.2` — a single commit on upstream tag `4.2.2`, being the `sa_linux` linuxArm64 patch cherry-picked forward and squashed. It does **not** contain the `sa_linux` branch itself, which is kept unchanged as the 4.1.2 line for rollback.
+**Changes:** linuxArm64 for the four modules; the Compose-dependent modules are limited to metadata, JVM and
+linuxArm64 when `koin.embedded.compose.targets.only=true` (the core fork publishes nothing else); `macosX64`,
+`watchosArm32`, `watchosX64` and `tvosX64` removed (Kotlin 2.5 removed them); the ARM tvOS targets stay; stdlib
+forcing follows the catalog Kotlin version; the wasmJs `KoinPlatformCoroutinesTools.runBlocking` throws instead of
+copying the JS actual, whose `getCompleted()` silently returns a wrong result if the block suspends.
 
-**Changes:**
-- Added `linuxArm64()` target
-- Disabled JS/Wasm targets (not needed, simplifies build)
-- Pinned Kotlin to 2.4.20. Not cosmetic: 2.3.20 rejects `macosX64()` as a removed target, and
-  `apps/desktop` builds its Intel-Mac BLE dylib from that target.
-- Forced `stdlib-common` resolution
-- Gave the wasmJs `KoinPlatformCoroutinesTools` the `runBlocking` member 4.2.2 added to the expect
-  object. It throws rather than copying the JS actual, whose `GlobalScope.promise(...).getCompleted()`
-  silently returns a wrong result if the block suspends.
-
-**Build & Publish:**
+**Build & publish** (the Gradle root is `projects/`; needs `projects/local.properties` with `sdk.dir`):
 
 ```bash
-cd forks/koin/projects   # the Gradle root is projects/, not the repo root
-echo "sdk.dir=$ANDROID_HOME" > local.properties   # the compose modules need it; not checked in
-./gradlew :core:koin-core:publishToMavenLocal \
-          :core:koin-core-viewmodel:publishToMavenLocal \
-          :compose:koin-compose:publishToMavenLocal \
-          :compose:koin-compose-viewmodel:publishToMavenLocal
+cd forks/.worktrees/koin-k25/projects
+./gradlew --console=plain --no-daemon --no-configuration-cache -Dmaven.repo.local="$STAGE" \
+  -Pkoin.embedded.compose.targets.only=true \
+  :core:koin-core:publishKotlinMultiplatformPublicationToMavenLocal :core:koin-core:publishJvmPublicationToMavenLocal :core:koin-core:publishLinuxArm64PublicationToMavenLocal \
+  :core:koin-core-viewmodel:publishKotlinMultiplatformPublicationToMavenLocal :core:koin-core-viewmodel:publishJvmPublicationToMavenLocal :core:koin-core-viewmodel:publishLinuxArm64PublicationToMavenLocal \
+  :compose:koin-compose:publishKotlinMultiplatformPublicationToMavenLocal :compose:koin-compose:publishJvmPublicationToMavenLocal :compose:koin-compose:publishLinuxArm64PublicationToMavenLocal \
+  :compose:koin-compose-viewmodel:publishKotlinMultiplatformPublicationToMavenLocal :compose:koin-compose-viewmodel:publishJvmPublicationToMavenLocal :compose:koin-compose-viewmodel:publishLinuxArm64PublicationToMavenLocal
 ```
 
-**Artifacts produced:** `koin-core-linuxarm64:4.2.2`, `koin-compose-linuxarm64:4.2.2`, `koin-compose-viewmodel-linuxarm64:4.2.2`, `koin-core-viewmodel-linuxarm64:4.2.2`. Publish those four module paths rather than the whole build: modules outside them (navigation3, koin-fu-viewmodel) still carry upstream/fork drift. The fork pins Kotlin 2.4.20 because 2.3.20 rejects `macosX64()`, which `apps/desktop` needs for its Intel-Mac BLE dylib.
+**Tests:** `:core:koin-core:jvmTest` (294 passed, 2 skipped).
 
-## Skiko: no longer forked
+## 4. Mosaic
 
-**What:** Skia bindings for Kotlin — the 2D rendering engine used by Compose.
+**What:** Jake Wharton's Mosaic, the Compose-runtime terminal UI library behind `:presentation:tui`,
+`:apps:embedded-tui` and `:apps:desktop-tui`.
 
-**Why it used to be forked:** Skiko was GLX-only on `linuxArm64`, loading GL functions through
-`glXGetProcAddress`, which does not work on a headless Pi with no X11. A local fork of
-[JakeWharton/skiko](https://github.com/JakeWharton/skiko) (`jw-egl-0.9.37.3-port`, published as
-`skiko-linuxarm64:0.9.37.3-SNAPSHOT`) added a `DirectContext.makeEGL()` API and swapped in a newer
-Skia prebuilt that had EGL compiled in.
+**Why a fork:** upstream already publishes linuxArm64. The fork adds what the Orange Pi's Linux console needs, plus the
+owner's wasmJs work: F1–F5 parsed from the Linux console's `ESC [ [ A`..`E`; the cursor hidden even when the terminal
+never answers DECRQM; frames written to the tty rather than stdout, so logging cannot corrupt the screen; render only
+when the composition is dirty (matters on a Cortex-A53); terminal hardening (signal-safe shutdown, descriptor lifetime,
+partial writes, bounded shutdown); wide and zero-width character layout; clipping; OSC 8 hyperlinks; a full-screen
+render mode; Shift+Tab; a non-ASCII key fix; and JVM JNI bindings built with Zig for the desktop TUI. Upstream merged
+two of the fork's fixes (#1215 nanoTime, #1219 ArcSpline binarySearch), which the 2026-10 rebase dropped from the fork.
 
-**Why it no longer is:** upstream fixed the underlying problem. From `skiko-linuxarm64` **0.9.47**
-onward (JetBrains/skiko [#1052](https://github.com/JetBrains/skiko/pull/1052), merged 2026-01-29,
-which bumped Skiko's Skia pin to a `skia_use_egl=true` build) the only `GrGLMakeNativeInterface_*`
-object in the published klib is the EGL one and there is no GLX object at all — so
-`DirectContext.makeGL()`, which resolves through `GrGLMakeNativeInterface()`, **is** the EGL path.
-Upstream is also cleaner than the fork: the fork's klib left `XOpenDisplay`/`glXSwapBuffers` and
-friends undefined (they only linked because of `--allow-shlib-undefined`), while the upstream klib
-needs nothing beyond `eglGetProcAddress`, the GLES2 entry points and fontconfig, all of which the
-embedded `linkerOpts` already supply.
+**Branch:** `embedded`, on upstream `trunk`. The `wasm-js` branch (published as `0.19.0-wasm-SNAPSHOT` for the owner's
+site) is separate and was not touched. Mosaic depends on Google's `androidx.compose.runtime`, not on the Compose fork,
+so it must never be linked into `:apps:embedded`.
 
-`makeEGL()` itself was never upstreamed and does not exist at any upstream version, so the one call
-site (`apps/embedded/.../Renderer.kt`) now calls `makeGL()`.
+**Build & publish:** JDK 23 (JDK 21 fails on the fork's `jvmJdk22` source set). The build downloads Zig 0.15.1 itself.
+Burst 2.14.0 is required: Burst 2.13.0's compiler plugin crashes `mosaic-tty`'s JVM test compilation on Kotlin 2.4.20
+and 2.5.
 
-**Consumed as:** `org.jetbrains.skiko:skiko-linuxarm64:0.9.47` from **Maven Central**, pinned by
-`embedded.skikoVersion` in `gradle.properties`. Nothing needs to be cloned, built or published.
+```bash
+cd ../mosaic-wasm   # beside bitchat/, not under forks/
+JAVA_HOME=/opt/homebrew/opt/openjdk@23/libexec/openjdk.jdk/Contents/Home \
+  ./gradlew --console=plain --no-daemon --no-configuration-cache -Dmaven.repo.local="$STAGE" \
+  publishToMavenLocal -PVERSION_NAME=0.19.0-embedded-SNAPSHOT
+```
 
-**Why 0.9.47 and not something newer.** 0.9.47 is the first EGL release, and its klib metadata is
-identical to the fork's (`abi_version=1.8.0`, `compiler_version=2.0.10`, same `unique_name`), so
-swapping it in changes exactly one variable. More importantly it is the last version that still
-publishes `org.jetbrains.skiko.ClipboardManager` and `org.jetbrains.skiko.URIManager`: the Compose
-Multiplatform Core fork's `PlatformClipboardManager.skiko.kt` and `PlatformUriHandler.skiko.kt` call
-both, and they are **gone by 0.144.6**. Linking against 0.144.6 succeeds (Kotlin/Native partial
-linkage downgrades the misses to `i:` messages) but leaves clipboard and `LocalUriHandler` as
-runtime `IrLinkageError`s — an unacceptable trade for a chat app with a text field. Verified by
-grepping `default/linkdata/` of the published klibs:
+If C sources changed, first re-run `:mosaic-tty:cinteropMosaic<Target>`, `:mosaic-tty:<target>Mosaic` and
+`compileKotlin<Target>` with `--rerun`.
 
-| `skiko-linuxarm64` | klib abi / compiler | `ClipboardManager` | `URIManager` |
-|---|---|---|---|
-| fork `0.9.37.3-SNAPSHOT` | 1.8.0 / 2.0.10 | present | present |
-| **0.9.47** | **1.8.0 / 2.0.10** | **present** | **present** |
-| 0.144.6 | 2.2.0 / 2.2.20 | removed | removed |
+**Tests:** JVM tests of `mosaic-runtime`, `mosaic-tty`, `mosaic-terminal`, `mosaic-tty-terminal`; host-native
+(`macosArm64Test`) tests of `mosaic-tty` and `mosaic-tty-terminal`; linuxArm64 and wasmJs compilation; `apiCheck`.
 
-**The one unavoidable partial-linkage message.** `org.jetbrains.skia.ColorMatrix` became a
-`value class` at 0.9.47, dropping the `vararg` constructor that the Compose core fork's
-`SkiaColorFilter.skiko.kt:48` calls. Every EGL-capable Skiko has this change, so no version choice
-avoids it. It is harmless here: the only reachable caller is `ColorFilter.colorMatrix`, which
-nothing in this repo uses (the `ColorMatrix` hits under `data/mediautils` are `android.graphics`).
-Upstream fixed it in Compose Multiplatform Core v1.11.0 by dropping the spread operator; if
-`ColorFilter.colorMatrix` is ever needed on the embedded target, that one-liner has to be applied to
-`forks/compose-multiplatform-core` and the forks republished.
+**Consumed via:** catalog `mosaic`, declared by `:presentation:tui`, `:presentation:tui:binding` and `:apps:desktop-tui` (`:apps:embedded-tui` gets it through `:presentation:tui`). The desktop TUI profile (`-Ptui.enabled=true`) adds `mavenLocal` restricted to
+group `com.jakewharton.mosaic`.
 
-Full evidence (per-version `llvm-nm` over the published klibs) is in
-`docs/reviews/2026-09-07-fork-drop-analysis.md` §Q1, which lives in the parent workspace next to this repository (`../docs/reviews/` from the repository root), not in this repository.
+## Skiko
 
-## 4. MeshCore
+Not forked. `embedded.skikoVersion=0.150.1`, the version Compose 1.12.1 is built against, from Maven Central.
+
+Upstream `skiko-linuxarm64` has bundled an EGL-only Skia since 0.9.47 (JetBrains/skiko #1052), so
+`DirectContext.makeGL()` is the EGL path and the old `makeEGL()` fork is retired. The pin used to be 0.9.47 because the
+1.10 Compose fork called `org.jetbrains.skiko.ClipboardManager` and `URIManager`, which later Skiko versions removed;
+the 1.12 port no longer calls them. Debug and release links of the embedded app report no partial-linkage messages.
+
+## 5. MeshCore
 
 **What:** MeshCore companion firmware for LoRa mesh networking.
 
-**Why:** Upstream `linux` support is close, but Orange Pi Zero 3 + SX1276 required additional Linux companion patches.
+**Why:** upstream `linux` support is close, but Orange Pi Zero 3 + SX1276 required additional Linux companion patches.
 
-**Repo & Branch:** [fluxxion82/MeshCore](https://github.com/fluxxion82/MeshCore) `orangepi-zero3-sx1276` (based on `ggodlewski/MeshCore` `linux`)
+**Repo & branch:** [fluxxion82/MeshCore](https://github.com/fluxxion82/MeshCore) `orangepi-zero3-sx1276` (based on
+`ggodlewski/MeshCore` `linux`).
 
-**Changes (tracked in fork branch):**
+**Changes (tracked in the fork branch):**
 - SX1276 radio support (vs. default SX1262)
 - Orange Pi Zero 3 GPIO pin mappings
 - SPI device configuration for `/dev/spidev1.1`
 - Current PCB template omits reset: header 7/PC9 is shared with the PMIC interrupt
-- Linux companion exits nonzero on configuration, GPIO-binding, or radio-init failure rather than spinning in the MCU halt loop
+- Linux companion exits nonzero on configuration, GPIO-binding, or radio-init failure rather than spinning in the MCU
+  halt loop
 
-See the [current PCB profile](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md) and [MeshCore setup](meshcore-orangepi-setup.md) for current pin/runtime configuration. [`MESHCORE_RUNBOOK.md`](../apps/embedded/docs/MESHCORE_RUNBOOK.md) preserves earlier patch history with a reset-mapping correction.
+See the [current PCB profile](../apps/embedded/docs/ORANGEPI_ZERO3_PCB.md) and [MeshCore setup](meshcore-orangepi-setup.md)
+for current pin/runtime configuration. [`MESHCORE_RUNBOOK.md`](../apps/embedded/docs/MESHCORE_RUNBOOK.md) preserves
+earlier patch history with a reset-mapping correction.
 
 **Build (on-device):**
 
@@ -238,23 +268,28 @@ FIRMWARE_VERSION=dev ./build.sh build-firmware linux_companion_sx1276
 # Deploy only after stopping the app and both radio owners; preserve the prior binary.
 ```
 
-## 5. Meshtastic Firmware
+## 6. Meshtastic Firmware
 
 **What:** meshtasticd native firmware for Linux LoRa devices.
 
-**Why:** Debug logging and error handling improvements for the RF95/SX1276 SPI interface on Orange Pi Zero 3.
+**Why:** debug logging and error handling improvements for the RF95/SX1276 SPI interface on Orange Pi Zero 3.
 
-**Repo & Branch:** [fluxxion82/firmware](https://github.com/fluxxion82/firmware) `orangepi-rfm95w`
+**Repo & branch:** [fluxxion82/firmware](https://github.com/fluxxion82/firmware) `orangepi-rfm95w`
 
 **Changes:**
 - `src/mesh/RF95Interface.cpp` — RF95 init/reconfigure hardening for Portduino
 - `src/mesh/RadioLibRF95.cpp` — init sequence logging and Portduino write-failure tolerance
-- `CUSTOM_CHANGES.md` — full documentation of changes, known issues (RF95 init -20, IRQ flood, invalid pointer crash), and configuration
-- `orangepi/runtime-captures/` — snapshots of Pi-only runtime/dependency patches (`LinuxGPIOPin.cpp`, `SX127x.cpp`) so ad-hoc changes are not lost
+- `CUSTOM_CHANGES.md` — full documentation of changes, known issues (RF95 init -20, IRQ flood, invalid pointer crash),
+  and configuration
+- `orangepi/runtime-captures/` — snapshots of Pi-only runtime/dependency patches (`LinuxGPIOPin.cpp`, `SX127x.cpp`) so
+  ad-hoc changes are not lost
 
-The current PCB profile omits `Lora.Reset` in every effective YAML source and retains the reset prestart hook as a no-op. Do not replace preserved Pi dependency patches merely to change pin configuration; reset omission is supported by the existing parser.
+The current PCB profile omits `Lora.Reset` in every effective YAML source and retains the reset prestart hook as a
+no-op. Do not replace preserved Pi dependency patches merely to change pin configuration; reset omission is supported
+by the existing parser.
 
-See the "Need source build for patched behavior" section in [`meshtastic-orangepi-setup.md`](meshtastic-orangepi-setup.md) for build steps.
+See the "Need source build for patched behavior" section in [`meshtastic-orangepi-setup.md`](meshtastic-orangepi-setup.md)
+for build steps.
 
 **Build (on-device):**
 
@@ -265,35 +300,32 @@ pio run -e native
 # Deploy only after stopping the app and both radio owners; preserve the prior binary.
 ```
 
----
+## 7. gattlib
 
-## 6. gattlib
+**What:** the BLE GATT client library used for the Central role on the embedded target. Unlike the other entries this
+is a git submodule, not a `forks/` checkout: `data/remote/transport/bluetooth/native/gattlib`, pinned by SHA, so
+`.gitmodules` and the submodule pointer are the whole mechanism.
 
-**What:** the BLE GATT client library used for the Central role on the embedded target. Unlike the other five
-entries this is a git submodule, not a `forks/` checkout: `data/remote/transport/bluetooth/native/gattlib`,
-pinned by SHA, so `.gitmodules` and the submodule pointer are the whole mechanism.
+**Why:** gdbus-codegen cached-property getters return `NULL` once a peer's BlueZ objects have gone away mid-discovery,
+and gattlib dereferenced four of them — `gattlib_string_to_uuid()` passes its argument to `strlen()`, the flags loop
+dereferences the array head, and `gattlib_discover_char_range()` hands the Device property to `strcmp()`. The library
+holds its own recursive mutex for the length of a discovery call, so this cannot be guarded from Kotlin.
 
-**Why:** gdbus-codegen cached-property getters return `NULL` once a peer's BlueZ objects have gone away
-mid-discovery, and gattlib dereferenced four of them — `gattlib_string_to_uuid()` passes its argument to
-`strlen()`, the flags loop dereferences the array head, and `gattlib_discover_char_range()` hands the Device
-property to `strcmp()`. The library holds its own recursive mutex for the length of a discovery call, so this
-cannot be guarded from Kotlin.
-
-**Repo & Branch:** [fluxxion82/gattlib](https://github.com/fluxxion82/gattlib) `bitchat-null-guards`, branched
-from upstream `labapart/gattlib` @ `1580056`.
+**Repo & branch:** [fluxxion82/gattlib](https://github.com/fluxxion82/gattlib) `bitchat-null-guards`, branched from
+upstream `labapart/gattlib` @ `1580056`.
 
 **Changes:**
-- `dbus/gattlib.c` (the compiled `BLUEZ_VERSION >= 5.38` branch only) — NULL guards on the four property
-  getters; `g_clear_error()` in place of `g_error_free()` so a freed `GError` is not read again on the next
-  iteration; `g_object_unref()` on the skip paths that leaked a proxy.
+- `dbus/gattlib.c` (the compiled `BLUEZ_VERSION >= 5.38` branch only) — NULL guards on the four property getters;
+  `g_clear_error()` in place of `g_error_free()` so a freed `GError` is not read again on the next iteration;
+  `g_object_unref()` on the skip paths that leaked a proxy.
 - `dbus/gattlib.c`, connection teardown (`8482263`) — BlueZ can complete a connection whose `Connect()` call it has
   already failed; the stale property handler then ran the success path against an attempt whose object path had
   been freed. The fork finishes tearing the failed attempt down, ignores a signal arriving for an abandoned attempt
   and NULLs `dbus_objects` after freeing it.
 
 **Behaviour change:** discovery now returns fewer entries where it used to crash. A peer missing the bitchat
-characteristic is already abandoned by `BlueZGattClientService.discoverCharacteristics()`, which is the
-correct outcome — the scanner re-offers it under the existing backoff.
+characteristic is already abandoned by `BlueZGattClientService.discoverCharacteristics()`, which is the correct
+outcome — the scanner re-offers it under the existing backoff.
 
 **Rebuild:**
 
@@ -303,15 +335,13 @@ docker run --platform linux/amd64 --rm \
   bitchat-linux-arm64-cross bash /build/build-gattlib-linux-arm64.sh
 ```
 
-Measured at **23 s**, and byte-reproducible: two consecutive builds of the same source produce identical
-archives. So unlike Arti and libsodium this one is safe to rebuild casually — the blanket "the prebuilt native
-archives take hours to rebuild" warning in `CLAUDE.md` §4 is about those, not about gattlib. Note that
-`build-gattlib-linux-arm64.sh:43` does `rm -rf` on the build directory, so copy the existing `libgattlib.a`
-aside first if you want a guaranteed rollback.
+Measured at **23 s**, and byte-reproducible: two consecutive builds of the same source produce identical archives. So
+unlike Arti and libsodium this one is safe to rebuild casually. Note that `build-gattlib-linux-arm64.sh:43` does
+`rm -rf` on the build directory, so copy the existing `libgattlib.a` aside first if you want a guaranteed rollback.
 
 **Restoring the patch if the submodule is reset.** The change lives in a commit on the fork, so
-`git submodule update --init data/remote/transport/bluetooth/native/gattlib` restores it from `.gitmodules`.
-If the submodule is ever pointed back at `labapart/gattlib`, recover with:
+`git submodule update --init data/remote/transport/bluetooth/native/gattlib` restores it from `.gitmodules`. If the
+submodule is ever pointed back at `labapart/gattlib`, recover with:
 
 ```bash
 cd data/remote/transport/bluetooth/native/gattlib
@@ -320,89 +350,60 @@ git fetch origin bitchat-null-guards
 git checkout 848226332b998ecb467b19f321b8156660b05602
 ```
 
-No upstream PR has been opened against `labapart/gattlib` yet.
+## Staging repository and promotion
 
----
-
-## 7. Mosaic
-
-**What:** Jake Wharton's Mosaic, a Compose-runtime terminal UI library. Used by the terminal UI (`:presentation:tui`, `:apps:embedded-tui`, and the desktop terminal UI `:apps:desktop-tui`). The embedded terminal UI exists only with `-Pembedded.enabled=true`; the desktop TUI exists only with `-Ptui.enabled=true` (mutually exclusive). See `docs/plans/2026-09-30-item1-desktop-tui.md` (local, gitignored).
-
-**Why a fork:** Upstream already publishes linuxArm64. The fork adds what the Orange Pi's Linux console needs, on top of the owner's `wasm-js` branch (wasmJs target, `mosaic-browser`/`mosaic-html`, render-only-when-dirty frames, which matter on a Cortex-A53):
-- `ESC [ [ A`..`E` parsed as F1-F5 (the Linux console's encoding; upstream reads them as the letters A-E).
-- Cursor hidden even when the terminal never answers DECRQM for mode 25 (the Linux console doesn't), restored on close.
-- Frames written to the tty instead of stdout, so app `println` logging (and a systemd `StandardOutput=journal`) cannot corrupt the screen.
-- For the JVM desktop TUI, JVM JNI bindings with Zig (bundled in `mosaic-tty-jvm`).
-
-**Repo & Branch:** [fluxxion82/mosaic](https://github.com/fluxxion82/mosaic) `embedded` (based on `wasm-js`). Unlike the other forks, the checkout lives beside the bitchat repo, at `workspace/multiplatform/mosaic-wasm`, not under `forks/`. The owner's sterlingdotcom site uses `wasm-js` as `0.19.0-wasm-SNAPSHOT`; the separate version keeps the two from overwriting each other in `~/.m2`.
-
-**JVM artifacts and desktop TUI:** The fork publishes JVM artifacts (`*-jvm:0.19.0-embedded-SNAPSHOT`, Java 11 class files, JVM JNI libmosaic bundled) used only by the desktop TUI. The `tui.enabled=true` profile adds `mavenLocal` restricted to group `com.jakewharton.mosaic` (flagless builds never touch `~/.m2`); `tui.enabled` and `embedded.enabled` together are rejected (see `settings.gradle.kts:45-50`).
-
-**Build & Publish:** needs JDK 23 (the default JDK 21 fails on the fork's `jvmJdk22` source set) and Zig 0.15 for the JVM JNI libraries.
+Fork artifacts are first published into an isolated Maven repository, `~/.m2-fork-refresh/repository`, by passing
+`-Dmaven.repo.local=…` (Gradle's `mavenLocal()` and `publishToMavenLocal` both honour it; add
+`--no-configuration-cache`). bitchatKmp is verified against it the same way:
 
 ```bash
-cd ../../mosaic-wasm   # from bitchatKmp
-git switch embedded
-JAVA_HOME=/opt/homebrew/opt/openjdk@23/libexec/openjdk.jdk/Contents/Home \
-  ./gradlew publishToMavenLocal -PVERSION_NAME=0.19.0-embedded-SNAPSHOT --console=plain
+GRADLE_ARGS="-Dmaven.repo.local=$HOME/.m2-fork-refresh/repository --no-configuration-cache" scripts/verify.sh full
 ```
 
-**Consumed via:** catalog `mosaic` version in `gradle/libs.versions.toml` (`mosaic-runtime`, `mosaic-testing`). Mosaic depends on Google's `androidx.compose.runtime` (1.12.1) and `androidx.lifecycle` (2.11.0), not on the Compose fork, so it must never be linked into `:apps:embedded`.
+Promoting into `~/.m2/repository` is a deliberate step, done together with merging the matching bitchatKmp change,
+because Kotlin 2.5-built klibs cannot be read by a build still on Kotlin 2.4. The new version names do not overwrite
+the old `9999.0.0-SNAPSHOT` / Koin `4.2.2` artifacts; only Mosaic's `0.19.0-embedded-SNAPSHOT` is replaced. Archive
+whatever promotion overwrites first, merge (not replace) artifact-root `maven-metadata-local.xml` files, and keep
+the staging repository and archives until the result has been proven on the device.
 
-## First-Time Setup Checklist
+Before promotion, the embedded binaries must also pass `scripts/embedded-smoke.py` on a board: link gates and the
+host canary cannot see run-loop bugs (the 1.12 port briefly dropped the main-dispatcher pumping and every link still
+succeeded).
 
-Follow these steps in order on a new development machine to build the embedded target:
-
-### 1. Clone forks
+## First-time setup
 
 ```bash
 cd bitchat/forks
-git clone -b linux-1.10.0 https://github.com/fluxxion82/compose-multiplatform-core.git
-git clone -b release/1.10 https://github.com/fluxxion82/compose-multiplatform.git
-git clone -b sa_linux_4.2.2 https://github.com/fluxxion82/koin.git
+git clone https://github.com/fluxxion82/compose-multiplatform-core.git && git -C compose-multiplatform-core switch linux-1.12.1
+git clone https://github.com/fluxxion82/compose-multiplatform.git && git -C compose-multiplatform switch linux-1.12.1
+git clone https://github.com/fluxxion82/koin.git && git -C koin switch sa_linux_4.2.2-kotlin-2.5
+cd ../..   # workspace/multiplatform
+git clone https://github.com/fluxxion82/mosaic.git mosaic-wasm && git -C mosaic-wasm switch embedded
 ```
 
-Skiko is not on this list any more — it comes from Maven Central (see
-[Skiko: no longer forked](#skiko-no-longer-forked)).
-
-### 2. Build and publish compose-multiplatform-core
+Publish in this order: core → Compose Gradle plugin → compose-resources and Koin → Mosaic (independent). Then create
+the embedded sysroot ([embedded README](../apps/embedded/README.md), step 1) and verify:
 
 ```bash
-cd forks/compose-multiplatform-core
-./gradlew publishToMavenLocal
+./gradlew -Pembedded.enabled=true :apps:embedded:linkDebugExecutableLinuxArm64 --console=plain
 ```
 
-This publishes Compose UI, lifecycle, and savedstate artifacts.
+## Rollback
 
-### 3. Build and publish compose-multiplatform
+The pre-refresh branches are untouched: core `linux-1.10.0`, Compose Multiplatform `release/1.10`, Koin
+`sa_linux_4.2.2`; Mosaic's previous `embedded` is at tag `archive/embedded-2026-10-02`. Histories before the commit
+consolidation are kept at local tags `archive/*-pre-squash-2026-10-02`. The pre-refresh `~/.m2` fork artifacts are in
+`~/.m2-fork-refresh/m2-fork-backup-2026-10-02.tgz` with hash inventories beside it. Because the new versions have new
+names, rolling bitchatKmp back is a matter of reverting its version properties to `9999.0.0-SNAPSHOT` / `4.2.2` (plus
+restoring Mosaic's old artifacts).
 
-```bash
-cd forks/compose-multiplatform/gradle-plugins
-./gradlew publishToMavenLocal
+## Next Kotlin bump
 
-cd ../components
-./gradlew :resources:library:compileKotlinLinuxArm64 --rerun-tasks
-./gradlew :resources:library:publishLinuxArm64PublicationToMavenLocal
-```
+1. In each fork, add one commit on top that changes only the Kotlin version (and whatever the compiler forces), keeping
+   it last. Order: core → Compose Multiplatform (plugin, then components) → Koin; Mosaic is independent.
+2. Publish everything into a fresh staging repository and run bitchatKmp's `verify.sh full` against it with the
+   staging arguments above.
+3. Prove the embedded binaries on a board, then promote.
 
-### 4. Build and publish Koin
-
-```bash
-cd forks/koin/projects   # the Gradle root is projects/, not the repo root
-echo "sdk.dir=$ANDROID_HOME" > local.properties   # the compose modules need it; not checked in
-./gradlew :core:koin-core:publishToMavenLocal \
-          :core:koin-core-viewmodel:publishToMavenLocal \
-          :compose:koin-compose:publishToMavenLocal \
-          :compose:koin-compose-viewmodel:publishToMavenLocal
-```
-
-### 5. Create sysroot (see [embedded README](../apps/embedded/README.md) Step 1)
-
-### 6. Verify build
-
-```bash
-cd bitchatKmp
-./gradlew -Pembedded.enabled=true :apps:embedded:linkDebugExecutableLinuxArm64
-```
-
-If this succeeds, all forked dependencies are correctly in place.
+Rebuild every fork for each new Kotlin release. Do not assume that klibs built by a Beta compiler stay readable by the
+stable one.

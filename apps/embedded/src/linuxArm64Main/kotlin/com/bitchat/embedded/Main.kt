@@ -15,6 +15,7 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.platform.ComposeUiMainDispatcher
+import androidx.compose.ui.platform.FrameRecomposer
 import androidx.compose.ui.platform.PlatformContext
 import androidx.compose.ui.scene.CanvasLayersComposeScene
 import androidx.compose.ui.scene.ComposeScene
@@ -203,15 +204,18 @@ private fun runApp() = memScoped {
     }
 
     val stateRef = AtomicReference<State?>(null)
+    val frameRecomposer = FrameRecomposer(
+        coroutineContext = ComposeUiMainDispatcher,
+        invalidate = { stateRef.value?.requestRender() },
+    )
     val scene = CanvasLayersComposeScene(
+        frameRecomposer = frameRecomposer,
         density = Density(1f),
         layoutDirection = LayoutDirection.Ltr,
         size = IntSize(width, height),
-        coroutineContext = ComposeUiMainDispatcher,
         platformContext = PlatformContext.Empty(),
-        invalidate = {
-            stateRef.value?.requestRender()
-        },
+        invalidateLayout = { stateRef.value?.requestRender() },
+        invalidateDraw = { stateRef.value?.requestRender() },
     )
     scene.setContent {
         val mainViewModel = app.mainViewModel
@@ -236,9 +240,10 @@ private fun runApp() = memScoped {
         egl = egl,
         renderer = renderer,
         scene = scene,
+        frameRecomposer = frameRecomposer,
+        mainDispatcher = mainDispatcher,
         touchInput = touchInput,
         keyboardInput = keyboardInput,
-        mainDispatcher = mainDispatcher,
     )
     stateRef.value = state
 
@@ -280,8 +285,7 @@ private fun runApp() = memScoped {
             processKeyboardEvents(keyboardInput, scene, event, eventSize, keyLogger)
         }
 
-        // Flush pending Compose tasks before checking render needs
-        // This ensures all recomposition happens on the main thread
+        // Compose dispatches to this host-controlled queue. Pump it before the page-flip render decision.
         state.mainDispatcher.flush()
 
         if (select_fd_isset(drm.fd, fds.ptr) != 0) {

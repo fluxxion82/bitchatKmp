@@ -2,7 +2,7 @@
 
 Kotlin/Native `linuxArm64` binary for running bitchat on an Orange Pi Zero 3 with an HDMI/USB capacitive touch display and M5Stack CardKB I2C keyboard. The older Elecrow SPI resistive screen remains supported. No JVM, no desktop environment.
 
-Uses a DRM/GBM/EGL rendering pipeline with upstream Skiko (`skiko-linuxarm64`, whose bundled Skia is EGL-only since 0.9.47).
+Uses a DRM/GBM/EGL rendering pipeline with upstream Skiko (`skiko-linuxarm64:0.150.1`, whose bundled Skia is EGL-only since 0.9.47).
 
 ## LoRa and the current PCB
 
@@ -25,7 +25,7 @@ Radio runtime changes use the explicit audit/apply workflow in `scripts/configur
 
 Compose Multiplatform and Koin have no upstream `linuxArm64` artifacts, so local forks must be built
 and published to `~/.m2` before this module will resolve. Skiko needs nothing: it is resolved from
-Maven Central as `org.jetbrains.skiko:skiko-linuxarm64` (pinned by `embedded.skikoVersion` in
+Maven Central as `org.jetbrains.skiko:skiko-linuxarm64:0.150.1` (pinned by `embedded.skikoVersion` in
 `gradle.properties`), and since 0.9.47 its bundled Skia is built with `skia_use_egl=true`, so
 `DirectContext.makeGL()` loads GL through `eglGetProcAddress` — no X11/GLX, and no Skiko fork.
 
@@ -136,10 +136,8 @@ with the same invocation and no `Uncaught Kotlin exception` (`--help` for the op
 scripts/embedded-smoke.py --build release   # uses $PI_HOST like deploy-pi.sh; exit 0 only if it came all the way up
 ```
 
-Release links pass `embedded.kotlinNativeReleaseArgs` (gradle.properties) to the compiler. In Kotlin/Native 2.4.20
-it switches off a pass that miscompiled the release binary (KT-88544: it died right after `[Main] Touch input ready`).
-`scripts/verify.sh embedded` links both builds and runs `:apps:embedded-canary:hostReleaseTest`, which fails
-whenever the release compiler settings reproduce that miscompilation.
+Release links use Kotlin/Native 2.5.0-Beta1 without `embedded.kotlinNativeReleaseArgs`. KT-88544 is fixed in this
+version. `scripts/verify.sh embedded` links both builds and runs `:apps:embedded-canary:hostReleaseTest`.
 
 Release layout on the device:
 

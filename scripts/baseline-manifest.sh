@@ -3,11 +3,21 @@
 # Output: docs/baseline/<date>.md (untracked; local to this machine).
 set -euo pipefail
 export LC_ALL=C  # deterministic sort/hash order regardless of the caller's locale
-cd "$(dirname "$0")/.."
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+cd "$REPO_ROOT"
 DATE="${1:-$(date +%F)}"
 OUT="docs/baseline/${DATE}.md"
 mkdir -p docs/baseline
-M2="${HOME}/.m2/repository"
+M2="${MAVEN_REPO:-${HOME}/.m2/repository}"
+# Resolve sibling forks from the primary worktree, not the caller's directory. Environment
+# overrides support alternate checkout layouts and keep this script usable from a worktree.
+MAIN_REPO=$(git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')
+FORKS_DIR="${FORKS_DIR:-$(cd -- "$MAIN_REPO/.." && pwd)/forks}"
+MOSAIC_DIR="${MOSAIC_DIR:-$(cd -- "$FORKS_DIR/../.." && pwd)/mosaic-wasm}"
+CORE_FORK_DIR="${CORE_FORK_DIR:-$FORKS_DIR/.worktrees/core-linux-1.12.1}"
+CMP_FORK_DIR="${CMP_FORK_DIR:-$FORKS_DIR/.worktrees/cmp-linux-1.12.1}"
+KOIN_FORK_DIR="${KOIN_FORK_DIR:-$FORKS_DIR/.worktrees/koin-k25}"
 # Preserve the hand-maintained gate-results section across regenerations.
 GATES="$( [ -f "$OUT" ] && sed -n '/^## Gate results/,$p' "$OUT" || true )"
 
@@ -33,9 +43,9 @@ GATES="$( [ -f "$OUT" ] && sed -n '/^## Gate results/,$p' "$OUT" || true )"
   brew list --versions libsodium secp256k1 2>/dev/null || true
   echo '```'
   echo
-  echo "## Forks (../forks)"
+  echo "## Forks"
   echo '```'
-  for d in ../forks/*/ ../forks/jake/*/; do
+  for d in "$CORE_FORK_DIR" "$CMP_FORK_DIR" "$KOIN_FORK_DIR" "$MOSAIC_DIR"; do
     [ -d "$d/.git" ] || [ -f "$d/.git" ] || continue
     printf '%-40s %s %s dirty=%s\n' "$d" "$(git -C "$d" rev-parse --short HEAD)" "$(git -C "$d" branch --show-current)" "$(git -C "$d" status --porcelain | grep -vc '^??' || true)"
   done
@@ -45,10 +55,10 @@ GATES="$( [ -f "$OUT" ] && sed -n '/^## Gate results/,$p' "$OUT" || true )"
   echo '```'
   # Each find/grep stage is guarded so a missing directory or an empty result on a fresh
   # machine cannot abort this block under pipefail and leave a truncated document.
-  { find "$M2/org/jetbrains/compose" "$M2/org/jetbrains/androidx" "$M2/org/jetbrains/skiko" "$M2/io/insert-koin" \
+  { find "$M2/org/jetbrains/compose" "$M2/org/jetbrains/androidx" "$M2/org/jetbrains/skiko" "$M2/io/insert-koin" "$M2/com/jakewharton/mosaic" \
          -type f \( -name '*.jar' -o -name '*.klib' -o -name '*.module' \) \
          -not -name '*-sources.jar' -not -name '*-javadoc.jar' \
-         \( -path '*9999.0.0-SNAPSHOT*' -o -path '*0.9.37.3*' -o -path '*/4.1.2/*' \) 2>/dev/null || true; } \
+         \( -path '*-embedded-SNAPSHOT*' -o -path '*/0.150.1/*' \) 2>/dev/null || true; } \
     | { grep -vE '/koin-[^/]+-(watchos|tvos|js|wasm|mingw|ios)[^/]*/' || true; } \
     | sort | while read -r f; do
         h=$(shasum -a 256 "$f" | cut -c1-16) || h="SHASUM-FAILED"

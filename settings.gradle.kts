@@ -4,7 +4,7 @@ pluginManagement {
         .orElse(false)
         .get()
     val composeForkVersion = settings.providers.gradleProperty("embedded.composeForkVersion")
-        .orElse("9999.0.0-SNAPSHOT")
+        .orElse("1.12.1-embedded-SNAPSHOT")
         .get()
 
     repositories {
@@ -24,8 +24,8 @@ pluginManagement {
     }
 
     // Provide the Compose Multiplatform plugin version here (catalog entry is versionless)
-    // so that embedded builds can use the fork version while standard builds use 1.12.0.
-    val composeVersion = if (embeddedEnabled) composeForkVersion else "1.12.0"
+    // so that embedded builds can use the fork version while standard builds use 1.12.1.
+    val composeVersion = if (embeddedEnabled) composeForkVersion else "1.12.1"
     plugins {
         id("org.jetbrains.compose") version composeVersion
     }

@@ -91,17 +91,13 @@ kotlin {
         }
     }
 
-    listOf(
-        macosX64(),
-        macosArm64()
-    ).forEach { macosTarget ->
+    listOf(macosArm64()).forEach { macosTarget ->
         macosTarget.binaries.framework {
             binaryOption("bundleId", "noise")
             isStatic = true
         }
 
         val archDir = when (macosTarget.konanTarget) {
-            KonanTarget.MACOS_X64 -> "macos-x64"
             KonanTarget.MACOS_ARM64 -> "macos-arm64"
             else -> null
         }

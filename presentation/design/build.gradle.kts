@@ -11,7 +11,7 @@ val embeddedEnabled = providers.gradleProperty("embedded.enabled")
     .orElse(false)
     .get()
 val embeddedComposeVersion = providers.gradleProperty("embedded.composeForkVersion")
-    .orElse("9999.0.0-SNAPSHOT")
+    .orElse("1.12.1-embedded-SNAPSHOT")
     .get()
 
 kotlin {

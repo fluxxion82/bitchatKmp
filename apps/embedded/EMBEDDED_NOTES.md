@@ -2,7 +2,7 @@
 
 This document covers the setup required to run Compose Multiplatform on embedded Linux ARM64 (Orange Pi Zero 3), including resource loading, rendering architecture, and known issues.
 
-> For a consolidated guide to all forked libraries (Compose, Koin, etc.), see [FORKED_LIBRARIES.md](../../docs/FORKED_LIBRARIES.md). Skiko is no longer forked — upstream `skiko-linuxarm64` has bundled an EGL-only Skia since 0.9.47, so `DirectContext.makeGL()` is the EGL path.
+> For a consolidated guide to all forked libraries (Compose, Koin, etc.), see [FORKED_LIBRARIES.md](../../docs/FORKED_LIBRARIES.md). Skiko is no longer forked — upstream `skiko-linuxarm64:0.150.1` is used. Its bundled Skia has been EGL-only since 0.9.47, so `DirectContext.makeGL()` is the EGL path.
 
 ## Overview
 
@@ -191,7 +191,7 @@ the loop. The re-queued flip is what keeps those wake-ups coming at the display'
 
 - **Jake Wharton's mosaic**: Terminal UI with Compose - uses `CoroutineScope` and `launch` for rendering
 - **Compose for Desktop**: `ComposeWindow` uses Swing's EDT and `revalidate()` pattern
-- **JakeWharton/skiko** (`jw-egl-0.9.37.3-port`): the EGL Skiko fork this project used before upstream `skiko-linuxarm64` 0.9.47 shipped an EGL-only Skia (kept here for history only)
+- **Retired Skiko EGL fork**: this project used it before upstream `skiko-linuxarm64` shipped EGL-only Skia in 0.9.47 (kept here for history only)
 
 ---
 

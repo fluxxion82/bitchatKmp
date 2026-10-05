@@ -13,33 +13,8 @@ val embeddedEnabled = providers.gradleProperty("embedded.enabled")
     .orElse(false)
     .get()
 val embeddedComposeVersion = providers.gradleProperty("embedded.composeForkVersion")
-    .orElse("9999.0.0-SNAPSHOT")
+    .orElse("1.12.1-embedded-SNAPSHOT")
     .get()
-
-if (embeddedEnabled) {
-    configurations.matching { it.name.contains("linuxArm64", ignoreCase = true) }.configureEach {
-        resolutionStrategy.eachDependency {
-            val composeGroups = listOf(
-                "org.jetbrains.compose.ui",
-                "org.jetbrains.compose.foundation",
-                "org.jetbrains.compose.material",
-                "org.jetbrains.compose.material3",
-                "org.jetbrains.compose.animation",
-                "org.jetbrains.compose.runtime"
-            )
-            if (requested.group in composeGroups) {
-                useVersion(embeddedComposeVersion)
-                because("Using forked Compose with linuxArm64 support")
-            }
-            if (requested.group == "org.jetbrains.compose.components" &&
-                requested.name.startsWith("components-resources")) {
-                useVersion(embeddedComposeVersion)
-                because("Using forked Compose components-resources with linuxArm64 support")
-            }
-        }
-    }
-}
-
 kotlin {
     compilerOptions {
         freeCompilerArgs.add("-Xwhen-guards")

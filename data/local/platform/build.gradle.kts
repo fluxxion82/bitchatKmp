@@ -27,9 +27,8 @@ kotlin {
             isStatic = true
         }
     }
-    val macosX64 = macosX64()
     val macosArm64 = macosArm64()
-    listOf(macosX64, macosArm64).forEach { target ->
+    listOf(macosArm64).forEach { target ->
         target.binaries {
             sharedLib {
                 baseName = "bitchat_location"

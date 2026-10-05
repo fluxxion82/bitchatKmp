@@ -62,7 +62,7 @@ case "$MODE" in
   embedded) gradle_embedded :apps:embedded:linkDebugExecutableLinuxArm64 :apps:embedded:linkReleaseExecutableLinuxArm64 :apps:embedded-canary:hostReleaseTest ;;
   tui)      gradle_embedded :presentation:tui:jvmTest :presentation:tui:compileKotlinLinuxArm64 :apps:embedded-tui:linkDebugExecutableLinuxArm64 :apps:embedded-tui:linkReleaseExecutableLinuxArm64 ;;
   desktop-tui)
-    gradle_tui :presentation:tui:jvmTest :presentation:tui:binding:jvmTest :apps:desktop-common:test :apps:desktop-tui:test :apps:desktop-tui:installDist
+    gradle_tui :presentation:tui:jvmTest :presentation:tui:binding:jvmTest :apps:desktop-common:test :apps:desktop-tui:test :apps:desktop-tui:verifyRuntimeJarNames :apps:desktop-tui:installDist
     version_line="$(apps/desktop-tui/build/install/bitchat-tui/bin/bitchat-tui --version)"
     [[ "$version_line" == bitchat-tui\ * ]] || { echo "desktop-tui --version did not start with bitchat-tui: $version_line" >&2; exit 1; }
     ;;

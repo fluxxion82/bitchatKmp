@@ -139,18 +139,12 @@ tasks.test {
     useJUnitPlatform()
 }
 
-// Optional: bundle macOS native BLE library when -PbleNative=macos (mac host only)
+// Optional: bundle macOS native BLE library when -PbleNative=macos (Apple Silicon hosts only)
+val isMacosArm64 = System.getProperty("os.arch").let { it.contains("aarch64") || it.contains("arm64") }
 val enableNativeBle = bleNativeProp == "macos"
-if (enableNativeBle && org.gradle.internal.os.OperatingSystem.current().isMacOsX) {
-    val arch = System.getProperty("os.arch")
+if (enableNativeBle && org.gradle.internal.os.OperatingSystem.current().isMacOsX && isMacosArm64) {
     val bleProject = project(":data:remote:transport:bluetooth")
-    val nativeLibDir = when {
-        arch.contains("aarch64") || arch.contains("arm64") ->
-            bleProject.layout.buildDirectory.dir("bin/macosArm64/debugShared")
-
-        else ->
-            bleProject.layout.buildDirectory.dir("bin/macosX64/debugShared")
-    }
+    val nativeLibDir = bleProject.layout.buildDirectory.dir("bin/macosArm64/debugShared")
     val copyNativeBle = tasks.register<Copy>("copyNativeBle") {
         val libDir = nativeLibDir.get().asFile
         val libFile = libDir.resolve("libbitchat_ble.dylib")
@@ -160,13 +154,7 @@ if (enableNativeBle && org.gradle.internal.os.OperatingSystem.current().isMacOsX
         outputs.upToDateWhen { false }
     }
     // Ensure the native lib is built before copy
-    val linkTaskName = when {
-        arch.contains("aarch64") || arch.contains("arm64") ->
-            ":data:remote:transport:bluetooth:linkDebugSharedMacosArm64"
-
-        else ->
-            ":data:remote:transport:bluetooth:linkDebugSharedMacosX64"
-    }
+    val linkTaskName = ":data:remote:transport:bluetooth:linkDebugSharedMacosArm64"
     tasks.named("processResources") {
         dependsOn(copyNativeBle)
         dependsOn(linkTaskName)
@@ -182,16 +170,11 @@ if (enableNativeBle && org.gradle.internal.os.OperatingSystem.current().isMacOsX
     }
 }
 
-// Optional: bundle macOS native Location library when -PlocationNative=macos (mac host only)
+// Optional: bundle macOS native Location library when -PlocationNative=macos (Apple Silicon hosts only)
 val enableNativeLocation = locationNativeProp == "macos"
-if (enableNativeLocation && org.gradle.internal.os.OperatingSystem.current().isMacOsX) {
+if (enableNativeLocation && org.gradle.internal.os.OperatingSystem.current().isMacOsX && isMacosArm64) {
     val localPlatformProject = project(":data:local:platform")
-    val nativeLocationLibDir = when {
-        arch.contains("aarch64") || arch.contains("arm64") ->
-            localPlatformProject.layout.buildDirectory.dir("bin/macosArm64/debugShared")
-        else ->
-            localPlatformProject.layout.buildDirectory.dir("bin/macosX64/debugShared")
-    }
+    val nativeLocationLibDir = localPlatformProject.layout.buildDirectory.dir("bin/macosArm64/debugShared")
     val copyNativeLocation = tasks.register<Copy>("copyNativeLocation") {
         val libDir = nativeLocationLibDir.get().asFile
         val libFile = libDir.resolve("libbitchat_location.dylib")
@@ -199,12 +182,7 @@ if (enableNativeLocation && org.gradle.internal.os.OperatingSystem.current().isM
         into(layout.buildDirectory.dir("resources/main/native/macos"))
         outputs.upToDateWhen { false }
     }
-    val locationLinkTaskName = when {
-        arch.contains("aarch64") || arch.contains("arm64") ->
-            ":data:local:platform:linkDebugSharedMacosArm64"
-        else ->
-            ":data:local:platform:linkDebugSharedMacosX64"
-    }
+    val locationLinkTaskName = ":data:local:platform:linkDebugSharedMacosArm64"
     tasks.named("processResources") {
         dependsOn(copyNativeLocation)
         dependsOn(locationLinkTaskName)

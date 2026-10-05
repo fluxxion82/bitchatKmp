@@ -12,7 +12,6 @@ val embeddedEnabled = providers.gradleProperty("embedded.enabled")
 kotlin {
     applyDefaultHierarchyTemplate()
     jvm()
-    macosX64()
     macosArm64()
     if (embeddedEnabled) {
         linuxArm64()

@@ -30,7 +30,6 @@ kotlin {
         }
     }
 
-    macosX64()
     macosArm64()
 
     if (embeddedEnabled) {

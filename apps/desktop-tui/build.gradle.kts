@@ -1,3 +1,10 @@
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+import org.gradle.api.artifacts.result.ResolvedArtifactResult
+import org.gradle.jvm.application.tasks.CreateStartScripts
+import org.gradle.jvm.tasks.Jar
+import java.nio.file.Files
+
 plugins {
     kotlin("jvm")
     alias(libs.plugins.compose.compiler)
@@ -12,6 +19,7 @@ plugins {
 version = "0.0.1"
 
 val generatedBuildInfo = layout.buildDirectory.dir("generated/desktopTuiBuildInfo")
+val preparedRuntimeLibs = layout.buildDirectory.dir("preparedRuntimeLibs")
 val gitSha = providers.exec {
     workingDir(rootProject.projectDir)
     commandLine("git", "rev-parse", "--short", "HEAD")
@@ -44,35 +52,6 @@ sourceSets.main {
 }
 tasks.named("compileKotlin") { dependsOn(generateDesktopTuiBuildInfo) }
 
-// JetBrains Lifecycle forwards to AndroidX. Both desktop artifacts have identical JAR
-// filenames, so installDist otherwise overwrites the implementation with an empty forwarder.
-// Resolve this JVM application's graph directly to AndroidX at the shared Lifecycle version.
-val desktopLifecycleVersion = libs.versions.lifecycleViewmodel.get()
-configurations.configureEach {
-    resolutionStrategy.eachDependency {
-        if (requested.group == "org.jetbrains.androidx.lifecycle") {
-            useTarget("androidx.lifecycle:${requested.name}:$desktopLifecycleVersion")
-            because("Keep implementation JARs instead of colliding JetBrains forwarding JARs in installDist")
-        }
-    }
-}
-
-val checkRuntimeLibraryNames = tasks.register("checkRuntimeLibraryNames") {
-    group = "verification"
-    description = "Reject runtime JAR filename collisions that would lose classes in the installed TUI."
-    inputs.files(configurations.runtimeClasspath)
-    doLast {
-        val collisions = inputs.files.files.groupBy { it.name }.filterValues { it.size > 1 }
-        check(collisions.isEmpty()) {
-            "Runtime JAR filename collisions: " + collisions.entries.joinToString { (name, files) ->
-                "$name: ${files.joinToString()}"
-            }
-        }
-    }
-}
-tasks.named("installDist") { dependsOn(checkRuntimeLibraryNames) }
-tasks.named("check") { dependsOn(checkRuntimeLibraryNames) }
-
 val artiNativeDir = rootProject.layout.projectDirectory.dir("data/remote/tor/native/libs/desktop")
 
 // macOS native BLE and location libraries, opt-in exactly as in apps/desktop: -PbleNative=macos and
@@ -81,6 +60,16 @@ val artiNativeDir = rootProject.layout.projectDirectory.dir("data/remote/tor/nat
 val bleNativeProp = (findProperty("bleNative") as? String)?.lowercase()
 val locationNativeProp = (findProperty("locationNative") as? String)?.lowercase()
 val arch = System.getProperty("os.arch")
+
+fun distributionJarName(artifact: ResolvedArtifactResult): String {
+    val component = artifact.id.componentIdentifier
+    val prefix = when (component) {
+        is ModuleComponentIdentifier -> "${component.group}-${component.module}-${component.version}"
+        is ProjectComponentIdentifier -> "project-${component.projectPath.replace(':', '-')}"
+        else -> component.displayName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+    }
+    return "$prefix-${artifact.file.name}"
+}
 
 dependencies {
     // Mosaic composables and the ViewModel/data graph the real app will bind; see settings.gradle.kts.
@@ -113,6 +102,83 @@ dependencies {
     testImplementation(libs.kotlin.test.junit)
 }
 
+val runtimeArtifacts = configurations.getByName("runtimeClasspath").incoming.artifactView {}.artifacts
+val runtimeArtifactsWithNames = providers.provider {
+    runtimeArtifacts.artifacts
+        .filter { it.file.extension == "jar" }
+        .associateWith(::distributionJarName)
+}
+val runtimeJarNames = providers.provider {
+    runtimeArtifactsWithNames.get().mapKeys { (artifact, _) -> artifact.file }
+}
+val applicationJar = tasks.named<Jar>("jar")
+val applicationJarName = applicationJar.flatMap { it.archiveFile }
+    .map { "project-apps-desktop-tui-${it.asFile.name}" }
+val distributionJarNames = providers.provider {
+    runtimeJarNames.get() + mapOf(applicationJar.get().archiveFile.get().asFile to applicationJarName.get())
+}
+
+val prepareRuntimeLibs = tasks.register<Sync>("prepareRuntimeLibs") {
+    description = "Copies runtime jars with coordinate-prefixed filenames for the desktop distribution."
+    from(applicationJar) {
+        rename { applicationJarName.get() }
+    }
+    from(runtimeArtifacts.artifactFiles) {
+        eachFile {
+            if (file.extension == "jar") {
+                name = runtimeJarNames.get()[file]
+                    ?: throw GradleException("No distribution filename for runtime artifact $file")
+            }
+        }
+    }
+    into(preparedRuntimeLibs)
+}
+
+val verifyRuntimeJarNames = tasks.register("verifyRuntimeJarNames") {
+    group = "verification"
+    description = "Verifies that the desktop distribution has unique, complete runtime jars and launcher classpath."
+    dependsOn("installDist")
+    inputs.files(runtimeArtifacts.artifactFiles)
+    inputs.dir(layout.buildDirectory.dir("install/bitchat-tui/lib"))
+    doLast {
+        val jarNames = distributionJarNames.get()
+        val collisions = jarNames.values
+            .groupBy { it }
+            .filterValues { it.size > 1 }
+        if (collisions.isNotEmpty()) {
+            throw GradleException("Runtime artifacts map to duplicate distribution filenames: ${collisions.keys}")
+        }
+
+        val libDir = layout.buildDirectory.dir("install/bitchat-tui/lib").get().asFile
+        val missing = jarNames.filter { (source, name) ->
+            val destination = libDir.resolve(name)
+            !destination.isFile || Files.mismatch(source.toPath(), destination.toPath()) != -1L
+        }
+        if (missing.isNotEmpty()) {
+            throw GradleException("Distribution is missing runtime jars: ${missing.values}")
+        }
+
+        val launcher = layout.buildDirectory.file("install/bitchat-tui/bin/bitchat-tui").get().asFile.readText()
+        if ("lib/*" !in launcher) {
+            throw GradleException("Unix launcher does not use the lib/* classpath wildcard")
+        }
+
+        val windowsLauncher = layout.buildDirectory
+            .file("install/bitchat-tui/bin/bitchat-tui.bat")
+            .get()
+            .asFile
+            .readLines()
+        val classpathLine = windowsLauncher.singleOrNull { it.startsWith("set CLASSPATH=") }
+            ?: throw GradleException("Windows launcher has no CLASSPATH line")
+        if ("%APP_HOME%\\lib\\*" !in classpathLine) {
+            throw GradleException("Windows launcher does not use the lib\\* classpath wildcard")
+        }
+        check(classpathLine.length < 8191) {
+            "Windows launcher CLASSPATH line exceeds the CMD 8191-character limit: ${classpathLine.length}"
+        }
+    }
+}
+
 application {
     applicationName = "bitchat-tui"
     mainClass.set("com.bitchat.desktop.tui.MainKt")
@@ -124,9 +190,20 @@ application {
     }
 }
 
+tasks.named<CreateStartScripts>("startScripts") {
+    dependsOn(prepareRuntimeLibs)
+    classpath = files(project.file("lib/*"))
+}
+
 distributions {
     main {
         contents {
+            eachFile {
+                if (path.startsWith("lib/") && file.extension == "jar") {
+                    name = distributionJarNames.get()[file]
+                        ?: throw GradleException("No distribution filename for runtime artifact $file")
+                }
+            }
             from(artiNativeDir) {
                 include("*.dylib", "*.so", "*.dll")
                 into("lib/native")
@@ -135,17 +212,12 @@ distributions {
     }
 }
 
-// Optional: bundle macOS native BLE library when -PbleNative=macos (mac host only)
+// Optional: bundle macOS native BLE library when -PbleNative=macos (Apple Silicon hosts only)
 val enableNativeBle = bleNativeProp == "macos"
-if (enableNativeBle && org.gradle.internal.os.OperatingSystem.current().isMacOsX) {
+val isMacosArm64 = arch.contains("aarch64") || arch.contains("arm64")
+if (enableNativeBle && org.gradle.internal.os.OperatingSystem.current().isMacOsX && isMacosArm64) {
     val bleProject = project(":data:remote:transport:bluetooth")
-    val nativeLibDir = when {
-        arch.contains("aarch64") || arch.contains("arm64") ->
-            bleProject.layout.buildDirectory.dir("bin/macosArm64/debugShared")
-
-        else ->
-            bleProject.layout.buildDirectory.dir("bin/macosX64/debugShared")
-    }
+    val nativeLibDir = bleProject.layout.buildDirectory.dir("bin/macosArm64/debugShared")
     val copyNativeBle = tasks.register<Copy>("copyNativeBle") {
         val libDir = nativeLibDir.get().asFile
         val libFile = libDir.resolve("libbitchat_ble.dylib")
@@ -155,13 +227,7 @@ if (enableNativeBle && org.gradle.internal.os.OperatingSystem.current().isMacOsX
         outputs.upToDateWhen { false }
     }
     // Ensure the native lib is built before copy
-    val linkTaskName = when {
-        arch.contains("aarch64") || arch.contains("arm64") ->
-            ":data:remote:transport:bluetooth:linkDebugSharedMacosArm64"
-
-        else ->
-            ":data:remote:transport:bluetooth:linkDebugSharedMacosX64"
-    }
+    val linkTaskName = ":data:remote:transport:bluetooth:linkDebugSharedMacosArm64"
     tasks.named("processResources") {
         dependsOn(copyNativeBle)
         dependsOn(linkTaskName)
@@ -177,16 +243,11 @@ if (enableNativeBle && org.gradle.internal.os.OperatingSystem.current().isMacOsX
     }
 }
 
-// Optional: bundle macOS native Location library when -PlocationNative=macos (mac host only)
+// Optional: bundle macOS native Location library when -PlocationNative=macos (Apple Silicon hosts only)
 val enableNativeLocation = locationNativeProp == "macos"
-if (enableNativeLocation && org.gradle.internal.os.OperatingSystem.current().isMacOsX) {
+if (enableNativeLocation && org.gradle.internal.os.OperatingSystem.current().isMacOsX && isMacosArm64) {
     val localPlatformProject = project(":data:local:platform")
-    val nativeLocationLibDir = when {
-        arch.contains("aarch64") || arch.contains("arm64") ->
-            localPlatformProject.layout.buildDirectory.dir("bin/macosArm64/debugShared")
-        else ->
-            localPlatformProject.layout.buildDirectory.dir("bin/macosX64/debugShared")
-    }
+    val nativeLocationLibDir = localPlatformProject.layout.buildDirectory.dir("bin/macosArm64/debugShared")
     val copyNativeLocation = tasks.register<Copy>("copyNativeLocation") {
         val libDir = nativeLocationLibDir.get().asFile
         val libFile = libDir.resolve("libbitchat_location.dylib")
@@ -194,12 +255,7 @@ if (enableNativeLocation && org.gradle.internal.os.OperatingSystem.current().isM
         into(layout.buildDirectory.dir("resources/main/native/macos"))
         outputs.upToDateWhen { false }
     }
-    val locationLinkTaskName = when {
-        arch.contains("aarch64") || arch.contains("arm64") ->
-            ":data:local:platform:linkDebugSharedMacosArm64"
-        else ->
-            ":data:local:platform:linkDebugSharedMacosX64"
-    }
+    val locationLinkTaskName = ":data:local:platform:linkDebugSharedMacosArm64"
     tasks.named("processResources") {
         dependsOn(copyNativeLocation)
         dependsOn(locationLinkTaskName)
@@ -211,11 +267,4 @@ if (enableNativeLocation && org.gradle.internal.os.OperatingSystem.current().isM
             jvmArgs("-Dlocation.native=$propValue")
         }
     }
-}
-
-// Since lifecycle 2.11.0 the distribution sees lifecycle-common-jvm twice: `lifecycle-common`
-// resolves to its -jvm variant and `lifecycle-common-jvm` is also on the classpath, so the same file
-// arrives under two coordinates. Dropping the second copy is safe; without a strategy installDist fails.
-tasks.withType<AbstractCopyTask>().configureEach {
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }

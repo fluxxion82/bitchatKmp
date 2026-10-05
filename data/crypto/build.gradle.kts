@@ -26,7 +26,6 @@ kotlin {
             isStatic = true
         }
     }
-    val macosX64 = macosX64()
     val macosArm64 = macosArm64()
     val linuxArm64Target = if (embeddedEnabled) linuxArm64() else null
 
@@ -71,8 +70,8 @@ kotlin {
 
     // Configure cinterops for macOS targets. Cinterop ignores linker options, so statically embed
     // the libraries to keep the dylib free of Homebrew runtime dependencies. These Homebrew paths
-    // are arm64-host-only; macosX64 is not linked on this host.
-    listOf(macosX64, macosArm64).forEach { target ->
+    // are arm64-host-only.
+    listOf(macosArm64).forEach { target ->
         target.compilations.getByName("main") {
             cinterops {
                 val libsodium by creating {

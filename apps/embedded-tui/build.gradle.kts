@@ -6,7 +6,7 @@ plugins {
 }
 
 val koinVersion = providers.gradleProperty("embedded.koinForkVersion")
-    .orElse("4.2.2")
+    .orElse("4.2.2-embedded-SNAPSHOT")
     .get()
 // Compiler workarounds for the release link (KT-88544; see gradle.properties).
 val kotlinNativeReleaseArgs = providers.gradleProperty("embedded.kotlinNativeReleaseArgs")

@@ -9,7 +9,7 @@ minSdk = "26"
 agp = "9.1.0"
 
 # Dependencies
-kotlin = "2.4.20"
+kotlin = "2.5.0-Beta1"
 
 coroutines = "1.11.0"
 mosaic = "0.19.0-embedded-SNAPSHOT" # fluxxion82/mosaic fork (branch embedded), published to mavenLocal; embedded profile only; see docs/FORKED_LIBRARIES.md
@@ -124,7 +124,7 @@ multiplatform-settings-serialization = { module = "com.russhwolf:multiplatform-s
 multiplatform-settings-observable = { module = "com.russhwolf:multiplatform-settings-make-observable", version.ref = "multiplatformSettings" }
 multiplatform-settings-coroutines = { module = "com.russhwolf:multiplatform-settings-coroutines", version.ref = "multiplatformSettings" }
 navigation-compose = { module = "org.jetbrains.androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
-navigation-material-compose = { module = "org.jetbrains.compose.material:material-navigation", version = "1.12.0" }
+navigation-material-compose = { module = "org.jetbrains.compose.material:material-navigation", version = "1.12.1" }
 
 accompanist-permissions = { group = "com.google.accompanist", name = "accompanist-permissions", version.ref = "accompanist" }
 camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }

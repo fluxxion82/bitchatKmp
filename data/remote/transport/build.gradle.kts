@@ -26,7 +26,6 @@ kotlin {
         namespace = "com.bitchat.transport"
         minSdk = libs.versions.minSdk.get().toInt()
     }
-    macosX64()
     macosArm64()
     if (embeddedEnabled) {
         linuxArm64()

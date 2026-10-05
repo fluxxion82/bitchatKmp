@@ -13,11 +13,26 @@ val embeddedEnabled = providers.gradleProperty("embedded.enabled")
     .map(String::toBoolean)
     .orElse(false)
     .get()
-val composeSnapshotVersion = providers.gradleProperty("embedded.composeForkVersion")
-    .orElse("9999.0.0-SNAPSHOT")
+val embeddedComposeVersion = providers.gradleProperty("embedded.composeForkVersion")
+    .orElse("1.12.1-embedded-SNAPSHOT")
+    .get()
+val embeddedMaterial3Version = providers.gradleProperty("embedded.material3ForkVersion")
+    .orElse("1.12.1-embedded-SNAPSHOT")
+    .get()
+val embeddedLifecycleVersion = providers.gradleProperty("embedded.lifecycleForkVersion")
+    .orElse("2.11.0-embedded-SNAPSHOT")
+    .get()
+val embeddedSavedstateVersion = providers.gradleProperty("embedded.savedstateForkVersion")
+    .orElse("1.5.0-alpha01-embedded-SNAPSHOT")
+    .get()
+val embeddedNavigationVersion = providers.gradleProperty("embedded.navigationForkVersion")
+    .orElse("2.10.0-alpha05-embedded-SNAPSHOT")
+    .get()
+val embeddedNavigationEventVersion = providers.gradleProperty("embedded.navigationEventForkVersion")
+    .orElse("1.1.1-embedded-SNAPSHOT")
     .get()
 val embeddedKoinVersion = providers.gradleProperty("embedded.koinForkVersion")
-    .orElse("4.2.2")
+    .orElse("4.2.2-embedded-SNAPSHOT")
     .get()
 // KT-88544 workaround for release Apple binaries, see apple.kotlinNativeReleaseArgs in gradle.properties.
 val appleKotlinNativeReleaseArgs = providers.gradleProperty("apple.kotlinNativeReleaseArgs")
@@ -30,37 +45,72 @@ subprojects {
     configurations.all {
         if (embeddedEnabled) {
             resolutionStrategy.eachDependency {
-                val composeGroups = listOf(
-                    "org.jetbrains.compose.ui",
-                    "org.jetbrains.compose.foundation",
-                    "org.jetbrains.compose.material",
-                    "org.jetbrains.compose.material3",
-                    "org.jetbrains.compose.animation",
-                    "org.jetbrains.compose.runtime"
+                val forkedComposeModules = setOf(
+                    "animation", "animation-core", "animation-core-desktop", "animation-core-linuxarm64",
+                    "animation-desktop", "animation-linuxarm64", "foundation", "foundation-desktop",
+                    "foundation-layout", "foundation-layout-desktop", "foundation-layout-linuxarm64",
+                    "foundation-linuxarm64", "material", "material-desktop", "material-linuxarm64",
+                    "material-navigation", "material-navigation-desktop", "material-navigation-linuxarm64",
+                    "material-ripple", "material-ripple-desktop", "material-ripple-linuxarm64", "runtime",
+                    "runtime-desktop", "runtime-linuxarm64", "runtime-saveable", "runtime-saveable-desktop",
+                    "runtime-saveable-linuxarm64", "ui", "ui-backhandler", "ui-backhandler-desktop",
+                    "ui-backhandler-linuxarm64", "ui-desktop", "ui-geometry", "ui-geometry-desktop",
+                    "ui-geometry-linuxarm64", "ui-graphics", "ui-graphics-desktop", "ui-graphics-linuxarm64",
+                    "ui-linuxarm64", "ui-text", "ui-text-desktop", "ui-text-linuxarm64", "ui-tooling-preview",
+                    "ui-tooling-preview-desktop", "ui-tooling-preview-linuxarm64", "ui-unit",
+                    "ui-unit-desktop", "ui-unit-linuxarm64", "ui-util", "ui-util-desktop", "ui-util-linuxarm64"
                 )
-                if (requested.group in composeGroups) {
-                    useVersion(composeSnapshotVersion)
-                    because("Using forked Compose with linuxArm64 support")
-                }
-                if (requested.group == "org.jetbrains.compose.components" &&
-                    requested.name.startsWith("components-resources")) {
-                    useVersion(composeSnapshotVersion)
-                    because("Using forked Compose components-resources with linuxArm64 support")
-                }
-                // Force forked lifecycle with linuxArm64 support
-                if (requested.group == "org.jetbrains.androidx.lifecycle") {
-                    useVersion(composeSnapshotVersion)
-                    because("Using forked lifecycle with linuxArm64 support")
-                }
-                // Force forked savedstate with linuxArm64 support
-                if (requested.group == "org.jetbrains.androidx.savedstate") {
-                    useVersion(composeSnapshotVersion)
-                    because("Using forked savedstate with linuxArm64 support")
-                }
-                // Force forked Koin with linuxArm64 support
-                if (requested.group == "io.insert-koin") {
+                val forkedComponentsModules = setOf(
+                    "components-resources", "components-resources-desktop", "components-resources-linuxArm64"
+                )
+                val forkedLifecycleModules = setOf(
+                    "lifecycle-common", "lifecycle-common-jvm", "lifecycle-common-linuxarm64", "lifecycle-runtime",
+                    "lifecycle-runtime-compose", "lifecycle-runtime-compose-desktop", "lifecycle-runtime-compose-linuxarm64",
+                    "lifecycle-runtime-desktop", "lifecycle-runtime-linuxarm64", "lifecycle-viewmodel",
+                    "lifecycle-viewmodel-compose", "lifecycle-viewmodel-compose-desktop", "lifecycle-viewmodel-compose-linuxarm64",
+                    "lifecycle-viewmodel-desktop", "lifecycle-viewmodel-linuxarm64", "lifecycle-viewmodel-savedstate",
+                    "lifecycle-viewmodel-savedstate-desktop", "lifecycle-viewmodel-savedstate-linuxarm64"
+                )
+                val forkedSavedstateModules = setOf(
+                    "savedstate", "savedstate-compose", "savedstate-compose-desktop", "savedstate-compose-linuxarm64",
+                    "savedstate-desktop", "savedstate-linuxarm64"
+                )
+                val forkedNavigationModules = setOf(
+                    "navigation-common", "navigation-common-desktop", "navigation-common-linuxarm64", "navigation-compose",
+                    "navigation-compose-desktop", "navigation-compose-linuxarm64", "navigation-runtime",
+                    "navigation-runtime-desktop", "navigation-runtime-linuxarm64"
+                )
+                val forkedNavigationEventModules = setOf(
+                    "navigationevent-compose", "navigationevent-compose-desktop", "navigationevent-compose-linuxarm64"
+                )
+                val forkedKoinModules = setOf(
+                    "koin-core", "koin-core-jvm", "koin-core-linuxarm64", "koin-core-viewmodel",
+                    "koin-core-viewmodel-jvm", "koin-core-viewmodel-linuxarm64", "koin-compose", "koin-compose-jvm",
+                    "koin-compose-linuxarm64", "koin-compose-viewmodel", "koin-compose-viewmodel-jvm",
+                    "koin-compose-viewmodel-linuxarm64"
+                )
+                when {
+                    requested.group in setOf(
+                        "org.jetbrains.compose.animation", "org.jetbrains.compose.foundation",
+                        "org.jetbrains.compose.material", "org.jetbrains.compose.runtime", "org.jetbrains.compose.ui"
+                    ) && requested.name in forkedComposeModules -> useVersion(embeddedComposeVersion)
+                    requested.group == "org.jetbrains.compose.material3" && requested.name in setOf(
+                        "material3", "material3-desktop", "material3-linuxarm64"
+                    ) -> useVersion(embeddedMaterial3Version)
+                    requested.group == "org.jetbrains.compose.components" && requested.name in forkedComponentsModules ->
+                        useVersion(embeddedComposeVersion)
+                    requested.group == "org.jetbrains.androidx.lifecycle" && requested.name in forkedLifecycleModules ->
+                        useVersion(embeddedLifecycleVersion)
+                    requested.group == "org.jetbrains.androidx.savedstate" && requested.name in forkedSavedstateModules ->
+                        useVersion(embeddedSavedstateVersion)
+                    requested.group == "org.jetbrains.androidx.navigation" && requested.name in forkedNavigationModules ->
+                        useVersion(embeddedNavigationVersion)
+                    requested.group == "org.jetbrains.androidx.navigationevent" && requested.name in forkedNavigationEventModules ->
+                        useVersion(embeddedNavigationEventVersion)
+                    requested.group == "io.insert-koin" && requested.name in forkedKoinModules -> {
                     useVersion(embeddedKoinVersion)
-                    because("Using forked Koin with linuxArm64 support")
+                    because("Using published forked Koin modules with linuxArm64 support")
+                }
                 }
             }
         }

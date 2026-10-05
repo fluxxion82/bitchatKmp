@@ -92,7 +92,7 @@ cd bitchatKmp/
 Plain `./gradlew :apps:desktop:run` works without any native build.
 
 On **Linux** that includes working Bluetooth: the desktop talks to BlueZ over D-Bus from the JVM, so
-there is no native library to build. **macOS** still needs `-PbleNative=macos`, which bridges to a
+there is no native library to build. **Apple Silicon macOS** can use `-PbleNative=macos`, which bridges to a
 CoreBluetooth shared library. Location is IP-based on Linux either way, and Tor needs its native
 library built and installed: `data/remote/tor/native/build-desktop.sh --install`, or `scripts/run-desktop.sh`
 (below), which does that and then launches the app.
@@ -111,10 +111,10 @@ runs.
 # Desktop, with readable output for a log
 ./gradlew :apps:desktop:run --console=plain
 
-# Desktop (macOS native BLE)
+# Desktop (Apple Silicon macOS native BLE)
 ./gradlew :apps:desktop:clean :apps:desktop:run -PbleNative=macos --rerun-tasks
 
-# Desktop + macOS location native bindings
+# Desktop + Apple Silicon macOS location native bindings
 ./gradlew :apps:desktop:clean :apps:desktop:run -PbleNative=macos -PlocationNative=macos --rerun-tasks
 ```
 
@@ -165,7 +165,7 @@ For iOS, open `apps/iosApp/iosApp.xcodeproj` in Xcode. The shared framework is `
 ./gradlew :iosdi:linkDebugFrameworkIosArm64           # device
 ./gradlew :iosdi:linkReleaseFrameworkIosArm64         # device, release (what an archive ships)
 ```
-Release Apple links carry a Kotlin/Native 2.4.20 miscompile workaround (KT-88544, `apple.kotlinNativeReleaseArgs` in `gradle.properties`); `:apps:apple-canary` holds its release-mode tests.
+Release Apple links use Kotlin/Native 2.5.0-Beta1. KT-88544 is fixed in this version; `:apps:apple-canary` holds release-mode tests without the former workaround.
 
 ### 4. Verify
 
@@ -179,8 +179,8 @@ Agent/editor notes live in the gitignored CLAUDE.md; docs/architecture-summary.m
 | Target | Submodules | Native build script | Homebrew packages | Notes |
 |--------|-----------|---------------------|-------------------|-------|
 | Android | No | No | No | Uses Maven deps (BouncyCastle). Just needs Android SDK. |
-| Desktop (JVM) | No | No | No | Compiles from Maven deps. Native BLE and native location are macOS-only opt-ins (`-PbleNative=macos`, `-PlocationNative=macos`); Linux gets BLE from BlueZ over D-Bus with no native library. Tor needs the Arti native library installed by `data/remote/tor/native/build-desktop.sh --install` (`scripts/run-desktop.sh` does this). Linux desktop builds and runs but has never been shipped. |
-| Desktop (macOS native BLE/Tor) | Yes | `build-all-desktop.sh` | `libsodium secp256k1` | Needed for `-PbleNative=macos` and Arti/Tor. `build-all-desktop.sh` builds the Arti library but does not install it: `data/remote/tor/native/build-desktop.sh --install` copies it into `data/remote/tor/native/libs/desktop/`, where the app loads it. |
+| Desktop (JVM) | No | No | No | Compiles from Maven deps. Native BLE and native location are Apple Silicon macOS-only opt-ins (`-PbleNative=macos`, `-PlocationNative=macos`); Intel Macs and other unsupported hosts use stubs. Linux gets BLE from BlueZ over D-Bus with no native library. Tor needs the Arti native library installed by `data/remote/tor/native/build-desktop.sh --install` (`scripts/run-desktop.sh` does this). Linux desktop builds and runs but has never been shipped. |
+| Desktop (Apple Silicon macOS native BLE/Tor) | Yes | `build-all-desktop.sh` | `libsodium secp256k1` | Needed for `-PbleNative=macos` and Arti/Tor. `build-all-desktop.sh` builds the Arti library but does not install it: `data/remote/tor/native/build-desktop.sh --install` copies it into `data/remote/tor/native/libs/desktop/`, where the app loads it. |
 | iOS | Yes | `build-all-ios.sh` | No | Builds libsodium, secp256k1, noise-c, Arti from source via Xcode toolchain. |
 | Linux ARM64 (embedded) | Yes | `build-all-linux.sh` | No | Cross-compiles inside Docker. Requires `-Pembedded.enabled=true` (or `embedded.enabled=true` in `~/.gradle/gradle.properties`). |
 
@@ -286,8 +286,8 @@ For full setup (display, touch, CardKB, LoRa protocol stack), use the docs map b
 
 ## Native/Platform Notes
 
-- `data:remote:transport:bluetooth`: native BLE bindings; desktop may bundle dylibs via `-PbleNative=macos`.
-- `data:local:platform`: platform services (for example macOS location via `-PlocationNative=macos`).
+- `data:remote:transport:bluetooth`: native BLE bindings; Apple Silicon desktop may bundle dylibs via `-PbleNative=macos`.
+- `data:local:platform`: platform services (for example Apple Silicon macOS location via `-PlocationNative=macos`).
 - `data:remote:tor`: Tor/Arti native libs copied into desktop runtime via Gradle.
 - `data:noise`, `data:crypto`: native crypto dependencies (Noise, libsodium, secp256k1).
 

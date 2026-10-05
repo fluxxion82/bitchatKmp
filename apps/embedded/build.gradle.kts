@@ -7,13 +7,22 @@ plugins {
 }
 
 val composeVersion = providers.gradleProperty("embedded.composeForkVersion")
-    .orElse("9999.0.0-SNAPSHOT")
+    .orElse("1.12.1-embedded-SNAPSHOT")
+    .get()
+val material3Version = providers.gradleProperty("embedded.material3ForkVersion")
+    .orElse("1.12.1-embedded-SNAPSHOT")
+    .get()
+val lifecycleVersion = providers.gradleProperty("embedded.lifecycleForkVersion")
+    .orElse("2.11.0-embedded-SNAPSHOT")
+    .get()
+val savedstateVersion = providers.gradleProperty("embedded.savedstateForkVersion")
+    .orElse("1.5.0-alpha01-embedded-SNAPSHOT")
     .get()
 val skikoVersion = providers.gradleProperty("embedded.skikoVersion")
-    .orElse("0.9.47")
+    .orElse("0.150.1")
     .get()
 val koinVersion = providers.gradleProperty("embedded.koinForkVersion")
-    .orElse("4.2.2")
+    .orElse("4.2.2-embedded-SNAPSHOT")
     .get()
 // Compiler workarounds for the release link (KT-88544; see gradle.properties).
 val kotlinNativeReleaseArgs = providers.gradleProperty("embedded.kotlinNativeReleaseArgs")
@@ -22,8 +31,7 @@ val kotlinNativeReleaseArgs = providers.gradleProperty("embedded.kotlinNativeRel
     .split(' ')
     .filter(String::isNotBlank)
 
-// Pin the linuxArm64 Skiko artifact and the forked Compose for linuxArm64.
-// This handles transitive dependencies from presentation modules.
+// Pin the linuxArm64 Skiko artifact. Root build.gradle.kts owns fork version forcing.
 configurations.all {
     resolutionStrategy.eachDependency {
         if (requested.group == "org.jetbrains.skiko" && requested.name == "skiko") {
@@ -31,26 +39,6 @@ configurations.all {
             // so redirect to the published platform artifact.
             useTarget("org.jetbrains.skiko:skiko-linuxarm64:$skikoVersion")
             because("Kotlin/Native needs the explicit linuxarm64 Skiko artifact")
-        }
-        // Force forked Compose artifacts for linuxArm64 support
-        // Exclude components group - it's published per-platform, not as multiplatform module
-        val composeGroups = listOf(
-            "org.jetbrains.compose.ui",
-            "org.jetbrains.compose.foundation",
-            "org.jetbrains.compose.material",
-            "org.jetbrains.compose.material3",
-            "org.jetbrains.compose.animation",
-            "org.jetbrains.compose.runtime"
-        )
-        if (requested.group in composeGroups) {
-            useVersion(composeVersion)
-            because("Using forked Compose with linuxArm64 support")
-        }
-        // For components-resources, force all artifacts to SNAPSHOT (has linuxArm64)
-        if (requested.group == "org.jetbrains.compose.components" &&
-            requested.name.startsWith("components-resources")) {
-            useVersion(composeVersion)
-            because("Using forked Compose components-resources with linuxArm64 support")
         }
     }
 }
@@ -145,7 +133,7 @@ kotlin {
 
                 implementation("org.jetbrains.compose.runtime:runtime:$composeVersion")
                 implementation("org.jetbrains.compose.foundation:foundation-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.compose.material3:material3-linuxarm64:$composeVersion")
+                implementation("org.jetbrains.compose.material3:material3-linuxarm64:$material3Version")
                 implementation("org.jetbrains.compose.ui:ui-linuxarm64:$composeVersion")
 
                 implementation("org.jetbrains.compose.foundation:foundation-layout-linuxarm64:$composeVersion")
@@ -163,13 +151,13 @@ kotlin {
                 implementation("io.insert-koin:koin-compose-viewmodel-linuxarm64:$koinVersion")
 
                 // Lifecycle - explicit linuxarm64 artifacts to bypass multiplatform module resolution
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-common-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-runtime-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-savedstate-linuxarm64:$composeVersion")
+                implementation("org.jetbrains.androidx.lifecycle:lifecycle-common-linuxarm64:$lifecycleVersion")
+                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-linuxarm64:$lifecycleVersion")
+                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose-linuxarm64:$lifecycleVersion")
+                implementation("org.jetbrains.androidx.lifecycle:lifecycle-runtime-linuxarm64:$lifecycleVersion")
+                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-savedstate-linuxarm64:$lifecycleVersion")
 
-                implementation("org.jetbrains.androidx.savedstate:savedstate-linuxarm64:$composeVersion")
+                implementation("org.jetbrains.androidx.savedstate:savedstate-linuxarm64:$savedstateVersion")
 
                 // Build identity, build-config module, user-state initializer, LoRa protocol selector
                 implementation(project(":apps:embedded-common"))
