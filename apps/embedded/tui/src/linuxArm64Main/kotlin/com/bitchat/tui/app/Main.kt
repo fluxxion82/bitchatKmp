@@ -3,6 +3,7 @@ package com.bitchat.tui.app
 import com.bitchat.domain.base.LogPolicy
 import com.bitchat.domain.base.invoke
 import com.bitchat.embedded.BuildIdentity
+import com.bitchat.embedded.SingleInstanceLock
 import com.bitchat.tui.consoleSafeFor
 import kotlin.system.exitProcess
 import kotlin.time.Duration.Companion.seconds
@@ -24,7 +25,9 @@ private val buildIdentity = BuildIdentity("bitchat-tui")
  * Entry point of the bitchat terminal UI.
  *
  * `--version` (or `-v`) prints the build identity and exits, touching nothing else, so a deploy can
- * verify the binary on the device. Otherwise, before anything prints: when standard output is a
+ * verify the binary on the device. Otherwise the board's [SingleInstanceLock] comes first: when the
+ * unit or another embedded app already runs, this prints one line on stderr and exits with status 75,
+ * leaving the terminal and the log as they were. Then, before anything prints: when standard output is a
  * terminal, stdout and stderr go to `~/.bitchat/tui.log` (see [TuiLog]; to /dev/null if that fails,
  * with a notice in the UI, and startup stops if even that fails), because the data layer's `println`s would scroll the screen under
  * Mosaic's frames (Mosaic draws on the controlling tty, not on stdout). Under systemd stdout is the
@@ -37,6 +40,7 @@ fun main(args: Array<String>) {
         println(buildIdentity.line)
         return
     }
+    SingleInstanceLock.acquireOrExit(buildIdentity.name) // Exits when another embedded app holds the board.
     TuiLog.redirectIfTerminal() // Exits when output cannot be kept off the terminal.
     LogPolicy.configure(getenv(LogPolicy.ENV_VAR)?.toKString())
     println("=== bitchat TUI ===")

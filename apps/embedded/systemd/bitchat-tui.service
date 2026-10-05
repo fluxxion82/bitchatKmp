@@ -15,6 +15,16 @@
 # tty1 a clean exit that is not restarted leaves the last frame and a console nothing reads from,
 # until the next boot. The app comes back after RestartSec; `systemctl stop` is how it is stopped.
 #
+# RestartPreventExitStatus=75 is the one exception. The app exits 75 (SingleInstanceLock) when
+# another bitchat embedded app already holds the board: a copy started by hand over SSH, or the
+# Compose app. Restarting would only be refused again, every five seconds, for as long as that copy
+# runs. So the unit goes to `failed` once (status=75/TEMPFAIL) and stays there: tty1 keeps whatever
+# was on it and reads no keys, and the journal has the one line saying who holds the board
+# ("another bitchat embedded app is running (bitchat-tui, pid ... on /dev/pts/0)"). Nothing starts
+# the unit again when that copy exits: `sudo systemctl start bitchat-tui.service`, or reboot.
+# (The refused app touches nothing on tty1; systemd itself still resets tty1's modes around the
+# attempt, TTYReset=yes below, which does not erase the screen.)
+#
 # tty1 belongs to this service, not a login getty. Conflicts= prevents a newly enabled getty
 # from competing for the console. StandardInput=tty and TTYPath establish tty1 as Mosaic's
 # controlling terminal; journal stdout/stderr keep diagnostics out of its rendered frame.
@@ -37,6 +47,7 @@ TTYReset=yes
 StandardOutput=journal
 StandardError=journal
 Restart=always
+RestartPreventExitStatus=75
 RestartSec=5
 TimeoutStartSec=120
 TimeoutStopSec=10

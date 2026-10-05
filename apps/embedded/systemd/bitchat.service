@@ -22,6 +22,13 @@
 # target/CardKB ordering below is cycle-free. systemctl restart never exercises this; only a
 # reboot does (journalctl -b -g 'ordering cycle').
 # USB touch is discovered by the wait script; no XPT2046 service dependency is required.
+#
+# RestartPreventExitStatus=75: the app exits 75 (SingleInstanceLock) when another bitchat embedded
+# app already holds the board, for example a copy started by hand over SSH or the terminal UI.
+# Restart=on-failure would run the wait script and be refused again for as long as that copy runs,
+# so the unit goes to `failed` once (status=75/TEMPFAIL) and stays there; the display shows no
+# app, and the journal has the one line saying who holds the board. Nothing starts the unit again
+# when that copy exits: `sudo systemctl start bitchat.service`, or reboot.
 [Unit]
 Description=Bitchat embedded UI (DRM/EGL, Orange Pi Zero 3)
 After=multi-user.target cardkb.service
@@ -39,6 +46,7 @@ ExecStartPre=/opt/bitchat/releases/current/wait-for-input-devices.sh
 ExecStart=/opt/bitchat/releases/current/bitchat-embedded.kexe
 Environment=LANG=en_US.UTF-8
 Restart=on-failure
+RestartPreventExitStatus=75
 RestartSec=5
 TimeoutStartSec=120
 TimeoutStopSec=10

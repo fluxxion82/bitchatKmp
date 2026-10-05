@@ -116,13 +116,16 @@ class App : KoinComponent {
  * Entry point for the embedded bitchat application.
  *
  * `--version` (or `-v`) prints the build identity and exits without touching DRM,
- * so a deploy script can verify a binary on the device. Everything else runs the app.
+ * so a deploy script can verify a binary on the device. Everything else runs the app, once the
+ * board's [SingleInstanceLock] is taken: when another embedded app already runs, this prints one
+ * line on stderr and exits with status 75 before Koin, the radio, Bluetooth or DRM are touched.
  */
 fun main(args: Array<String>) {
     if (args.any { it == "--version" || it == "-v" }) {
         println(buildIdentity.line)
         return
     }
+    SingleInstanceLock.acquireOrExit(buildIdentity.name) // Exits when another embedded app holds the board.
     // Message bodies stay out of the journal unless explicitly asked for.
     LogPolicy.configure(getenv(LogPolicy.ENV_VAR)?.toKString())
     runApp()

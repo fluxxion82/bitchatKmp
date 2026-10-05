@@ -13,6 +13,8 @@
 #                                #   on-device startup check after a deploy: scripts/embedded-smoke.py
 #   scripts/verify.sh tui        # -Pembedded.enabled=true :presentation:tui JVM tests + linuxArm64 compile + TUI debug
 #                                # and release links
+#                                # (embedded and tui also run :apps:embedded:macosArm64Test on macOS arm64: the
+#                                #  single-instance lock both embedded apps take)
 #   scripts/verify.sh desktop-tui # JVM desktop TUI tests and installDist
 #   scripts/verify.sh full       # all of the above (desktop packaging included)
 #
@@ -38,6 +40,13 @@ gradle()          { echo "== ./gradlew ${BASE[*]} -Pembedded.enabled=false -Ptui
 gradle_embedded() { echo "== ./gradlew ${BASE[*]} -Pembedded.enabled=true -Ptui.enabled=false $*";  ./gradlew "${BASE[@]}" -Pembedded.enabled=true -Ptui.enabled=false "$@"; }
 gradle_tui()      { echo "== ./gradlew ${BASE[*]} -Pembedded.enabled=false -Ptui.enabled=true $*"; ./gradlew "${BASE[@]}" -Pembedded.enabled=false -Ptui.enabled=true "$@"; }
 
+# The lock both embedded apps take first (:apps:embedded, SingleInstanceLock) is plain POSIX with a host
+# test target, so both embedded gates run its tests where the host can.
+embedded_host_tests=()
+if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
+  embedded_host_tests+=(:apps:embedded:macosArm64Test)
+fi
+
 case "$MODE" in
   quick)    gradle :domain:jvmTest :apps:desktop:compose:compileKotlin :apps:desktop:test ;;
   desktop)
@@ -54,8 +63,8 @@ case "$MODE" in
     ;;
   # Release links too: the deployed binaries are release builds, and only an optimized link runs the
   # whole-program passes, so a debug-only gate would not see a release-only failure.
-  embedded) gradle_embedded :apps:embedded:compose:linkDebugExecutableLinuxArm64 :apps:embedded:compose:linkReleaseExecutableLinuxArm64 ;;
-  tui)      gradle_embedded :presentation:tui:jvmTest :presentation:tui:compileKotlinLinuxArm64 :apps:embedded:tui:linkDebugExecutableLinuxArm64 :apps:embedded:tui:linkReleaseExecutableLinuxArm64 ;;
+  embedded) gradle_embedded ${embedded_host_tests[@]+"${embedded_host_tests[@]}"} :apps:embedded:compose:linkDebugExecutableLinuxArm64 :apps:embedded:compose:linkReleaseExecutableLinuxArm64 ;;
+  tui)      gradle_embedded ${embedded_host_tests[@]+"${embedded_host_tests[@]}"} :presentation:tui:jvmTest :presentation:tui:compileKotlinLinuxArm64 :apps:embedded:tui:linkDebugExecutableLinuxArm64 :apps:embedded:tui:linkReleaseExecutableLinuxArm64 ;;
   desktop-tui)
     gradle_tui :presentation:tui:jvmTest :presentation:tui:binding:jvmTest :apps:desktop:test :apps:desktop:tui:test :apps:desktop:tui:verifyRuntimeJarNames :apps:desktop:tui:installDist
     version_line="$(apps/desktop/tui/build/install/bitchat-tui/bin/bitchat-tui --version)"

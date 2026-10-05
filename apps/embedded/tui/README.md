@@ -109,6 +109,25 @@ The second command must not list `bitchat-tui.service`. A restart cannot prove t
 ordering; reboot once and verify that `bitchat-tui.service` is active, `getty@tty1.service` is
 inactive, tty1 shows an interactive frame, and `journalctl -b -g 'ordering cycle'` has no output.
 
+## One app per board
+
+Both embedded binaries take one lock before anything else (`SingleInstanceLock` in `:apps:embedded`,
+a `flock` on `~/.bitchat/instance.lock`), because they share the LoRa radio, the Bluetooth adapter,
+the identity and `~/.bitchat`: two at once split what is received between them. While the unit
+runs, `~/bitchat-tui.kexe` over SSH prints
+`another bitchat embedded app is running (bitchat-tui, pid 812 on /dev/tty1)` on stderr and exits
+with status 75 before it changes the terminal, opens `~/.bitchat/tui.log`, or touches the radio or
+Bluetooth; `--version` never takes the lock. To run it by hand, stop the unit first
+(`sudo systemctl stop bitchat-tui.service`) and `start` it afterwards. The lock is the kernel's, not
+the file's: it ends with its holder (exit, crash, power cut), so the file left behind never blocks a
+start, and a lock that cannot be set up at all only prints a warning and the app starts without it.
+The other way round, a unit started while a hand-run copy holds the board is refused as well:
+`RestartPreventExitStatus=75` keeps `Restart=always` from trying again every five seconds, so the
+unit goes to `failed` (`status=75/TEMPFAIL` in `systemctl status`, the refusal line in the journal),
+tty1 keeps whatever was on it and reads no keys, and nothing starts the unit when the other copy
+exits: run `sudo systemctl start bitchat-tui.service`. The lock is per home directory, so a copy run
+as another user (`sudo`) is not caught.
+
 ## Logs, Bluetooth, and rollback
 
 Mosaic frames render on tty1. Its stdout and stderr remain in the journal:

@@ -173,6 +173,12 @@ sudo systemctl stop bitchat.service        # the service holds DRM master; stop 
 sudo systemctl start bitchat.service       # hand it back afterwards
 ```
 
+Without the `stop`, the hand-run copy is refused: both embedded binaries take one lock (`SingleInstanceLock` in
+`:apps:embedded`, a `flock` on `~/.bitchat/instance.lock`), and the second one prints
+`another bitchat embedded app is running (bitchat-embedded, pid 700)` on stderr and exits with status 75 before it
+touches DRM, the radio or Bluetooth. `bitchat.service` has `RestartPreventExitStatus=75`, so a unit refused that way
+goes to `failed` instead of retrying; details in [`tui/README.md`](tui/README.md#one-app-per-board).
+
 One-time device preparation (needs the password once):
 
 Run these on the device, as the account you ssh in as (`$USER` below is that account):

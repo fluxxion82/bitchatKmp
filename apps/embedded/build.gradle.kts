@@ -6,8 +6,8 @@ plugins {
 
 // Embedded-only code that does not depend on a UI toolkit, shared by the Compose app
 // (:apps:embedded:compose) and the terminal app (:apps:embedded:tui): the build identity, the Koin
-// build-config module, the user-state initializer and the LoRa protocol selector. Included only
-// in the embedded profile (see settings.gradle.kts).
+// build-config module, the user-state initializer, the LoRa protocol selector and the
+// single-instance lock. Included only in the embedded profile (see settings.gradle.kts).
 
 val koinVersion = providers.gradleProperty("embedded.koinForkVersion")
     .orElse("4.2.2-embedded-SNAPSHOT")
@@ -15,8 +15,17 @@ val koinVersion = providers.gradleProperty("embedded.koinForkVersion")
 
 kotlin {
     linuxArm64()
+    // Host-only, for :apps:embedded:macosArm64Test: nothing can run a linuxArm64 test binary off
+    // the device, and the single-instance lock in commonMain is plain POSIX, so its tests run
+    // here. No app links this target, and commonMain must stay dependency-free for it to build.
+    macosArm64()
 
     sourceSets {
+        commonTest {
+            dependencies {
+                implementation(libs.kotlin.test)
+            }
+        }
         named("linuxArm64Main") {
             dependencies {
                 implementation(project(":domain"))
