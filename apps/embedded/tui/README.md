@@ -67,12 +67,20 @@ To return tty1 to a login console after intentionally disabling the TUI, run:
 sudo systemctl enable --now getty@tty1.service
 ```
 
-The existing sudoers allowlist already permits `systemctl daemon-reload`, but must retain its
-Compose entries and add this TUI-specific line with the device's established `/usr/bin` paths:
+The deploy runs its privileged steps with `sudo -n`, so the deploy account needs them in sudoers. A
+board that only runs the terminal UI has no allowlist yet (the terminal UI board had none on
+2026-10-04: `/etc/sudoers.d` held only its `README`), so create one with
+`sudo visudo -f /etc/sudoers.d/bitchat-tui` and the device's `/usr/bin` paths. On a board that
+already carries the Compose entries, keep those and leave out the `daemon-reload` it already has:
 
 ```sudoers
-sterling ALL=(root) NOPASSWD: /usr/bin/systemctl start bitchat-tui.service, /usr/bin/systemctl stop bitchat-tui.service, /usr/bin/systemctl restart bitchat-tui.service, /usr/bin/systemctl status bitchat-tui.service, /usr/bin/systemctl enable bitchat-tui.service, /usr/bin/systemctl disable bitchat-tui.service, /usr/bin/systemctl is-active bitchat-tui.service, /usr/bin/install -m 644 -o root -g root /opt/bitchat-tui/bitchat-tui.service /etc/systemd/system/bitchat-tui.service
+sterling ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload, /usr/bin/systemctl start bitchat-tui.service, /usr/bin/systemctl stop bitchat-tui.service, /usr/bin/systemctl restart bitchat-tui.service, /usr/bin/systemctl status bitchat-tui.service, /usr/bin/systemctl enable bitchat-tui.service, /usr/bin/systemctl disable bitchat-tui.service, /usr/bin/systemctl is-active bitchat-tui.service, /usr/bin/install -m 644 -o root -g root /opt/bitchat-tui/bitchat-tui.service /etc/systemd/system/bitchat-tui.service
 ```
+
+The `install` entry copies a file the deploy account owns into systemd's unit directory, and a unit
+can run anything as root. Granting it is therefore granting that account passwordless root on the device; it is
+what lets a deploy update the unit without a password, and it is the same trade the Compose board
+makes.
 
 The deployment script renders the unit with the selected account, installs it, enables/restarts
 only `bitchat-tui.service`, and polls the new journal invocation for its exact identity line.
