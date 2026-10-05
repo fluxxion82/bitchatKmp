@@ -58,7 +58,11 @@ sudo systemctl enable --now getty@tty2.service
 systemctl is-active getty@tty2.service && sudo systemctl disable --now getty@tty1.service
 ```
 
-`bitchat-tui.service` owns tty1. Enable `getty@tty2.service` before disabling tty1's getty to
+`bitchat-tui.service` owns tty1: there is no login there. At the device, `Alt+F2` (or `Alt+Right`)
+switches to the login console on tty2 and `Alt+F1` switches back. `Ctrl+C` only restarts the app
+(the unit has `Restart=always`, back after five seconds); to stop it, run
+`sudo systemctl stop bitchat-tui.service` from tty2 or over SSH, and `start` to bring it back.
+Enable `getty@tty2.service` before disabling tty1's getty to
 keep a local login console reachable. Without tty2 (or another configured console), SSH is the
 only way back in if the TUI fails. Reconnect after `usermod` so journal permissions take effect.
 To return tty1 to a login console after intentionally disabling the TUI, run:

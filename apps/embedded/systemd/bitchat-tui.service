@@ -11,6 +11,10 @@
 #   systemctl show -p After --value bitchat-tui.service
 #   systemctl show -p After --value multi-user.target
 #
+# Restart=always, not on-failure: Ctrl+C makes the terminal UI exit cleanly, and with no getty on
+# tty1 a clean exit that is not restarted leaves the last frame and a console nothing reads from,
+# until the next boot. The app comes back after RestartSec; `systemctl stop` is how it is stopped.
+#
 # tty1 belongs to this service, not a login getty. Conflicts= prevents a newly enabled getty
 # from competing for the console. StandardInput=tty and TTYPath establish tty1 as Mosaic's
 # controlling terminal; journal stdout/stderr keep diagnostics out of its rendered frame.
@@ -32,7 +36,7 @@ TTYPath=/dev/tty1
 TTYReset=yes
 StandardOutput=journal
 StandardError=journal
-Restart=on-failure
+Restart=always
 RestartSec=5
 TimeoutStartSec=120
 TimeoutStopSec=10
