@@ -10,12 +10,14 @@ import com.bitchat.domain.chat.model.MeshChannelPerson
 import com.bitchat.domain.chat.model.MeshChannelTransport
 import com.bitchat.domain.chat.repository.ChatRepository
 import com.bitchat.domain.location.model.GeoPerson
+import com.bitchat.domain.user.model.BlockType
 import com.bitchat.domain.user.model.BlockedUser
 import com.bitchat.domain.user.repository.BlockListRepository
 import io.mockk.mockk
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -42,7 +44,7 @@ class ObserveMeshChannelPeopleTest {
         }
     }
 
-    @Test fun foldsPrivateAndLoRaPeopleOnlyWhenTheirNamesMatch() = runTest {
+    @Test fun aRadioPeerIsNeverFoldedIntoAPrivateChatEvenWithTheSameIdAndName() = runTest {
         val fixture = Fixture(
             meshPeople = listOf(person("X", "mesh name")),
             chats = linkedMapOf("X" to listOf(message("X", "radio name"))),
@@ -50,21 +52,77 @@ class ObserveMeshChannelPeopleTest {
         )
 
         fixture.observe().test {
-            awaitItem()
-            fixture.meshPeople = emptyList()
-            fixture.events.update(ChatEvent.MeshPeersUpdated)
+            // Connected: one entry, the mesh peer's, also heard over the radio.
             assertEquals(
                 listOf(
-                    MeshChannelPerson(
-                        id = "X",
-                        displayName = "radio name",
-                        transports = setOf(MeshChannelTransport.LORA),
-                        hasPrivateChat = true,
-                        lastSeen = seen,
-                    ),
+                    MeshChannelPerson("X", "mesh name", setOf(MeshChannelTransport.MESH, MeshChannelTransport.LORA), true, null),
                 ),
                 awaitItem(),
             )
+            fixture.meshPeople = emptyList()
+            fixture.events.update(ChatEvent.MeshPeersUpdated)
+            // Disconnected: the chat and the radio peer are two entries again.
+            assertEquals(
+                listOf(
+                    MeshChannelPerson("X", "radio name", emptySet(), true, null),
+                    MeshChannelPerson("lora-x", "radio name", setOf(MeshChannelTransport.LORA), false, seen),
+                ),
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun conversationKeysAreComparedExactly() = runTest {
+        val fixture = Fixture(
+            chats = linkedMapOf(" A " to listOf(message(" A ", "first")), "a" to listOf(message("a", "second"))),
+        )
+
+        fixture.observe().test {
+            assertEquals(listOf(" A ", "a"), awaitItem().map { it.id })
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun chatNamesAreReadOnlyWhenTheChatsChangeAndNoHistoryIsCopied() = runTest {
+        val fixture = Fixture(chats = linkedMapOf("P" to listOf(message("P", "private"))))
+
+        fixture.observe().test {
+            assertEquals(listOf("P"), awaitItem().map { it.id })
+            // The first event after subscribing counts as a change of everything; get it out of the way.
+            fixture.meshPeople = listOf(person("M", "mesh"))
+            fixture.events.update(ChatEvent.MeshPeersUpdated)
+            assertEquals(listOf("M", "P"), awaitItem().map { it.id })
+
+            val readsBefore = fixture.nameReads
+            fixture.loRaPeople.value = listOf(lora("L", "radio", null))
+            assertEquals(listOf("M", "P", "lora-L"), awaitItem().map { it.id })
+            fixture.meshPeople = listOf(person("N", "next"))
+            fixture.events.update(ChatEvent.MeshPeersUpdated)
+            assertEquals(listOf("N", "P", "lora-L"), awaitItem().map { it.id })
+            assertEquals(readsBefore, fixture.nameReads)
+
+            fixture.chats = linkedMapOf("P" to listOf(message("P", "private")), "Q" to listOf(message("Q", "other")))
+            fixture.events.update(ChatEvent.PrivateChatsUpdated)
+            assertEquals(listOf("N", "P", "Q", "lora-L"), awaitItem().map { it.id })
+            assertEquals(readsBefore + 1, fixture.nameReads)
+            assertEquals(0, fixture.chatReads)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun aReadThatCollidesWithAWriteIsTakenUpAgainByTheNextChange() = runTest {
+        val fixture = Fixture(chats = linkedMapOf("P" to listOf(message("P", "private"))))
+
+        fixture.observe().test {
+            assertEquals(listOf("P"), awaitItem().map { it.id })
+            fixture.chats = linkedMapOf("P" to listOf(message("P", "private")), "Q" to listOf(message("Q", "other")))
+            fixture.namesReadCollides = true
+            fixture.events.update(ChatEvent.PrivateChatsUpdated)
+            // Nothing is emitted for the read that failed, and the list does not end: a heartbeat
+            // is enough to read the chats again.
+            fixture.loRaPeople.value = listOf(lora("L", "radio", null))
+            assertEquals(listOf("P", "Q", "lora-L"), awaitItem().map { it.id })
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -89,15 +147,17 @@ class ObserveMeshChannelPeopleTest {
         }
     }
 
-    @Test fun privatePersonUsesTheLatestMessageForItsConversationKey() = runTest {
+    @Test fun aPrivateChatIsCalledWhatTheRepositorySaysOrByItsKey() = runTest {
         val fixture = Fixture(
             chats = linkedMapOf(
-                "P" to listOf(message("other", "other name"), message("P", "private name")),
+                "named-conversation-key" to listOf(message("named-conversation-key", "private name")),
+                // Nothing has come from the other side yet: the key stands in, shortened.
+                "unnamed-conversation-key" to listOf(message("someone else", "not the other side")),
             ),
         )
 
         fixture.observe().test {
-            assertEquals("private name", awaitItem().single().displayName)
+            assertEquals(listOf("private name", "unnamed-conv"), awaitItem().map { it.displayName })
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -235,21 +295,40 @@ class ObserveMeshChannelPeopleTest {
         var meshPeopleAfterFirstRead: List<GeoPerson>? = null
         private var meshReads = 0
 
+        /** How often the private chats, with their histories, were read. */
+        var chatReads = 0
+
+        /** How often the chats' names were read, and whether the next read runs into a concurrent write. */
+        var nameReads = 0
+        var namesReadCollides = false
+
         private val repository = object : ChatRepository by mockk(relaxed = true) {
             override suspend fun getMeshPeers(): List<GeoPerson> {
                 val late = meshPeopleAfterFirstRead
                 return if (late != null && meshReads++ > 0) late else meshPeople
             }
-            override suspend fun getPrivateChats(): Map<String, List<BitchatMessage>> = chats
+            override suspend fun getPrivateChats(): Map<String, List<BitchatMessage>> {
+                chatReads += 1
+                return chats
+            }
             override suspend fun getLoRaPeers(): List<LoRaPerson> = loRaPeopleNow ?: loRaPeople.value
-            override fun observeLoRaPeers(): Flow<List<LoRaPerson>> = loRaChanges
+            override fun observeLoRaPeerChanges(): Flow<Unit> = loRaChanges.map { }
+            override suspend fun getPrivateChatNames(): Map<String, String?> {
+                nameReads += 1
+                if (namesReadCollides) {
+                    namesReadCollides = false
+                    throw ConcurrentModificationException()
+                }
+                return chats.mapValues { (key, messages) -> messages.lastOrNull { it.senderPeerID == key }?.sender }
+            }
         }
 
         /** The blocked mesh users; [blockListChanges] says the list changed. */
         val blocked = mutableSetOf<String>()
         val blockListChanges = MutableSharedFlow<List<BlockedUser>>(extraBufferCapacity = 1)
         private val blockList = object : BlockListRepository by mockk(relaxed = true) {
-            override suspend fun isMeshUserBlocked(fingerprint: String): Boolean = fingerprint in blocked
+            override suspend fun getMeshBlockedUsers(): Set<BlockedUser> =
+                blocked.mapTo(LinkedHashSet()) { BlockedUser(it, null, 0, BlockType.MESH) }
             override fun observeBlockList(): Flow<List<BlockedUser>> = blockListChanges
         }
 

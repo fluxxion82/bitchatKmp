@@ -52,20 +52,18 @@ data class HeaderState(
     // channel) or [geohashPeople], so they cannot disagree with each other or with the list.
 
     /**
-     * What a peer id or conversation key is called. On a mesh channel a person who is reachable right
-     * now, over the mesh or the LoRa radio, is called what the people list calls them, whatever
-     * [nicknameDirectory] still holds: the list folded a radio peer into that entry only because the
-     * two names were equal, so showing any other name would hide the radio peer's own. A person who is
-     * only a saved private chat keeps the name the directory knows, and the chat's own name (the
-     * sender of its latest message) only fills a gap: a later message cannot rename a conversation.
+     * What a peer id or conversation key is called. On a mesh channel a connected peer is called what
+     * it announces now, whatever [nicknameDirectory] still holds. A saved private chat keeps the name
+     * the directory knows, and the chat's own name (the sender of its latest message) only fills a
+     * gap: a later message cannot rename a conversation.
      */
     val peerNicknames: Map<String, String>
         get() = if (isMeshChannel) {
             val listed = meshPeople.filterNot { it.isLoRaOnly }
-            val (reachable, savedOnly) = listed.partition { it.transports.isNotEmpty() }
+            val (connected, savedOnly) = listed.partition { MeshChannelTransport.MESH in it.transports }
             savedOnly.associate { it.id to it.displayName } +
                 nicknameDirectory +
-                reachable.associate { it.id to it.displayName }
+                connected.associate { it.id to it.displayName }
         } else {
             nicknameDirectory
         }

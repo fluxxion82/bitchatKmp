@@ -34,7 +34,6 @@ class HeaderStatePeopleTest {
             nicknameDirectory = mapOf(
                 "connected" to "announced earlier",
                 "nostr_known" to "alice",
-                "folded" to "mallory",
                 "other" to "bob",
             ),
             meshPeople = listOf(
@@ -43,9 +42,6 @@ class HeaderStatePeopleTest {
                 MeshChannelPerson("nostr_known", "mallory", emptySet(), true, null),
                 // Nothing known for this conversation yet: its own name fills the gap.
                 MeshChannelPerson("fresh", "carol", emptySet(), true, null),
-                // A radio peer was folded into this chat because both are called "radio alice": the row
-                // must show that name, not the one an earlier message left in the directory.
-                MeshChannelPerson("folded", "radio alice", setOf(MeshChannelTransport.LORA), true, seen),
                 MeshChannelPerson("lora-radio", "radio", setOf(MeshChannelTransport.LORA), false, seen),
             ),
         )
@@ -55,7 +51,6 @@ class HeaderStatePeopleTest {
                 "connected" to "announced now",
                 "nostr_known" to "alice",
                 "fresh" to "carol",
-                "folded" to "radio alice",
                 "other" to "bob",
             ),
             header.peerNicknames,

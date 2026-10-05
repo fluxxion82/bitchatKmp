@@ -84,17 +84,15 @@ class BindingTest {
     @Test fun aMeshRowIsCalledWhatTheHeaderCallsThatPeer() {
         val header = HeaderState(
             selectedLocationChannel = Channel.Mesh,
-            nicknameDirectory = mapOf("nostr_known" to "alice", "folded" to "mallory", "lora-radio" to "not used"),
+            nicknameDirectory = mapOf("nostr_known" to "alice", "lora-radio" to "not used"),
             meshPeople = listOf(
                 MeshChannelPerson("nostr_known", "mallory", emptySet(), true, null),
-                MeshChannelPerson("folded", "radio alice", setOf(MeshChannelTransport.LORA), true, seen),
                 MeshChannelPerson("lora-radio", "radio", setOf(MeshChannelTransport.LORA), false, seen),
             ),
         )
         assertEquals(
             listOf(
                 PeerEntry("nostr_known", "alice", PeerTransport.Routed),
-                PeerEntry("folded", "radio alice", PeerTransport.OfflineLoRa),
                 PeerEntry("lora-radio", "radio", PeerTransport.LoRa),
             ),
             peerEntries(header, unreadPeers = emptySet()),
@@ -110,7 +108,6 @@ class BindingTest {
                 MeshChannelPerson("lora", "lora", setOf(MeshChannelTransport.LORA), false, seen),
                 MeshChannelPerson("private", "private", emptySet(), true, null),
                 MeshChannelPerson("nostr_saved", "nostr", emptySet(), true, null),
-                MeshChannelPerson("saved", "saved", setOf(MeshChannelTransport.LORA), true, seen),
             ),
         )
         assertEquals(
@@ -119,8 +116,6 @@ class BindingTest {
                 PeerEntry("mesh", "mesh", PeerTransport.Direct),
                 PeerEntry("nostr_saved", "nostr", PeerTransport.Routed),
                 PeerEntry("private", "private", PeerTransport.Offline),
-                // A private chat heard over LoRa stays among the rows a chat can be opened from.
-                PeerEntry("saved", "saved", PeerTransport.OfflineLoRa),
                 PeerEntry("lora", "lora", PeerTransport.LoRa),
             ),
             peerEntries(header, unreadPeers = emptySet()),

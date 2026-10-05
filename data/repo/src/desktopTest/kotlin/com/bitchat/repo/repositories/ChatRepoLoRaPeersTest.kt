@@ -2,6 +2,8 @@ package com.bitchat.repo.repositories
 
 import com.bitchat.bluetooth.model.PeerInfo
 import com.bitchat.bluetooth.service.BluetoothMeshService
+import com.bitchat.domain.chat.model.BitchatMessage
+import com.bitchat.domain.location.model.Channel
 import com.bitchat.lora.LoRaPeer
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.radio.LoRaConfig
@@ -33,7 +35,7 @@ class ChatRepoLoRaPeersTest {
         try {
             val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), lora = FakeLoRaProtocol(peerIdsAreMeshIds = true))
 
-            val peers = chatRepo.observeLoRaPeers().first()
+            val peers = chatRepo.getLoRaPeers()
 
             assertEquals(listOf("x", "Y"), peers.map { it.id })
             assertEquals(listOf("x", "Y"), peers.map { it.meshDeviceId })
@@ -49,8 +51,8 @@ class ChatRepoLoRaPeersTest {
         try {
             val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), lora = FakeLoRaProtocol(peerIdsAreMeshIds = false))
 
-            assertEquals(listOf("x", "Y"), chatRepo.observeLoRaPeers().first().map { it.id })
-            chatRepo.observeLoRaPeers().first().forEach { assertNull(it.meshDeviceId) }
+            assertEquals(listOf("x", "Y"), chatRepo.getLoRaPeers().map { it.id })
+            chatRepo.getLoRaPeers().forEach { assertNull(it.meshDeviceId) }
         } finally {
             scope.cancel()
         }
@@ -69,11 +71,47 @@ class ChatRepoLoRaPeersTest {
                 blockedMeshIds = setOf("x"),
             )
 
-            assertEquals(listOf("Y"), chatRepo.observeLoRaPeers().first().map { it.id })
+            assertEquals(listOf("Y"), chatRepo.getLoRaPeers().map { it.id })
         } finally {
             scope.cancel()
         }
     }
+
+    @Test fun privateChatNamesComeFromTheOtherSidesLatestMessageWithoutItsHistory() = runTest {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+
+        try {
+            val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), lora = FakeLoRaProtocol(peerIdsAreMeshIds = true))
+            runCurrent()
+
+            chatRepo.didReceiveMessage(privateMessage("dm-1", "first name", sentAt = 1))
+            chatRepo.didReceiveMessage(privateMessage("dm-3", "third name", sentAt = 3))
+            // The message sent in between is handled last: the newest message still names the chat.
+            chatRepo.didReceiveMessage(privateMessage("dm-2", "second name", sentAt = 2))
+            runCurrent()
+
+            assertEquals(mapOf("X" to "third name"), chatRepo.getPrivateChatNames())
+            assertEquals(Unit, chatRepo.observeLoRaPeerChanges().first())
+
+            // Cleared, the conversation is still there, with nobody's name on it; wiped, it is gone.
+            chatRepo.clearMessages(Channel.MeshDM("X", "third name"))
+            assertEquals(mapOf<String, String?>("X" to null), chatRepo.getPrivateChatNames())
+            chatRepo.clearData()
+            assertEquals(emptyMap(), chatRepo.getPrivateChatNames())
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    private fun privateMessage(id: String, sender: String, sentAt: Long) = BitchatMessage(
+        id = id,
+        sender = sender,
+        senderPeerID = "X",
+        content = "hello",
+        timestamp = Instant.fromEpochSeconds(sentAt),
+        isPrivate = true,
+    )
 
     @Test fun connectedMeshPeerIsStillObservedOverLoRa() = runTest {
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
@@ -94,7 +132,7 @@ class ChatRepoLoRaPeersTest {
             chatRepo.didUpdatePeerList(listOf("X"))
             runCurrent()
 
-            assertEquals(listOf("x", "Y"), chatRepo.observeLoRaPeers().first().map { it.id })
+            assertEquals(listOf("x", "Y"), chatRepo.getLoRaPeers().map { it.id })
         } finally {
             scope.cancel()
         }

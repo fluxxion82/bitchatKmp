@@ -564,7 +564,7 @@ class MainViewModel(
                         )
                     }
                 } else {
-                    val displayName = listedNickname(peerID)
+                    val displayName = _headerState.value.peerNicknames[peerID]
                     saveUserStateAction(
                         UserStateAction.MeshDM(
                             peerID = peerID,
@@ -588,13 +588,11 @@ class MainViewModel(
         }
     }
 
-    /** The name the people list shows for [peerID], else the one the nickname directory holds. */
-    private fun listedNickname(peerID: String): String? =
-        _headerState.value.meshPeople.firstOrNull { it.id == peerID }?.displayName
-            ?: _headerState.value.peerNicknames[peerID]
-
+    // What is saved with a favourite or a restored chat is the name the header shows, with its
+    // precedence: reading the people list directly would let the sender of a chat's latest message
+    // rename a conversation whose name is already known.
     private fun getCurrentNickname(peerID: String): String? {
-        return listedNickname(peerID)
+        return _headerState.value.peerNicknames[peerID]
             ?: _headerState.value.geohashPeople.firstOrNull { it.id == peerID }?.displayName
     }
 

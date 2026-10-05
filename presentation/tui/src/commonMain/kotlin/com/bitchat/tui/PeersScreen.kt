@@ -35,11 +35,8 @@ enum class PeerTransport(val label: String) {
     /** Heard over the LoRa radio. */
     LoRa("lora"),
 
-    /** A saved private chat whose other side is on neither radio right now. */
+    /** A saved private chat whose other side is not connected over the mesh right now. */
     Offline("offline"),
-
-    /** A saved private chat whose other side is off the mesh but heard over the LoRa radio. */
-    OfflineLoRa("offline+lora"),
 }
 
 /**
@@ -89,12 +86,10 @@ fun meshChannelPeerEntries(
  */
 internal fun MeshChannelPerson.transport(): PeerTransport {
     val onMesh = MeshChannelTransport.MESH in transports
-    val onLoRa = MeshChannelTransport.LORA in transports
     return when {
-        onMesh && onLoRa -> PeerTransport.DirectLoRa
+        onMesh && MeshChannelTransport.LORA in transports -> PeerTransport.DirectLoRa
         onMesh -> PeerTransport.Direct
         isLoRaOnly -> PeerTransport.LoRa
-        onLoRa -> PeerTransport.OfflineLoRa
         id.startsWith("nostr_") -> PeerTransport.Routed
         else -> PeerTransport.Offline
     }

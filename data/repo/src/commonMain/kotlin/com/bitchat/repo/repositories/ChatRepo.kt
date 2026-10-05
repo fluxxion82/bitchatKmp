@@ -149,6 +149,7 @@ class ChatRepo(
     private val meshChannelMessagesMutex = Mutex()
 
     private val privateChats = mutableMapOf<String, MutableList<BitchatMessage>>()
+
     private val unreadPrivatePeers = mutableSetOf<String>()
     private val unreadPrivateMessageIds = mutableMapOf<String, MutableSet<String>>()
     private var latestUnreadPrivatePeer: String? = null
@@ -278,25 +279,21 @@ class ChatRepo(
         meshChannelMessagesMutex.withLock { meshChannelMessages.toList() }
     }
 
+    // The block list is read once for a whole list: every lookup through isMeshUserBlocked decodes it again.
+    private fun blockedMeshIds(): Set<String> = blockListPreferences.getMeshBlockedUsers().keys
+
     override suspend fun getMeshPeers(): List<GeoPerson> = withContext(coroutinesContextFacade.io) {
-        meshPeers.value.filter { !blockListPreferences.isMeshUserBlocked(it.id) }
+        val blocked = blockedMeshIds()
+        meshPeers.value.filter { it.id.lowercase() !in blocked }
     }
 
     override suspend fun getLoRaPeers(): List<LoRaPerson> = withContext(coroutinesContextFacade.io) {
-        lora?.peers?.value?.let(::loRaPeople) ?: emptyList()
-    }
-
-    override fun observeLoRaPeers(): Flow<List<LoRaPerson>> {
-        return lora?.peers?.let { peers ->
-            peers.map(::loRaPeople)
-        } ?: kotlinx.coroutines.flow.flowOf(emptyList())
-    }
-
-    private fun loRaPeople(peers: List<LoRaPeer>): List<LoRaPerson> {
-        val idsAreMeshIds = lora?.peerIdsAreMeshIds == true
-        return peers.mapNotNull { peer ->
+        val peers = lora?.peers?.value ?: return@withContext emptyList()
+        val idsAreMeshIds = lora.peerIdsAreMeshIds
+        val blocked = blockedMeshIds()
+        peers.mapNotNull { peer ->
             val meshDeviceId = peer.deviceId.takeIf { idsAreMeshIds }
-            if (meshDeviceId != null && blockListPreferences.isMeshUserBlocked(meshDeviceId)) {
+            if (meshDeviceId != null && meshDeviceId.lowercase() in blocked) {
                 null
             } else {
                 LoRaPerson(
@@ -307,6 +304,15 @@ class ChatRepo(
                 )
             }
         }
+    }
+
+    override fun observeLoRaPeerChanges(): Flow<Unit> =
+        lora?.peers?.map { } ?: kotlinx.coroutines.flow.flowOf(Unit)
+
+    // Like getPrivateChats this reads lists that other coroutines write without a lock; it copies
+    // none of them, and a caller that reads often has to expect a read to collide with a write.
+    override suspend fun getPrivateChatNames(): Map<String, String?> = withContext(coroutinesContextFacade.io) {
+        privateChats.mapValues { (key, messages) -> messages.lastOrNull { it.senderPeerID == key }?.sender }
     }
 
     override suspend fun switchLoRaProtocol(protocol: String): Boolean = withContext(coroutinesContextFacade.io) {

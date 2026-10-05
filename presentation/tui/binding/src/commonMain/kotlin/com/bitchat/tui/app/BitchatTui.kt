@@ -348,8 +348,7 @@ private fun NotesBody(
 /** Whether a DM with [peer] can be started: there is a view-model call for its transport and what it needs. */
 private fun canStartDm(vms: TuiViewModels, peer: PeerEntry): Boolean = when (peer.transport) {
     // A mesh peer or a saved private chat, whatever radio it is on right now.
-    PeerTransport.Direct, PeerTransport.DirectLoRa, PeerTransport.Routed,
-    PeerTransport.Offline, PeerTransport.OfflineLoRa -> true
+    PeerTransport.Direct, PeerTransport.DirectLoRa, PeerTransport.Routed, PeerTransport.Offline -> true
     PeerTransport.Nostr -> vms.main.headerState.value.geohashPeople.any { it.id == peer.id }
     PeerTransport.LoRa -> false // No view-model API for LoRa DMs yet.
 }
@@ -362,7 +361,7 @@ private suspend fun startDm(vms: TuiViewModels, peer: PeerEntry): Boolean {
     val header = vms.main.headerState.value
     val job = when (peer.transport) {
         PeerTransport.Direct, PeerTransport.DirectLoRa, PeerTransport.Routed,
-        PeerTransport.Offline, PeerTransport.OfflineLoRa -> vms.main.startMeshDM(peer.id, peer.name)
+        PeerTransport.Offline -> vms.main.startMeshDM(peer.id, peer.name)
         PeerTransport.Nostr -> {
             val person = header.geohashPeople.firstOrNull { it.id == peer.id } ?: return false
             vms.main.startGeohashDM(person, (header.selectedLocationChannel as? Channel.Location)?.geohash)

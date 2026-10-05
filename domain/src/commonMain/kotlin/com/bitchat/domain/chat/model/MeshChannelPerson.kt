@@ -11,8 +11,9 @@ enum class MeshChannelTransport { MESH, LORA }
  *
  * [id] is the mesh peer id for a connected mesh peer, the conversation key for a private chat, and
  * a separate `lora-` id for a peer known only from the LoRa radio (see [loRaOnlyPersonId]). An empty
- * [transports] is a private chat whose other side is on neither radio right now. [lastSeen] is the
- * LoRa radio's, so it is set only when LoRa is how the person was found.
+ * [transports] is a private chat whose other side is not connected over the mesh right now;
+ * [MeshChannelTransport.LORA] beside [MeshChannelTransport.MESH] is a connected peer also heard over
+ * the radio. [lastSeen] is the LoRa radio's and is set for a LoRa-only entry.
  */
 data class MeshChannelPerson(
     val id: String,
@@ -29,8 +30,7 @@ data class MeshChannelPerson(
 /**
  * The id of a person known only from the LoRa radio. A LoRa heartbeat is unauthenticated, so such an
  * entry never takes a mesh peer's id: it must not pick up that peer's favourite, unread marker or
- * private chat. Minted here and parsed nowhere. [ordinal] tells apart two radio peers that announce
- * the same device id.
+ * private chat. The prefix keeps it apart from every mesh peer id (hex) and conversation key (those,
+ * or a `nostr_` key). Minted here and parsed nowhere.
  */
-fun loRaOnlyPersonId(deviceId: String, ordinal: Int = 0): String =
-    "lora-$deviceId" + if (ordinal == 0) "" else "-$ordinal"
+fun loRaOnlyPersonId(deviceId: String): String = "lora-$deviceId"

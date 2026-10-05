@@ -211,7 +211,6 @@ class PeersScreenTest {
         assertEquals(pad("    mesh", "direct ", 30), peerRow(PeerEntry("mesh", "mesh", PeerTransport.Direct), 30, false))
         assertEquals(pad("    lora", "lora ", 30), peerRow(PeerEntry("lora", "lora", PeerTransport.LoRa), 30, false))
         assertEquals(pad("    private", "offline ", 30), peerRow(PeerEntry("private", "private", PeerTransport.Offline), 30, false))
-        assertEquals(pad("    saved", "offline+lora ", 30), peerRow(PeerEntry("saved", "saved", PeerTransport.OfflineLoRa), 30, false))
         assertEquals(pad("    nostr", "nostr ", 30), peerRow(PeerEntry("nostr", "nostr", PeerTransport.Nostr), 30, false))
     }
 

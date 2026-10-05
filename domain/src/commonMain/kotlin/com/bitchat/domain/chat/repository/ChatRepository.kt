@@ -20,8 +20,16 @@ interface ChatRepository {
      */
     suspend fun getLoRaPeers(): List<LoRaPerson>
 
-    /** Emits when the LoRa transport's peers change. Read [getLoRaPeers] for the list as it is now. */
-    fun observeLoRaPeers(): Flow<List<LoRaPerson>>
+    /** Emits when the LoRa transport's peers change, and once at the start. Read [getLoRaPeers] for the list. */
+    fun observeLoRaPeerChanges(): Flow<Unit>
+
+    /**
+     * Every private chat's conversation key with what its other side is called: the sender of the
+     * latest message that came from it, or null when none has. Unlike [getPrivateChats] this copies no
+     * history. Like it, it reads what other coroutines may be writing, so it can fail when a read
+     * collides with a write; the write's own change event is the moment to read again.
+     */
+    suspend fun getPrivateChatNames(): Map<String, String?>
 
     /**
      * Switch the active LoRa protocol at runtime.

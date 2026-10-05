@@ -10,6 +10,8 @@ import com.bitchat.domain.connectivity.eventbus.ConnectionEventBus
 import com.bitchat.domain.connectivity.model.BluetoothConnectionEvent
 import com.bitchat.domain.location.eventbus.LocationEventBus
 import com.bitchat.domain.user.eventbus.UserEventBus
+import com.bitchat.domain.user.model.BlockType
+import com.bitchat.domain.user.model.BlockedUser
 import com.bitchat.domain.user.repository.UserRepository
 import com.bitchat.local.prefs.BlockListPreferences
 import com.bitchat.local.prefs.ChannelPreferences
@@ -93,6 +95,9 @@ internal fun chatRepo(
         userPreferences = userPreferences,
         blockListPreferences = mockk<BlockListPreferences>(relaxed = true).also {
             every { it.isMeshUserBlocked(any()) } answers { firstArg<String>().lowercase() in blockedMeshIds }
+            every { it.getMeshBlockedUsers() } returns blockedMeshIds.associate {
+                it.lowercase() to BlockedUser(it.lowercase(), null, 0, BlockType.MESH)
+            }
         },
         participantTracker = mockk<NostrParticipantTracker>(relaxed = true),
         locationEventBus = mockk<LocationEventBus>(relaxed = true),
