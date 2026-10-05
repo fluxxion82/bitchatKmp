@@ -61,14 +61,20 @@ val bleNativeProp = (findProperty("bleNative") as? String)?.lowercase()
 val locationNativeProp = (findProperty("locationNative") as? String)?.lowercase()
 val arch = System.getProperty("os.arch")
 
-fun distributionJarName(artifact: ResolvedArtifactResult): String {
-    val component = artifact.id.componentIdentifier
-    val prefix = when (component) {
-        is ModuleComponentIdentifier -> "${component.group}-${component.module}-${component.version}"
-        is ProjectComponentIdentifier -> "project-${component.projectPath.replace(':', '-')}"
-        else -> component.displayName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+// An object, not a script-level function: a task action that called a function declared on this
+// script would capture the script itself, which the configuration cache cannot store ("cannot
+// serialize Gradle script object references"). The same reason is why every action below reads its
+// providers through a local val rather than through this script's properties.
+object DistributionJarNames {
+    fun of(artifact: ResolvedArtifactResult): String {
+        val component = artifact.id.componentIdentifier
+        val prefix = when (component) {
+            is ModuleComponentIdentifier -> "${component.group}-${component.module}-${component.version}"
+            is ProjectComponentIdentifier -> "project-${component.projectPath.replace(':', '-')}"
+            else -> component.displayName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        }
+        return "$prefix-${artifact.file.name}"
     }
-    return "$prefix-${artifact.file.name}"
 }
 
 dependencies {
@@ -103,30 +109,26 @@ dependencies {
 }
 
 val runtimeArtifacts = configurations.getByName("runtimeClasspath").incoming.artifactView {}.artifacts
-val runtimeArtifactsWithNames = providers.provider {
-    runtimeArtifacts.artifacts
-        .filter { it.file.extension == "jar" }
-        .associateWith(::distributionJarName)
-}
-val runtimeJarNames = providers.provider {
-    runtimeArtifactsWithNames.get().mapKeys { (artifact, _) -> artifact.file }
+val runtimeJarNames: Provider<Map<File, String>> = runtimeArtifacts.resolvedArtifacts.map { artifacts ->
+    artifacts.filter { it.file.extension == "jar" }.associate { it.file to DistributionJarNames.of(it) }
 }
 val applicationJar = tasks.named<Jar>("jar")
-val applicationJarName = applicationJar.flatMap { it.archiveFile }
-    .map { "project-apps-desktop-tui-${it.asFile.name}" }
-val distributionJarNames = providers.provider {
-    runtimeJarNames.get() + mapOf(applicationJar.get().archiveFile.get().asFile to applicationJarName.get())
-}
+val applicationJarFile: Provider<File> = applicationJar.flatMap { it.archiveFile }.map { it.asFile }
+val applicationJarName: Provider<String> = applicationJarFile.map { "project-apps-desktop-tui-${it.name}" }
+val distributionJarNames: Provider<Map<File, String>> =
+    runtimeJarNames.zip(applicationJarFile) { names, jar -> names + (jar to "project-apps-desktop-tui-${jar.name}") }
 
 val prepareRuntimeLibs = tasks.register<Sync>("prepareRuntimeLibs") {
     description = "Copies runtime jars with coordinate-prefixed filenames for the desktop distribution."
+    val jarName = applicationJarName
+    val jarNames = runtimeJarNames
     from(applicationJar) {
-        rename { applicationJarName.get() }
+        rename { jarName.get() }
     }
     from(runtimeArtifacts.artifactFiles) {
         eachFile {
             if (file.extension == "jar") {
-                name = runtimeJarNames.get()[file]
+                name = jarNames.get()[file]
                     ?: throw GradleException("No distribution filename for runtime artifact $file")
             }
         }
@@ -139,9 +141,11 @@ val verifyRuntimeJarNames = tasks.register("verifyRuntimeJarNames") {
     description = "Verifies that the desktop distribution has unique, complete runtime jars and launcher classpath."
     dependsOn("installDist")
     inputs.files(runtimeArtifacts.artifactFiles)
-    inputs.dir(layout.buildDirectory.dir("install/bitchat-tui/lib"))
+    val installDir = layout.buildDirectory.dir("install/bitchat-tui")
+    val jarNamesProvider = distributionJarNames
+    inputs.dir(installDir.map { it.dir("lib") })
     doLast {
-        val jarNames = distributionJarNames.get()
+        val jarNames = jarNamesProvider.get()
         val collisions = jarNames.values
             .groupBy { it }
             .filterValues { it.size > 1 }
@@ -149,7 +153,7 @@ val verifyRuntimeJarNames = tasks.register("verifyRuntimeJarNames") {
             throw GradleException("Runtime artifacts map to duplicate distribution filenames: ${collisions.keys}")
         }
 
-        val libDir = layout.buildDirectory.dir("install/bitchat-tui/lib").get().asFile
+        val libDir = installDir.get().dir("lib").asFile
         val missing = jarNames.filter { (source, name) ->
             val destination = libDir.resolve(name)
             !destination.isFile || Files.mismatch(source.toPath(), destination.toPath()) != -1L
@@ -158,16 +162,12 @@ val verifyRuntimeJarNames = tasks.register("verifyRuntimeJarNames") {
             throw GradleException("Distribution is missing runtime jars: ${missing.values}")
         }
 
-        val launcher = layout.buildDirectory.file("install/bitchat-tui/bin/bitchat-tui").get().asFile.readText()
+        val launcher = installDir.get().file("bin/bitchat-tui").asFile.readText()
         if ("lib/*" !in launcher) {
             throw GradleException("Unix launcher does not use the lib/* classpath wildcard")
         }
 
-        val windowsLauncher = layout.buildDirectory
-            .file("install/bitchat-tui/bin/bitchat-tui.bat")
-            .get()
-            .asFile
-            .readLines()
+        val windowsLauncher = installDir.get().file("bin/bitchat-tui.bat").asFile.readLines()
         val classpathLine = windowsLauncher.singleOrNull { it.startsWith("set CLASSPATH=") }
             ?: throw GradleException("Windows launcher has no CLASSPATH line")
         if ("%APP_HOME%\\lib\\*" !in classpathLine) {
@@ -198,9 +198,10 @@ tasks.named<CreateStartScripts>("startScripts") {
 distributions {
     main {
         contents {
+            val jarNames = distributionJarNames
             eachFile {
                 if (path.startsWith("lib/") && file.extension == "jar") {
-                    name = distributionJarNames.get()[file]
+                    name = jarNames.get()[file]
                         ?: throw GradleException("No distribution filename for runtime artifact $file")
                 }
             }
