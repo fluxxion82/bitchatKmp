@@ -1,7 +1,6 @@
 package com.bitchat.nostr
 
 import kotlin.test.Test
-import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class NostrSubscriptionIdTest {
@@ -10,7 +9,6 @@ class NostrSubscriptionIdTest {
         val longValue = "a".repeat(256)
         val ids = listOf(
             NostrSubscriptionId.geohash(longValue),
-            NostrSubscriptionId.geohashMessages(longValue),
             NostrSubscriptionId.sampling(longValue),
             NostrSubscriptionId.directMessages(longValue),
             NostrSubscriptionId.geohashDirectMessages(longValue),
@@ -25,13 +23,4 @@ class NostrSubscriptionIdTest {
         }
     }
 
-    @Test
-    fun `live geohash messages and sampling use distinct ids`() {
-        val geohash = "9q8yy"
-
-        assertNotEquals(
-            NostrSubscriptionId.geohashMessages(geohash),
-            NostrSubscriptionId.sampling(geohash)
-        )
-    }
 }

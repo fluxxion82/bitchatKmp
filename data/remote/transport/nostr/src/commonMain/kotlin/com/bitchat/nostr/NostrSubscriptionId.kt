@@ -6,8 +6,6 @@ object NostrSubscriptionId {
 
     fun geohash(geohash: String): String = withPayload("geohash_", geohash)
 
-    fun geohashMessages(geohash: String): String = withPayload("geohash_messages_", geohash)
-
     fun sampling(geohash: String): String = withPayload("sampling_", geohash)
 
     fun directMessages(pubkey: String): String = withPayload("dm_", pubkey)

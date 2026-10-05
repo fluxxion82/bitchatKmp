@@ -428,15 +428,7 @@ class ChatRepo(
             originGeohash = geohash
         )
 
-        nostrRelay.subscribe(
-            subscriptionId = NostrSubscriptionId.geohashMessages(geohash),
-            filter = filter,
-            handler = { event -> handleGeohashEvent(geohash, event) },
-            targetRelayUrls = relayUrls.ifEmpty { null },
-            originGeohash = geohash
-        )
-
-        println("ChatRepo: Subscriptions created (geohash_ and sampling_) - will be sent when relays connect")
+        println("ChatRepo: Geohash subscription created - will be sent when relays connect")
 
         subscribeToGeohashDirectMessages(geohash)
     }
