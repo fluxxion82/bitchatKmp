@@ -4,6 +4,7 @@ import com.bitchat.bluetooth.di.bluetoothModule
 import com.bitchat.client.di.clientModule
 import com.bitchat.desktop.net.desktopNetworkModule
 import com.bitchat.domain.di.domainModule
+import com.bitchat.domain.initialization.models.Version
 import com.bitchat.local.di.commonLocal
 import com.bitchat.local.di.localModule
 import com.bitchat.lora.LoRaProtocolType
@@ -17,8 +18,12 @@ import com.bitchat.tor.di.torModule
 import com.bitchat.viewmodel.di.viewModelModule
 import org.koin.core.module.Module
 
-fun desktopDataModules(appId: String, initialProtocol: LoRaProtocolType): List<Module> = listOf(
-    desktopBuildConfigModule(appId),
+fun desktopDataModules(
+    appId: String,
+    initialProtocol: LoRaProtocolType,
+    version: Version = defaultDesktopVersion(),
+): List<Module> = listOf(
+    desktopBuildConfigModule(appId, version),
     domainModule,
     commonLocal,
     localModule,

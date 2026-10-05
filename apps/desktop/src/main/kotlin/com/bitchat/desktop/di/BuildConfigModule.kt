@@ -5,10 +5,13 @@ import com.bitchat.domain.initialization.models.Version
 import org.koin.core.module.Module
 import org.koin.dsl.module
 
-fun desktopBuildConfigModule(appId: String): Module = module {
+/** What a desktop app reports when it has no build identity of its own: the Compose app's version, no identity line. */
+internal fun defaultDesktopVersion(): Version = "1.0.0".toVersion()
+
+fun desktopBuildConfigModule(appId: String, version: Version = defaultDesktopVersion()): Module = module {
     single {
         AppInformation(
-            version = "1.0.0".toVersion(),
+            version = version,
             versionCode = 1,
             id = appId,
             debug = true,

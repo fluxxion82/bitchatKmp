@@ -3,11 +3,9 @@ package com.bitchat.desktop.tui
 import com.bitchat.desktop.SingleInstanceLock
 import com.bitchat.desktop.ble.NativeBleLoader
 import com.bitchat.desktop.di.LoRaProtocolSelector
-import com.bitchat.desktop.di.desktopDataModules
 import com.bitchat.desktop.location.NativeLocationLoader
 import com.bitchat.domain.base.LogPolicy
 import com.bitchat.domain.initialization.InitializeApplication
-import com.bitchat.repo.initialization.headlessUserStateModule
 import com.bitchat.tui.app.runBitchatTui
 import com.bitchat.tui.app.tuiViewModels
 import com.bitchat.tui.consoleSafeFor
@@ -33,7 +31,7 @@ private object CodeSourceMarker
 fun main(args: Array<String>) {
     System.setProperty("java.awt.headless", "true")
     if (args.any { it == "--version" || it == "-v" }) {
-        println("bitchat-tui ${DesktopTuiBuildInfo.version} (${DesktopTuiBuildInfo.gitSha})")
+        println(desktopTuiVersionLine())
         return
     }
     val hangupNote = exitOnTerminalHangup()
@@ -48,7 +46,7 @@ fun main(args: Array<String>) {
             JvmTuiLog.redirectIfTerminal()
             LogPolicy.configure(System.getenv(LogPolicy.ENV_VAR))
             println("=== bitchat TUI ===")
-            println("bitchat-tui ${DesktopTuiBuildInfo.version} (${DesktopTuiBuildInfo.gitSha})")
+            println(desktopTuiVersionLine())
             println("Desktop TUI startup: isHeadless=${GraphicsEnvironment.isHeadless()}")
             println("Desktop TUI startup: SIGHUP exits with 129 ($hangupNote)")
             configureArtiPath()
@@ -60,8 +58,7 @@ fun main(args: Array<String>) {
             NativeLocationLoader.loadIfEnabled()
             val koin = startKoin {
                 modules(
-                    desktopDataModules("com.bitchat.desktop.tui", LoRaProtocolSelector.getPreferredProtocol()) +
-                        headlessUserStateModule,
+                    desktopTuiDataModules(LoRaProtocolSelector.getPreferredProtocol()),
                 )
             }.koin
             val background = CoroutineScope(SupervisorJob() + Dispatchers.Default)
