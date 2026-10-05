@@ -98,6 +98,8 @@ class BitChatLoRaProtocol internal constructor(
 
     override val protocolName: String = "BitChat"
 
+    override val peerIdsAreMeshIds: Boolean = true
+
     override var deviceId: String = ""
     override var nickname: String = ""
 

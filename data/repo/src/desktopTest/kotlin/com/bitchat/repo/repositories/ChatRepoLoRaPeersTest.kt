@@ -2,7 +2,6 @@ package com.bitchat.repo.repositories
 
 import com.bitchat.bluetooth.model.PeerInfo
 import com.bitchat.bluetooth.service.BluetoothMeshService
-import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.lora.LoRaPeer
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.radio.LoRaConfig
@@ -22,11 +21,61 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatRepoLoRaPeersTest {
-    @Test fun connectedMeshPeersAreNotReturnedAsLoRaPeers() = runTest {
+    @Test fun bitchatPeersKeepRawIdsAndExposeMeshIdentity() = runTest {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+
+        try {
+            val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), lora = FakeLoRaProtocol(peerIdsAreMeshIds = true))
+
+            val peers = chatRepo.observeLoRaPeers().first()
+
+            assertEquals(listOf("x", "Y"), peers.map { it.id })
+            assertEquals(listOf("x", "Y"), peers.map { it.meshDeviceId })
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test fun foreignLoRaPeersDoNotExposeMeshIdentity() = runTest {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+
+        try {
+            val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), lora = FakeLoRaProtocol(peerIdsAreMeshIds = false))
+
+            assertEquals(listOf("x", "Y"), chatRepo.observeLoRaPeers().first().map { it.id })
+            chatRepo.observeLoRaPeers().first().forEach { assertNull(it.meshDeviceId) }
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test fun blockedBitchatIdentityIsNotObservedOverLoRa() = runTest {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+
+        try {
+            val chatRepo = chatRepo(
+                scope,
+                dispatcher,
+                mutableListOf(),
+                lora = FakeLoRaProtocol(peerIdsAreMeshIds = true),
+                blockedMeshIds = setOf("x"),
+            )
+
+            assertEquals(listOf("Y"), chatRepo.observeLoRaPeers().first().map { it.id })
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test fun connectedMeshPeerIsStillObservedOverLoRa() = runTest {
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
@@ -35,50 +84,17 @@ class ChatRepoLoRaPeersTest {
                 every { it.myPeerID } returns "self"
                 every { it.getPeerInfo("X") } returns peerInfo("X")
             }
-            val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), lora = FakeLoRaProtocol(), mesh = mesh)
-            runCurrent()
-
+            val chatRepo = chatRepo(
+                scope,
+                dispatcher,
+                mutableListOf(),
+                lora = FakeLoRaProtocol(peerIdsAreMeshIds = true),
+                mesh = mesh,
+            )
             chatRepo.didUpdatePeerList(listOf("X"))
             runCurrent()
 
-            assertEquals(1, chatRepo.getLoRaPeers().size)
-            assertEquals(listOf("lora-Y"), chatRepo.getLoRaPeers().map { it.id })
-            assertEquals(listOf("lora-Y"), chatRepo.observeLoRaPeers().first().map { it.id })
-
-            chatRepo.didUpdatePeerList(emptyList())
-            runCurrent()
-
-            assertEquals(listOf("lora-x", "lora-Y"), chatRepo.getLoRaPeers().map { it.id })
-            assertEquals(listOf("lora-x", "lora-Y"), chatRepo.observeLoRaPeers().first().map { it.id })
-        } finally {
-            scope.cancel()
-        }
-    }
-
-    @Test fun aPrivateChatAloneNeverHidesALoRaPeer() = runTest {
-        val dispatcher = UnconfinedTestDispatcher(testScheduler)
-        val scope = CoroutineScope(SupervisorJob() + dispatcher)
-
-        try {
-            val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), lora = FakeLoRaProtocol())
-            runCurrent()
-
-            // Anyone in Bluetooth range can send a private message under any peer id; a peer that is
-            // not connected over the mesh must stay listed as the LoRa peer it is.
-            chatRepo.didReceiveMessage(
-                BitchatMessage(
-                    id = "dm-1",
-                    sender = "X",
-                    senderPeerID = "X",
-                    content = "hello",
-                    timestamp = Instant.fromEpochSeconds(0),
-                    isPrivate = true,
-                ),
-            )
-            runCurrent()
-
-            assertEquals(listOf("lora-x", "lora-Y"), chatRepo.getLoRaPeers().map { it.id })
-            assertEquals(listOf("lora-x", "lora-Y"), chatRepo.observeLoRaPeers().first().map { it.id })
+            assertEquals(listOf("x", "Y"), chatRepo.observeLoRaPeers().first().map { it.id })
         } finally {
             scope.cancel()
         }
@@ -95,7 +111,9 @@ class ChatRepoLoRaPeersTest {
         lastSeen = Instant.fromEpochSeconds(0),
     )
 
-    private class FakeLoRaProtocol : LoRaProtocol {
+    private class FakeLoRaProtocol(
+        override val peerIdsAreMeshIds: Boolean,
+    ) : LoRaProtocol {
         override val peers: StateFlow<List<LoRaPeer>> = MutableStateFlow(
             listOf(
                 LoRaPeer("x", "X", Instant.fromEpochSeconds(0), -80, 6f),

@@ -55,6 +55,7 @@ class LoRaProtocolManager(
     override val protocolName get() = active.protocolName
     override val isReady get() = readySession && active.isReady
     override val supportsRadioConfiguration get() = active.supportsRadioConfiguration
+    override val peerIdsAreMeshIds get() = active.peerIdsAreMeshIds
 
     /** Initialization only, before any start, stop or switch request. */
     fun setActiveType(type: LoRaProtocolType) {

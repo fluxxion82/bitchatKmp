@@ -6,6 +6,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.bitchat.domain.chat.model.BitchatMessage
+import com.bitchat.domain.chat.model.MeshChannelPerson
+import com.bitchat.domain.chat.model.MeshChannelTransport
 import com.bitchat.viewvo.theme.peerColorSeed
 import com.bitchat.domain.location.model.GeoPerson
 import com.jakewharton.mosaic.layout.size
@@ -21,6 +23,9 @@ enum class PeerTransport(val label: String) {
     /** A Bluetooth neighbour. */
     Direct("direct"),
 
+    /** A Bluetooth neighbour also heard over LoRa. */
+    DirectLoRa("direct+lora"),
+
     /** Reached through other mesh peers. */
     Routed("routed"),
 
@@ -29,6 +34,12 @@ enum class PeerTransport(val label: String) {
 
     /** Heard over the LoRa radio. */
     LoRa("lora"),
+
+    /** A saved private chat whose other side is on neither radio right now. */
+    Offline("offline"),
+
+    /** A saved private chat whose other side is off the mesh but heard over the LoRa radio. */
+    OfflineLoRa("offline+lora"),
 }
 
 /**
@@ -44,10 +55,52 @@ data class PeerEntry(
 )
 
 /**
- * Mesh peers from `ChatState`/`HeaderState`, sorted like the Compose sidebar: unread DMs first,
- * then favourites, then by name. A peer without a nickname shows the first 12 characters of its ID.
+ * The mesh channel's people (`HeaderState.meshPeople`), one row per device. The rows a private chat
+ * can be opened from are sorted like the Compose sidebar (unread DMs first, then favourites, then by
+ * name); the peers known only from the LoRa radio follow in the order they were heard.
  */
-fun meshPeerEntries(
+fun meshChannelPeerEntries(
+    people: List<MeshChannelPerson>,
+    peerNicknames: Map<String, String>,
+    favoritePeers: Set<String>,
+    unreadPeers: Set<String>,
+): List<PeerEntry> {
+    fun entry(person: MeshChannelPerson): PeerEntry = PeerEntry(
+        id = person.id,
+        // The name `HeaderState.peerNicknames` settles on, as the Compose sidebar shows it; a peer
+        // known only from the radio is not in that directory and has the name it broadcasts.
+        name = peerNicknames[person.id]?.takeUnless { person.isLoRaOnly } ?: person.displayName,
+        transport = person.transport(),
+        favorite = person.id in favoritePeers,
+        unread = person.id in unreadPeers,
+    )
+
+    val listed = people.filterNot { it.isLoRaOnly }.map(::entry)
+        .sortedWith(compareBy<PeerEntry>({ !it.unread }, { !it.favorite }, { it.name.lowercase() }))
+    val loRaOnly = people.filter { it.isLoRaOnly }.map(::entry)
+    return listed + loRaOnly
+}
+
+/**
+ * The tag a mesh person's row ends with. Every tag but [PeerTransport.LoRa] is a row a private chat
+ * can be opened from (it has a mesh peer id or a conversation key); a peer known only from the radio
+ * cannot be messaged privately. A saved Nostr conversation keeps the `routed` tag it has always had
+ * in this list: [PeerTransport.Nostr] means a geohash participant, which it is not.
+ */
+internal fun MeshChannelPerson.transport(): PeerTransport {
+    val onMesh = MeshChannelTransport.MESH in transports
+    val onLoRa = MeshChannelTransport.LORA in transports
+    return when {
+        onMesh && onLoRa -> PeerTransport.DirectLoRa
+        onMesh -> PeerTransport.Direct
+        isLoRaOnly -> PeerTransport.LoRa
+        onLoRa -> PeerTransport.OfflineLoRa
+        id.startsWith("nostr_") -> PeerTransport.Routed
+        else -> PeerTransport.Offline
+    }
+}
+
+internal fun legacyMeshPeerEntries(
     connectedPeers: List<String>,
     peerNicknames: Map<String, String>,
     peerDirect: Map<String, Boolean>,

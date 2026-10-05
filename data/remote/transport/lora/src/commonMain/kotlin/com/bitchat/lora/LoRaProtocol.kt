@@ -47,6 +47,9 @@ interface LoRaProtocol {
     /** Whether app RF settings are applied by this implementation. Daemons own their RF config. */
     val supportsRadioConfiguration: Boolean get() = true
 
+    /** Whether discovered peer IDs share the Bluetooth mesh identity namespace. */
+    val peerIdsAreMeshIds: Boolean get() = false
+
     /**
      * Human-readable name of this protocol implementation.
      *

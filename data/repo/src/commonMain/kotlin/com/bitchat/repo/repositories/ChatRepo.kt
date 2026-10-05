@@ -28,6 +28,7 @@ import com.bitchat.domain.chat.model.ChannelMember
 import com.bitchat.domain.chat.model.ChannelTransport
 import com.bitchat.domain.chat.model.ChatEvent
 import com.bitchat.domain.chat.model.DeliveryStatus
+import com.bitchat.domain.chat.model.LoRaPerson
 import com.bitchat.domain.chat.repository.ChatRepository
 import com.bitchat.domain.connectivity.model.BluetoothConnectionEvent
 import com.bitchat.domain.location.eventbus.LocationEventBus
@@ -281,31 +282,30 @@ class ChatRepo(
         meshPeers.value.filter { !blockListPreferences.isMeshUserBlocked(it.id) }
     }
 
-    override suspend fun getLoRaPeers(): List<GeoPerson> = withContext(coroutinesContextFacade.io) {
-        lora?.peers?.value?.let { peers -> loRaPeople(peers, meshPeers.value) } ?: emptyList()
+    override suspend fun getLoRaPeers(): List<LoRaPerson> = withContext(coroutinesContextFacade.io) {
+        lora?.peers?.value?.let(::loRaPeople) ?: emptyList()
     }
 
-    override fun observeLoRaPeers(): Flow<List<GeoPerson>> {
+    override fun observeLoRaPeers(): Flow<List<LoRaPerson>> {
         return lora?.peers?.let { peers ->
-            combine(peers, meshPeers) { loraPeers, connected -> loRaPeople(loraPeers, connected) }
+            peers.map(::loRaPeople)
         } ?: kotlinx.coroutines.flow.flowOf(emptyList())
     }
 
-    /**
-     * LoRa peers that are not among the [connected] mesh peers right now. A bitchat LoRa heartbeat
-     * announces the mesh identity, so a device reachable both ways would otherwise appear twice.
-     * Only a live mesh connection hides the LoRa entry, and it is judged against the same snapshot
-     * the mesh people come from: a hidden LoRa entry always has its mesh peer in that snapshot, and
-     * when the connection ends the entry is back with the next emission.
-     */
-    private fun loRaPeople(peers: List<LoRaPeer>, connected: List<GeoPerson>): List<GeoPerson> {
-        val connectedIds = connected.mapTo(HashSet()) { it.id.lowercase() }
-        return peers.filterNot { peer -> peer.deviceId.lowercase() in connectedIds }.map { peer ->
-            GeoPerson(
-                id = "lora-${peer.deviceId}",
-                displayName = peer.nickname,
-                lastSeen = peer.lastSeen,
-            )
+    private fun loRaPeople(peers: List<LoRaPeer>): List<LoRaPerson> {
+        val idsAreMeshIds = lora?.peerIdsAreMeshIds == true
+        return peers.mapNotNull { peer ->
+            val meshDeviceId = peer.deviceId.takeIf { idsAreMeshIds }
+            if (meshDeviceId != null && blockListPreferences.isMeshUserBlocked(meshDeviceId)) {
+                null
+            } else {
+                LoRaPerson(
+                    id = peer.deviceId,
+                    displayName = peer.nickname,
+                    lastSeen = peer.lastSeen,
+                    meshDeviceId = meshDeviceId,
+                )
+            }
         }
     }
 

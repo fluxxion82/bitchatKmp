@@ -13,7 +13,7 @@ import com.bitchat.domain.chat.LeaveChannel
 import com.bitchat.domain.chat.ClearSelectedPrivatePeer
 import com.bitchat.domain.chat.ResolveChatFallback
 import com.bitchat.domain.chat.MarkPrivateChatRead
-import com.bitchat.domain.chat.ObserveLoRaPeers
+import com.bitchat.domain.chat.ObserveMeshChannelPeople
 import com.bitchat.domain.chat.ObserveLatestUnreadPrivatePeer
 import com.bitchat.domain.chat.ObservePeerSessionStates
 import com.bitchat.domain.chat.ObservePrivateChats
@@ -86,7 +86,7 @@ class MainViewModel(
     private val saveUserStateAction: SaveUserStateAction,
     private val markPrivateChatRead: MarkPrivateChatRead,
     private val clearAllData: ClearAllData,
-    private val observeLoRaPeers: ObserveLoRaPeers,
+    private val observeMeshChannelPeople: ObserveMeshChannelPeople,
     private val clearSelectedPrivatePeer: ClearSelectedPrivatePeer,
     private val resolveChatFallback: ResolveChatFallback,
 ) : ViewModel() {
@@ -150,35 +150,24 @@ class MainViewModel(
             observePrivateChats().collect { chats ->
                 _headerState.update { current ->
                     val dmPeers = chats.keys
-                    val shouldMerge = current.selectedLocationChannel !is BitchatChannel.Location
-                    val connected = if (shouldMerge) {
-                        (current.connectedPeers + dmPeers).distinct()
-                    } else {
-                        current.connectedPeers
-                    }
-                    val nicknames = if (shouldMerge) {
+                    val nicknames = if (current.selectedLocationChannel !is BitchatChannel.Location) {
                         val dmNames = dmPeers.associateWith { peerID ->
                             val messages = chats[peerID].orEmpty()
                             val recentOther = messages.lastOrNull { it.sender != current.nickname }
-                            recentOther?.sender ?: current.peerNicknames[peerID] ?: peerID.take(12)
+                            recentOther?.sender ?: current.nicknameDirectory[peerID] ?: peerID.take(12)
                         }
-                        dmNames + current.peerNicknames
+                        dmNames + current.nicknameDirectory
                     } else {
-                        current.peerNicknames
+                        current.nicknameDirectory
                     }
-                    logConnectedPeersState(
-                        reason = "privateChats",
-                        channelDesc = describeChannel(current.selectedLocationChannel),
-                        isMeshChannel = current.selectedLocationChannel is BitchatChannel.Mesh ||
-                                current.selectedLocationChannel is BitchatChannel.MeshDM,
-                        connected = connected,
-                        people = emptyList()
-                    )
-                    current.copy(
-                        connectedPeers = connected,
-                        peerNicknames = nicknames
-                    )
+                    current.copy(nicknameDirectory = nicknames)
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            observeMeshChannelPeople().collect { people ->
+                _headerState.update { it.copy(meshPeople = people) }
             }
         }
 
@@ -227,35 +216,24 @@ class MainViewModel(
         viewModelScope.launch {
             observeChannelParticipants().collect { people ->
                 _headerState.update { current ->
-                    val isMeshChannel = current.selectedLocationChannel is BitchatChannel.Mesh ||
-                            current.selectedLocationChannel is BitchatChannel.MeshDM
-
-                    val connected = if (isMeshChannel) {
-                        people.map { it.id }
-                    } else {
-                        people.map { it.displayName }
-                    }
-                    val peerNicknames = if (isMeshChannel) {
+                    val isMeshChannel = current.isMeshChannel
+                    val newNicknames = if (isMeshChannel) {
                         people.associate { it.id to it.displayName }
                     } else {
                         people.associate { "nostr_${it.id.take(16)}" to it.displayName }
                     }
-                    val channelDesc = describeChannel(current.selectedLocationChannel)
+                    val next = current.copy(
+                        geohashPeople = people,
+                        nicknameDirectory = newNicknames,
+                    )
                     logConnectedPeersState(
                         reason = "channelParticipants",
-                        channelDesc = channelDesc,
+                        channelDesc = describeChannel(current.selectedLocationChannel),
                         isMeshChannel = isMeshChannel,
-                        connected = connected,
+                        connected = next.connectedPeers,
                         people = people
                     )
-                    current.copy(
-                        geohashPeople = people,
-                        connectedPeers = connected,
-                        peerNicknames = peerNicknames,
-                        peerDirect = people.map { it.id }.associateWith {
-                            isMeshChannel
-                        }
-                    )
+                    next
                 }
             }
         }
@@ -268,14 +246,6 @@ class MainViewModel(
                         torRunning = torStatus.running,
                         torBootstrapPercent = torStatus.bootstrapPercent
                     )
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            observeLoRaPeers().collect { loraPeers ->
-                _headerState.update {
-                    it.copy(loraPeers = loraPeers)
                 }
             }
         }
@@ -480,8 +450,7 @@ class MainViewModel(
 
     fun toggleFavorite(peerID: String) {
         viewModelScope.launch {
-            val nickname = _headerState.value.peerNicknames[peerID]
-                ?: getCurrentNickname(peerID)
+            val nickname = getCurrentNickname(peerID)
                 ?: peerID
 
             toggleFavoriteUseCase(ToggleFavorite.Params(peerID = peerID, peerNickname = nickname))
@@ -536,7 +505,7 @@ class MainViewModel(
         dmSwitches.submit {
             _headerState.update {
                 it.copy(
-                    peerNicknames = it.peerNicknames + (peerID to nickname)
+                    nicknameDirectory = it.nicknameDirectory + (peerID to nickname)
                 )
             }
 
@@ -595,7 +564,7 @@ class MainViewModel(
                         )
                     }
                 } else {
-                    val displayName = _headerState.value.peerNicknames[peerID]
+                    val displayName = listedNickname(peerID)
                     saveUserStateAction(
                         UserStateAction.MeshDM(
                             peerID = peerID,
@@ -610,17 +579,22 @@ class MainViewModel(
     private suspend fun refreshFavorites() {
         _headerState.update { current ->
             val favorites = getAllFavorites()
-            val favoriteState = buildFavoriteState(favorites, current.peerNicknames)
+            val favoriteState = buildFavoriteState(favorites, current.nicknameDirectory)
             current.copy(
                 favoritePeers = favoriteState.favoritePeers,
                 favoriteRelationships = favoriteState.favoriteRelationships,
-                peerNicknames = favoriteState.peerNicknames
+                nicknameDirectory = favoriteState.peerNicknames
             )
         }
     }
 
+    /** The name the people list shows for [peerID], else the one the nickname directory holds. */
+    private fun listedNickname(peerID: String): String? =
+        _headerState.value.meshPeople.firstOrNull { it.id == peerID }?.displayName
+            ?: _headerState.value.peerNicknames[peerID]
+
     private fun getCurrentNickname(peerID: String): String? {
-        return _headerState.value.peerNicknames[peerID]
+        return listedNickname(peerID)
             ?: _headerState.value.geohashPeople.firstOrNull { it.id == peerID }?.displayName
     }
 

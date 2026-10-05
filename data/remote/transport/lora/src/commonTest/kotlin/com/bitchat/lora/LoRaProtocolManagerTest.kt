@@ -17,7 +17,10 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class LoRaProtocolManagerTest {
-    private class FakeProtocol(override val protocolName: String) : LoRaProtocol {
+    private class FakeProtocol(
+        override val protocolName: String,
+        override val peerIdsAreMeshIds: Boolean = false,
+    ) : LoRaProtocol {
         override val peers = MutableStateFlow<List<LoRaPeer>>(emptyList())
         override val incomingMessages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 8)
         override var isReady = false
@@ -45,10 +48,20 @@ class LoRaProtocolManagerTest {
     }
 
     private class Fixture(scope: kotlinx.coroutines.CoroutineScope) {
-        val bit = FakeProtocol("BitChat")
+        val bit = FakeProtocol("BitChat", peerIdsAreMeshIds = true)
         val mesh = FakeProtocol("MeshCore")
         val meshtastic = FakeProtocol("Meshtastic")
         val manager = LoRaProtocolManager(lazy { bit }, lazy { meshtastic }, lazy { mesh }, scope, readinessTimeoutMs = 500)
+    }
+
+    @Test fun peerIdentityCapabilityFollowsTheActiveProtocol() = runTest {
+        val f = Fixture(backgroundScope)
+
+        assertTrue(f.manager.peerIdsAreMeshIds)
+        assertTrue(f.manager.switchProtocol(LoRaProtocolType.MESHCORE))
+        assertFalse(f.manager.peerIdsAreMeshIds)
+        assertTrue(f.manager.switchProtocol(LoRaProtocolType.MESHTASTIC))
+        assertFalse(f.manager.peerIdsAreMeshIds)
     }
 
     @Test fun stopFailurePreventsNextProtocolFromStarting() = runTest {

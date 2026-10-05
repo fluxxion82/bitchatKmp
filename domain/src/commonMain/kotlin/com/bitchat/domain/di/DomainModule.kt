@@ -22,7 +22,6 @@ import com.bitchat.domain.chat.GetChannelMembers
 import com.bitchat.domain.chat.GetGeohashParticipants
 import com.bitchat.domain.chat.GetJoinedChannels
 import com.bitchat.domain.chat.GetJoinedNamedChannels
-import com.bitchat.domain.chat.GetLoRaPeers
 import com.bitchat.domain.chat.GetMeshPeers
 import com.bitchat.domain.chat.JoinChannel
 import com.bitchat.domain.chat.LeaveChannel
@@ -32,7 +31,7 @@ import com.bitchat.domain.chat.ResolveChatFallback
 import com.bitchat.domain.chat.MarkPrivateChatRead
 import com.bitchat.domain.chat.ObserveChannelMessages
 import com.bitchat.domain.chat.ObserveLatestUnreadPrivatePeer
-import com.bitchat.domain.chat.ObserveLoRaPeers
+import com.bitchat.domain.chat.ObserveMeshChannelPeople
 import com.bitchat.domain.chat.ObservePeerSessionStates
 import com.bitchat.domain.chat.ObservePrivateChats
 import com.bitchat.domain.chat.ObserveSelectedPrivatePeer
@@ -178,8 +177,7 @@ val domainModule = module {
     single { GetJoinedNamedChannels(chatRepository = get(), chatEventBus = get()) }
     single { GetGeohashParticipants(chatRepository = get()) }
     single { GetMeshPeers(chatRepository = get()) }
-    single { GetLoRaPeers(chatRepository = get()) }
-    single { ObserveLoRaPeers(chatRepository = get()) }
+    single { ObserveMeshChannelPeople(chatRepository = get(), chatEventBus = get(), blockListRepository = get()) }
     single { GetChannelKeyCommitment(chatRepository = get()) }
     single { GetAvailableNamedChannels(chatRepository = get()) }
     single { GetChannelMembers(chatRepository = get()) }

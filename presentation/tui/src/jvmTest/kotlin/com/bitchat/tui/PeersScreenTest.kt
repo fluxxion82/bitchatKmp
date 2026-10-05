@@ -2,6 +2,8 @@ package com.bitchat.tui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import com.bitchat.domain.chat.model.MeshChannelPerson
+import com.bitchat.domain.chat.model.MeshChannelTransport
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.location.model.GeoPerson
 import com.jakewharton.mosaic.terminal.AnsiLevel
@@ -179,23 +181,38 @@ class PeersScreenTest {
         assertEquals(pad("    ??", "routed ", 20), peerRow(alice.copy(name = "\u4E2D\u6587"), 20, consoleSafe = true))
     }
 
-    @Test fun meshPeersSortUnreadThenFavouritesThenName() {
-        val entries = meshPeerEntries(
-            connectedPeers = listOf("id-carol", "id-bob", "id-alice", "id-dave00000000000"),
-            peerNicknames = mapOf("id-carol" to "carol", "id-bob" to "Bob", "id-alice" to "alice"),
-            peerDirect = mapOf("id-bob" to true),
+    @Test fun meshPeopleSortUnreadThenFavouritesThenNameBeforeLoRaOnlyPeople() {
+        val entries = meshChannelPeerEntries(
+            people = listOf(
+                MeshChannelPerson("id-carol", "carol", setOf(MeshChannelTransport.MESH), false, null),
+                MeshChannelPerson("id-bob", "Bob", setOf(MeshChannelTransport.MESH), false, null),
+                MeshChannelPerson("id-alice", "alice", setOf(MeshChannelTransport.MESH), false, null),
+                MeshChannelPerson("id-dave00000000000", "id-dave00000", setOf(MeshChannelTransport.MESH), false, null),
+                MeshChannelPerson("lora", "radio", setOf(MeshChannelTransport.LORA), false, Instant.fromEpochSeconds(0)),
+            ),
+            peerNicknames = emptyMap(),
             favoritePeers = setOf("id-carol"),
             unreadPeers = setOf("id-alice"),
         )
         assertEquals(
             listOf(
-                PeerEntry("id-alice", "alice", PeerTransport.Routed, favorite = false, unread = true),
-                PeerEntry("id-carol", "carol", PeerTransport.Routed, favorite = true, unread = false),
+                PeerEntry("id-alice", "alice", PeerTransport.Direct, favorite = false, unread = true),
+                PeerEntry("id-carol", "carol", PeerTransport.Direct, favorite = true, unread = false),
                 PeerEntry("id-bob", "Bob", PeerTransport.Direct),
-                PeerEntry("id-dave00000000000", "id-dave00000", PeerTransport.Routed), // No nickname: the ID's first 12.
+                PeerEntry("id-dave00000000000", "id-dave00000", PeerTransport.Direct),
+                PeerEntry("lora", "radio", PeerTransport.LoRa),
             ),
             entries,
         )
+    }
+
+    @Test fun meshPeopleRenderTheNewTransportTags() {
+        assertEquals(pad("    both", "direct+lora ", 30), peerRow(PeerEntry("both", "both", PeerTransport.DirectLoRa), 30, false))
+        assertEquals(pad("    mesh", "direct ", 30), peerRow(PeerEntry("mesh", "mesh", PeerTransport.Direct), 30, false))
+        assertEquals(pad("    lora", "lora ", 30), peerRow(PeerEntry("lora", "lora", PeerTransport.LoRa), 30, false))
+        assertEquals(pad("    private", "offline ", 30), peerRow(PeerEntry("private", "private", PeerTransport.Offline), 30, false))
+        assertEquals(pad("    saved", "offline+lora ", 30), peerRow(PeerEntry("saved", "saved", PeerTransport.OfflineLoRa), 30, false))
+        assertEquals(pad("    nostr", "nostr ", 30), peerRow(PeerEntry("nostr", "nostr", PeerTransport.Nostr), 30, false))
     }
 
     @Test fun geohashAndLoRaPeopleBecomeEntries() {

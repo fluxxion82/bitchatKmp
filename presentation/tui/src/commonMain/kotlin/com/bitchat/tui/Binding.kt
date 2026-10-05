@@ -29,8 +29,10 @@ fun commandFailureMessage(failure: CommandFailure): String = when (failure) {
 fun peerEntries(header: HeaderState, unreadPeers: Set<String>): List<PeerEntry> =
     if (header.selectedLocationChannel is Channel.Location) {
         geoPeerEntries(header.geohashPeople, PeerTransport.Nostr, header.favoritePeers, unreadPeers)
+    } else if (header.isMeshChannel) {
+        meshChannelPeerEntries(header.meshPeople, header.peerNicknames, header.favoritePeers, unreadPeers)
     } else {
-        meshPeerEntries(header.connectedPeers, header.peerNicknames, header.peerDirect, header.favoritePeers, unreadPeers) +
+        legacyMeshPeerEntries(header.connectedPeers, header.peerNicknames, header.peerDirect, header.favoritePeers, unreadPeers) +
             geoPeerEntries(header.loraPeers, PeerTransport.LoRa, header.favoritePeers, unreadPeers)
     }
 
@@ -62,13 +64,15 @@ fun dmChannelFor(header: HeaderState, key: String): Channel? {
  */
 fun dmPeerFor(header: HeaderState, key: String): PeerEntry {
     val channel = header.selectedChannel
-    val route = if (header.peerDirect[key] == true) PeerTransport.Direct else PeerTransport.Routed
+    val person = header.meshPeople.firstOrNull { it.id == key }
+    val route = person?.transport()
+        ?: if (header.peerDirect[key] == true) PeerTransport.Direct else PeerTransport.Routed
     return when {
         channel is Channel.NostrDM && channel.peerID == key ->
             PeerEntry(channel.fullPubkey, channel.displayName ?: key, PeerTransport.Nostr)
         channel is Channel.MeshDM && channel.peerID == key ->
-            PeerEntry(key, channel.displayName ?: header.peerNicknames[key] ?: key.take(12), route)
-        else -> PeerEntry(key, header.peerNicknames[key] ?: key.take(12), if (key.startsWith("nostr_")) PeerTransport.Nostr else route)
+            PeerEntry(key, channel.displayName ?: person?.displayName ?: header.peerNicknames[key] ?: key.take(12), route)
+        else -> PeerEntry(key, person?.displayName ?: header.peerNicknames[key] ?: key.take(12), if (key.startsWith("nostr_")) PeerTransport.Nostr else route)
     }
 }
 

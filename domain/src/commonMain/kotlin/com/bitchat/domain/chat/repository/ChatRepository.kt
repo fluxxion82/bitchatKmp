@@ -2,6 +2,7 @@ package com.bitchat.domain.chat.repository
 
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.BitchatMessageType
+import com.bitchat.domain.chat.model.LoRaPerson
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.lora.model.LoRaRegion
@@ -14,16 +15,13 @@ interface ChatRepository {
     suspend fun getMeshPeers(): List<GeoPerson>
 
     /**
-     * The people reachable over LoRa who are not connected over the Bluetooth mesh right now. A
-     * device reachable both ways appears once, as a mesh peer, for as long as that connection lasts.
+     * The people the active LoRa transport hears right now, under their own device ids and without
+     * any merging. A peer whose mesh identity is blocked is left out, judged at the time of the call.
      */
-    suspend fun getLoRaPeers(): List<GeoPerson>
+    suspend fun getLoRaPeers(): List<LoRaPerson>
 
-    /**
-     * The people reachable over LoRa who are not connected over the Bluetooth mesh right now. A
-     * device reachable both ways appears once, as a mesh peer, for as long as that connection lasts.
-     */
-    fun observeLoRaPeers(): Flow<List<GeoPerson>>
+    /** Emits when the LoRa transport's peers change. Read [getLoRaPeers] for the list as it is now. */
+    fun observeLoRaPeers(): Flow<List<LoRaPerson>>
 
     /**
      * Switch the active LoRa protocol at runtime.

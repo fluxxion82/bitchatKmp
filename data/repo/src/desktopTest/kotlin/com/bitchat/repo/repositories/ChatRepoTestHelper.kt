@@ -38,6 +38,7 @@ internal fun chatRepo(
     lora: LoRaProtocol? = null,
     mesh: BluetoothMeshService = mockk(relaxed = true),
     clock: Clock = Clock.System,
+    blockedMeshIds: Set<String> = emptySet(),
 ): ChatRepo {
     val contextFacade = object : CoroutinesContextFacade {
         override val io: CoroutineContext = dispatcher
@@ -90,7 +91,9 @@ internal fun chatRepo(
         geohashConversationCache = mockk<Cache<String, String>>(relaxed = true),
         channelPreferences = channelPreferences,
         userPreferences = userPreferences,
-        blockListPreferences = mockk<BlockListPreferences>(relaxed = true),
+        blockListPreferences = mockk<BlockListPreferences>(relaxed = true).also {
+            every { it.isMeshUserBlocked(any()) } answers { firstArg<String>().lowercase() in blockedMeshIds }
+        },
         participantTracker = mockk<NostrParticipantTracker>(relaxed = true),
         locationEventBus = mockk<LocationEventBus>(relaxed = true),
         chatEventBus = mockk<ChatEventBus>(relaxed = true),

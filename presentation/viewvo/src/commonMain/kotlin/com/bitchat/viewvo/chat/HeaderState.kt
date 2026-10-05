@@ -1,9 +1,12 @@
 package com.bitchat.viewvo.chat
 
+import com.bitchat.domain.chat.model.MeshChannelPerson
+import com.bitchat.domain.chat.model.MeshChannelTransport
 import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.location.model.PermissionState
 import com.bitchat.domain.user.model.FavoriteRelationship
 import com.bitchat.domain.location.model.Channel as LocationChannel
+import kotlin.time.Instant
 
 data class HeaderState(
     val selectedPrivatePeer: String? = null,
@@ -14,11 +17,9 @@ data class HeaderState(
     val favoritePeers: Set<String> = emptySet(),
     val favoriteRelationships: Map<String, FavoriteRelationship> = emptyMap(),
 
-    val connectedPeers: List<String> = emptyList(),
-    val peerNicknames: Map<String, String> = emptyMap(),
+    val nicknameDirectory: Map<String, String> = emptyMap(),
     val peerFingerprints: Map<String, String> = emptyMap(),
     val peerSessionStates: Map<String, String> = emptyMap(),
-    val peerDirect: Map<String, Boolean> = emptyMap(),
 
     val joinedChannels: Set<String> = emptySet(),
     val unreadChannelMessages: Map<String, Int> = emptyMap(),
@@ -26,7 +27,7 @@ data class HeaderState(
 
     val selectedLocationChannel: LocationChannel = LocationChannel.Mesh,
     val geohashPeople: List<GeoPerson> = emptyList(),
-    val loraPeers: List<GeoPerson> = emptyList(),
+    val meshPeople: List<MeshChannelPerson> = emptyList(),
     val permissionState: PermissionState = PermissionState.DENIED,
     val locationServicesEnabled: Boolean = false,
     val isCurrentChannelBookmarked: Boolean = false,
@@ -41,5 +42,51 @@ data class HeaderState(
     val torRunning: Boolean = false,
     val torBootstrapPercent: Int = 0,
 
-    val showSidebar: Boolean = false
-)
+    val showSidebar: Boolean = false,
+) {
+    /** Whether the people of the selected channel are the mesh people rather than a geohash's. */
+    val isMeshChannel: Boolean
+        get() = selectedLocationChannel is LocationChannel.Mesh || selectedLocationChannel is LocationChannel.MeshDM
+
+    // The views below have no storage of their own: they are views of [meshPeople] (on a mesh
+    // channel) or [geohashPeople], so they cannot disagree with each other or with the list.
+
+    /**
+     * What a peer id or conversation key is called. On a mesh channel a person who is reachable right
+     * now, over the mesh or the LoRa radio, is called what the people list calls them, whatever
+     * [nicknameDirectory] still holds: the list folded a radio peer into that entry only because the
+     * two names were equal, so showing any other name would hide the radio peer's own. A person who is
+     * only a saved private chat keeps the name the directory knows, and the chat's own name (the
+     * sender of its latest message) only fills a gap: a later message cannot rename a conversation.
+     */
+    val peerNicknames: Map<String, String>
+        get() = if (isMeshChannel) {
+            val listed = meshPeople.filterNot { it.isLoRaOnly }
+            val (reachable, savedOnly) = listed.partition { it.transports.isNotEmpty() }
+            savedOnly.associate { it.id to it.displayName } +
+                nicknameDirectory +
+                reachable.associate { it.id to it.displayName }
+        } else {
+            nicknameDirectory
+        }
+
+    /** The listed people's ids: on a mesh channel every mesh person that is not LoRa-only. */
+    val connectedPeers: List<String>
+        get() = if (isMeshChannel) {
+            meshPeople.filterNot { it.isLoRaOnly }.map { it.id }
+        } else {
+            geohashPeople.map { it.displayName }
+        }
+
+    val peerDirect: Map<String, Boolean>
+        get() = if (isMeshChannel) {
+            meshPeople.filter { MeshChannelTransport.MESH in it.transports }.associate { it.id to true }
+        } else {
+            geohashPeople.associate { it.id to false }
+        }
+
+    /** The people known only from the LoRa radio; with [connectedPeers] they are all of [meshPeople]. */
+    val loraPeers: List<GeoPerson>
+        get() = meshPeople.filter { it.isLoRaOnly }
+            .map { GeoPerson(it.id, it.displayName, it.lastSeen ?: Instant.DISTANT_PAST) }
+}

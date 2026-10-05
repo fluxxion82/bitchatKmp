@@ -40,7 +40,7 @@ val viewModelModule = module {
             saveUserStateAction = get(),
             markPrivateChatRead = get(),
             clearAllData = get(),
-            observeLoRaPeers = get(),
+            observeMeshChannelPeople = get(),
             clearSelectedPrivatePeer = get(),
             resolveChatFallback = get(),
         )

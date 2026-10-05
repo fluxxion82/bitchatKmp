@@ -1,6 +1,8 @@
 package com.bitchat.tui
 
 import com.bitchat.domain.chat.model.failure.CommandFailure
+import com.bitchat.domain.chat.model.MeshChannelPerson
+import com.bitchat.domain.chat.model.MeshChannelTransport
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.location.model.GeohashChannelLevel
@@ -79,22 +81,49 @@ class BindingTest {
 
     private val seen = Instant.fromEpochSeconds(0)
 
-    @Test fun meshChannelsListMeshPeersThenLoRaPeers() {
+    @Test fun aMeshRowIsCalledWhatTheHeaderCallsThatPeer() {
         val header = HeaderState(
             selectedLocationChannel = Channel.Mesh,
-            connectedPeers = listOf("id-bob", "id-alice"),
-            peerNicknames = mapOf("id-bob" to "bob", "id-alice" to "alice"),
-            peerDirect = mapOf("id-bob" to true),
-            favoritePeers = setOf("id-bob"),
-            loraPeers = listOf(GeoPerson("!a1b2c3d4", "lora-node", seen)),
+            nicknameDirectory = mapOf("nostr_known" to "alice", "folded" to "mallory", "lora-radio" to "not used"),
+            meshPeople = listOf(
+                MeshChannelPerson("nostr_known", "mallory", emptySet(), true, null),
+                MeshChannelPerson("folded", "radio alice", setOf(MeshChannelTransport.LORA), true, seen),
+                MeshChannelPerson("lora-radio", "radio", setOf(MeshChannelTransport.LORA), false, seen),
+            ),
         )
         assertEquals(
             listOf(
-                PeerEntry("id-alice", "alice", PeerTransport.Routed, favorite = false, unread = true),
-                PeerEntry("id-bob", "bob", PeerTransport.Direct, favorite = true),
-                PeerEntry("!a1b2c3d4", "lora-node", PeerTransport.LoRa),
+                PeerEntry("nostr_known", "alice", PeerTransport.Routed),
+                PeerEntry("folded", "radio alice", PeerTransport.OfflineLoRa),
+                PeerEntry("lora-radio", "radio", PeerTransport.LoRa),
             ),
-            peerEntries(header, unreadPeers = setOf("id-alice")),
+            peerEntries(header, unreadPeers = emptySet()),
+        )
+    }
+
+    @Test fun meshChannelsMapEveryReachabilityOnce() {
+        val header = HeaderState(
+            selectedLocationChannel = Channel.Mesh,
+            meshPeople = listOf(
+                MeshChannelPerson("both", "both", setOf(MeshChannelTransport.MESH, MeshChannelTransport.LORA), false, null),
+                MeshChannelPerson("mesh", "mesh", setOf(MeshChannelTransport.MESH), false, null),
+                MeshChannelPerson("lora", "lora", setOf(MeshChannelTransport.LORA), false, seen),
+                MeshChannelPerson("private", "private", emptySet(), true, null),
+                MeshChannelPerson("nostr_saved", "nostr", emptySet(), true, null),
+                MeshChannelPerson("saved", "saved", setOf(MeshChannelTransport.LORA), true, seen),
+            ),
+        )
+        assertEquals(
+            listOf(
+                PeerEntry("both", "both", PeerTransport.DirectLoRa),
+                PeerEntry("mesh", "mesh", PeerTransport.Direct),
+                PeerEntry("nostr_saved", "nostr", PeerTransport.Routed),
+                PeerEntry("private", "private", PeerTransport.Offline),
+                // A private chat heard over LoRa stays among the rows a chat can be opened from.
+                PeerEntry("saved", "saved", PeerTransport.OfflineLoRa),
+                PeerEntry("lora", "lora", PeerTransport.LoRa),
+            ),
+            peerEntries(header, unreadPeers = emptySet()),
         )
     }
 
@@ -103,9 +132,11 @@ class BindingTest {
         // follows the conversation the way that screen does.
         val mesh = HeaderState(
             selectedLocationChannel = Channel.Mesh,
-            connectedPeers = listOf("id-bob", "id-alice"),
-            peerNicknames = mapOf("id-bob" to "bob#a1b2", "id-alice" to "alice"),
-            loraPeers = listOf(GeoPerson("!a1b2c3d4", "lora-node", seen)),
+            meshPeople = listOf(
+                MeshChannelPerson("id-bob", "bob#a1b2", setOf(MeshChannelTransport.MESH), false, null),
+                MeshChannelPerson("id-alice", "alice", setOf(MeshChannelTransport.MESH), false, null),
+                MeshChannelPerson("lora", "lora-node", setOf(MeshChannelTransport.LORA), false, seen),
+            ),
         )
         assertEquals(listOf("alice", "bob#a1b2", "lora-node"), chatPeople(mesh))
 
@@ -119,8 +150,6 @@ class BindingTest {
     @Test fun locationChannelsListTheirPeople() {
         val header = HeaderState(
             selectedLocationChannel = Channel.Location(GeohashChannelLevel.CITY, "9q8yy"),
-            // Names here, not ids: MainViewModel fills connectedPeers with display names for location channels.
-            connectedPeers = listOf("dora"),
             geohashPeople = listOf(GeoPerson("npub-dora", "dora", seen)),
         )
         assertEquals(listOf(PeerEntry("npub-dora", "dora", PeerTransport.Nostr)), peerEntries(header, unreadPeers = emptySet()))
@@ -156,14 +185,21 @@ class BindingTest {
         val bob = Channel.MeshDM("b0b", "bob")
         assertEquals(
             PeerEntry("b0b", "bob", PeerTransport.Direct),
-            dmPeerFor(HeaderState(selectedPrivatePeer = "b0b", selectedChannel = bob, peerDirect = mapOf("b0b" to true)), "b0b"),
+            dmPeerFor(
+                HeaderState(
+                    selectedPrivatePeer = "b0b",
+                    selectedChannel = bob,
+                    meshPeople = listOf(MeshChannelPerson("b0b", "bob", setOf(MeshChannelTransport.MESH), false, null)),
+                ),
+                "b0b",
+            ),
         )
         val dora = Channel.NostrDM("nostr_3bf0c63fcb934634", "3bf0c63fcb93463407af", "9q8yy", "dora")
         val entry = dmPeerFor(HeaderState(selectedPrivatePeer = dora.peerID, selectedChannel = dora), dora.peerID)
         assertEquals(PeerEntry("3bf0c63fcb93463407af", "dora", PeerTransport.Nostr), entry)
         assertEquals(dora.peerID, dmConversationKey(entry))
         // Header fields caught mid-update: named from the nicknames, else the key.
-        assertEquals("m4llory", dmPeerFor(HeaderState(peerNicknames = mapOf("id-m" to "m4llory")), "id-m").name)
+        assertEquals("m4llory", dmPeerFor(HeaderState(nicknameDirectory = mapOf("id-m" to "m4llory")), "id-m").name)
         assertEquals("0011223344556677".take(12), dmPeerFor(HeaderState(), "0011223344556677").name)
     }
 }
