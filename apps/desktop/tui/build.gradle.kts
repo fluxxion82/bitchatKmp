@@ -16,7 +16,8 @@ plugins {
 // (see settings.gradle.kts). Mosaic opens the controlling tty, not stdout, so run the installDist
 // launcher from a real terminal; `run` cannot work.
 
-version = "0.0.1"
+// Declared once for both desktop apps, in apps/desktop/build.gradle.kts.
+version = parent!!.version
 
 val generatedBuildInfo = layout.buildDirectory.dir("generated/desktopTuiBuildInfo")
 val preparedRuntimeLibs = layout.buildDirectory.dir("preparedRuntimeLibs")

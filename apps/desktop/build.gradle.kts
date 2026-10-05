@@ -2,6 +2,10 @@ plugins {
     kotlin("jvm")
 }
 
+// The one version both desktop apps report. :apps:desktop:compose (its installers) and
+// :apps:desktop:tui (--version and Settings) read it from here, so they cannot drift apart.
+version = "1.0.0"
+
 dependencies {
     implementation(project(":domain"))
     implementation(project(":data:local:platform"))

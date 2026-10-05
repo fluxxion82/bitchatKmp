@@ -6,7 +6,8 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
-version = "1.0.0"
+// Declared once for both desktop apps, in apps/desktop/build.gradle.kts.
+version = parent!!.version
 
 val bleNativeProp = (findProperty("bleNative") as? String)?.lowercase()
 // Log levels for the SLF4J loggers configured in src/main/resources/logback.xml. JavaExec forks its
@@ -71,7 +72,7 @@ compose.desktop {
             // (and Rpm additionally needs the `rpm-build` package installed).
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
             packageName = "bitchat"
-            packageVersion = "1.0.0"
+            packageVersion = project.version.toString()
             appResourcesRootDir.set(appResourcesRoot)
 
             macOS {
