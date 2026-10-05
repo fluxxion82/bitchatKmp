@@ -55,15 +55,16 @@ class ChatRepoLoRaPeersTest {
         }
     }
 
-    @Test fun aPrivateChatPeerIsNotReturnedAsALoRaPeer() = runTest {
+    @Test fun aPrivateChatAloneNeverHidesALoRaPeer() = runTest {
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
         try {
             val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), lora = FakeLoRaProtocol())
             runCurrent()
-            assertEquals(listOf("lora-x", "lora-Y"), chatRepo.observeLoRaPeers().first().map { it.id })
 
+            // Anyone in Bluetooth range can send a private message under any peer id; a peer that is
+            // not connected over the mesh must stay listed as the LoRa peer it is.
             chatRepo.didReceiveMessage(
                 BitchatMessage(
                     id = "dm-1",
@@ -76,8 +77,8 @@ class ChatRepoLoRaPeersTest {
             )
             runCurrent()
 
-            assertEquals(listOf("lora-Y"), chatRepo.getLoRaPeers().map { it.id })
-            assertEquals(listOf("lora-Y"), chatRepo.observeLoRaPeers().first().map { it.id })
+            assertEquals(listOf("lora-x", "lora-Y"), chatRepo.getLoRaPeers().map { it.id })
+            assertEquals(listOf("lora-x", "lora-Y"), chatRepo.observeLoRaPeers().first().map { it.id })
         } finally {
             scope.cancel()
         }

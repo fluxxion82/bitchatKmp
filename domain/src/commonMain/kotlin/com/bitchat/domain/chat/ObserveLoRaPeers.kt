@@ -5,8 +5,8 @@ import com.bitchat.domain.location.model.GeoPerson
 import kotlinx.coroutines.flow.Flow
 
 /**
- * The people reachable over LoRa whom the mesh does not already know: not connected over Bluetooth
- * and not the other side of a private chat. Such a device appears once, as a mesh peer.
+ * The people reachable over LoRa who are not connected over the Bluetooth mesh right now. A device
+ * reachable both ways appears once, as a mesh peer, for as long as the mesh connection lasts.
  *
  * LoRa peers are discovered via heartbeat broadcasts over LoRa radio.
  * Peers are automatically removed from the list if they haven't been

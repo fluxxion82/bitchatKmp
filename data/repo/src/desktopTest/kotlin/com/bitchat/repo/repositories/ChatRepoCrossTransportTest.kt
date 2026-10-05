@@ -50,7 +50,7 @@ class ChatRepoCrossTransportTest {
         }
     }
 
-    @Test fun loRaThenBleShowsTheBleMessageOnce() = runTest {
+    @Test fun loRaThenBleKeepsTheFirstCopyAndNeverReplacesIt() = runTest {
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
 
@@ -61,12 +61,11 @@ class ChatRepoCrossTransportTest {
 
             lora.receive("alice:hello")
             runCurrent()
+            val shownFirst = chatRepo.getMeshMessages().single()
             chatRepo.didReceiveMessage(meshMessage())
             runCurrent()
 
-            val messages = chatRepo.getMeshMessages()
-            assertEquals(1, messages.size)
-            assertEquals("mesh-1", messages.single().id)
+            assertEquals(listOf(shownFirst), chatRepo.getMeshMessages())
         } finally {
             scope.cancel()
         }
@@ -188,15 +187,10 @@ class ChatRepoCrossTransportTest {
             runCurrent()
             chatRepo.clearMessages(Channel.Mesh)
             clock.advance()
-            lora.receive("alice:hello")
-            runCurrent()
-            clock.advance()
             chatRepo.didReceiveMessage(meshMessage())
             runCurrent()
 
-            val messages = chatRepo.getMeshMessages()
-            assertEquals(1, messages.size)
-            assertEquals("mesh-1", messages.single().id)
+            assertEquals(listOf("mesh-1"), chatRepo.getMeshMessages().map { it.id })
         } finally {
             scope.cancel()
         }

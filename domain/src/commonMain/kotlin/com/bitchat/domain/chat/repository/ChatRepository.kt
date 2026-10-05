@@ -14,14 +14,14 @@ interface ChatRepository {
     suspend fun getMeshPeers(): List<GeoPerson>
 
     /**
-     * The people reachable over LoRa whom the mesh does not already know: not connected over
-     * Bluetooth and not the other side of a private chat. Such a device appears once, as a mesh peer.
+     * The people reachable over LoRa who are not connected over the Bluetooth mesh right now. A
+     * device reachable both ways appears once, as a mesh peer, for as long as that connection lasts.
      */
     suspend fun getLoRaPeers(): List<GeoPerson>
 
     /**
-     * The people reachable over LoRa whom the mesh does not already know: not connected over
-     * Bluetooth and not the other side of a private chat. Such a device appears once, as a mesh peer.
+     * The people reachable over LoRa who are not connected over the Bluetooth mesh right now. A
+     * device reachable both ways appears once, as a mesh peer, for as long as that connection lasts.
      */
     fun observeLoRaPeers(): Flow<List<GeoPerson>>
 
