@@ -149,7 +149,7 @@ class SingleInstanceLockTest {
 
         SingleInstanceLock.acquireOrExit("bitchat-embedded", directory, stderr = { lines += it }, exit = { statuses += it })
 
-        assertEquals(listOf("another bitchat embedded app is running (bitchat-tui, pid 812 on /dev/tty1)"), lines)
+        assertEquals(listOf("another bitchat embedded app is running (bitchat-tui, pid 812 on /dev/tty1); attach with ~/bitchat-tui-attach"), lines)
         assertEquals(listOf(75), statuses)
         assertEquals(75, SingleInstanceLock.REFUSED_EXIT_STATUS)
         close(holder.descriptor)

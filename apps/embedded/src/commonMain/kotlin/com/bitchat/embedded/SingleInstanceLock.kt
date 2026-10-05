@@ -262,5 +262,7 @@ internal data class Holder(val name: String?, val pid: Int?, val tty: String?) {
 internal fun refusalLine(holder: Holder?): String {
     val process = listOfNotNull(holder?.pid?.let { "pid $it" }, holder?.tty?.let { "on $it" }).joinToString(" ")
     val who = listOfNotNull(holder?.name, process.ifEmpty { null }).joinToString(", ")
-    return "another bitchat embedded app is running" + if (who.isEmpty()) "" else " ($who)"
+    // The terminal UI can be shared: its unit runs it in a tmux session an SSH login attaches to.
+    val attach = if (holder?.name == "bitchat-tui") "; attach with ~/bitchat-tui-attach" else ""
+    return "another bitchat embedded app is running" + (if (who.isEmpty()) "" else " ($who)") + attach
 }

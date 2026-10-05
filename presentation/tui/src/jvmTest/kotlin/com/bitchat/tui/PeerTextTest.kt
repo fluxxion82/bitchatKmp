@@ -73,10 +73,11 @@ class PeerTextTest {
     }
 
     @Test fun consoleSafeModeIsForTheLinuxConsoleOnly() {
-        assertTrue(consoleSafeFor("linux"))
-        assertTrue(consoleSafeFor("linux-16color"))
-        assertFalse(consoleSafeFor("xterm-256color"))
-        assertFalse(consoleSafeFor(null))
+        assertTrue(consoleSafeFor("linux", forced = false))
+        assertTrue(consoleSafeFor("linux-16color", forced = false))
+        assertTrue(consoleSafeFor("screen", forced = true))
+        assertFalse(consoleSafeFor("xterm-256color", forced = false))
+        assertFalse(consoleSafeFor(null, forced = false))
     }
 
     @Test fun displayTextMapsGlyphsOnlyInConsoleMode() = runTest {

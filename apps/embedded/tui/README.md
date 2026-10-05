@@ -35,10 +35,10 @@ PI_USER=user scripts/deploy-pi.sh --ui tui --host tui-pi
 
 Each release is staged under
 `/opt/bitchat-tui/releases/<sha12>[-dirty]-<debug|release>-<digest8>/`, then selected by an
-atomic `/opt/bitchat-tui/releases/current` symlink. A release contains the executable, rendered
-`bitchat-tui.service`, `bluetooth-bitchat-ble.conf`, `BUILD_INFO`, and `SHA256SUMS`. The release
-digest covers the executable, rendered unit, and bluetoothd drop-in; it does not depend on the
-deployment timestamp in `BUILD_INFO`.
+atomic `/opt/bitchat-tui/releases/current` symlink. A release contains the executable, launcher,
+tmux config, attach script, rendered `bitchat-tui.service`, `bluetooth-bitchat-ble.conf`,
+`BUILD_INFO`, and `SHA256SUMS`. The release digest covers that payload but not the deployment
+timestamp in `BUILD_INFO`.
 
 `--dry-run` does the local build/stage and prints the release, `BUILD_INFO`, manifest, and staged
 size without SSH, rsync, changing the current link, installing a unit, or restarting anything.
@@ -52,19 +52,23 @@ account is different:
 sudo install -d -o sterling -g sterling -m 755 /opt/bitchat-tui /opt/bitchat-tui/releases
 sudo install -o sterling -g sterling -m 644 /dev/null /opt/bitchat-tui/bitchat-tui.service
 sudo usermod -aG systemd-journal sterling
+sudo apt install tmux
 sudo systemctl enable --now getty@tty2.service
 # Only give tty1 away once tty2 really has a login on it: the && is load-bearing. Run this over SSH,
 # or from tty2 itself - stopping tty1's getty kills a login session on tty1.
 systemctl is-active getty@tty2.service && sudo systemctl disable --now getty@tty1.service
 ```
 
-`bitchat-tui.service` owns tty1: there is no login there. At the device, `Alt+F2` (or `Alt+Right`)
-switches to the login console on tty2 and `Alt+F1` switches back. `Ctrl+C` only restarts the app
+`bitchat-tui.service` owns tty1: its launcher and console tmux client use it, while the app runs
+in tmux's pty. There is no login there. At the device, `Alt+F2` (or `Alt+Right`) switches to the
+login console on tty2 and `Alt+F1` switches back. `Ctrl+C` only restarts the app
 (the unit has `Restart=always`, back after five seconds); to stop it, run
 `sudo systemctl stop bitchat-tui.service` from tty2 or over SSH, and `start` to bring it back.
 Enable `getty@tty2.service` before disabling tty1's getty to
 keep a local login console reachable. Without tty2 (or another configured console), SSH is the
 only way back in if the TUI fails. Reconnect after `usermod` so journal permissions take effect.
+Without tmux, the launcher deliberately runs the kexe directly on tty1 as before; SSH attach is
+then unavailable until `sudo apt install tmux` and a restart.
 To return tty1 to a login console after intentionally disabling the TUI, run:
 
 ```sh
@@ -114,10 +118,11 @@ inactive, tty1 shows an interactive frame, and `journalctl -b -g 'ordering cycle
 Both embedded binaries take one lock before anything else (`SingleInstanceLock` in `:apps:embedded`,
 a `flock` on `~/.bitchat/instance.lock`), because they share the LoRa radio, the Bluetooth adapter,
 the identity and `~/.bitchat`: two at once split what is received between them. While the unit
-runs, `~/bitchat-tui.kexe` over SSH prints
-`another bitchat embedded app is running (bitchat-tui, pid 812 on /dev/tty1)` on stderr and exits
+runs, `~/bitchat-tui.kexe` over SSH prints the one-line holder refusal (the shared app is in a
+tmux `/dev/pts/N`) on stderr and exits
 with status 75 before it changes the terminal, opens `~/.bitchat/tui.log`, or touches the radio or
-Bluetooth; `--version` never takes the lock. To run it by hand, stop the unit first
+Bluetooth; `--version` never takes the lock. When the holder is the shared TUI, the same one-line
+refusal ends `; attach with ~/bitchat-tui-attach`. To run it by hand, stop the unit first
 (`sudo systemctl stop bitchat-tui.service`) and `start` it afterwards. The lock is the kernel's, not
 the file's: it ends with its holder (exit, crash, power cut), so the file left behind never blocks a
 start, and a lock that cannot be set up at all only prints a warning and the app starts without it.
@@ -130,7 +135,8 @@ as another user (`sudo`) is not caught.
 
 ## Logs, Bluetooth, and rollback
 
-Mosaic frames render on tty1. Its stdout and stderr remain in the journal:
+With tmux, Mosaic frames render in its shared pty, shown on tty1 and through SSH; direct fallback
+renders on tty1. Its stdout and stderr remain in the journal:
 
 ```sh
 journalctl -u bitchat-tui.service -f
@@ -149,18 +155,37 @@ sudo install -D -m 644 -o root -g root /opt/bitchat-tui/releases/current/bluetoo
 sudo systemctl daemon-reload && sudo systemctl restart bluetooth.service && sudo systemctl restart bitchat-tui.service
 ```
 
-The convenience link `~/bitchat-tui.kexe` follows the TUI `current` release. On migration from
-a regular hand-installed file, the deployer moves it to `~/bitchat-tui.kexe.prev.bak` only when
-that name does not exist; it never overwrites that backup and otherwise uses a dated
-`.stale-YYYY-MM-DD` name. A failure to update this convenience link is only a warning.
+The convenience links `~/bitchat-tui.kexe` and `~/bitchat-tui-attach` follow the TUI `current`
+release. `~/bitchat-tui-attach` over SSH shows the app that is running on tty1: the same screen,
+and keys typed on either side go to the one app. Every key belongs to the app, so there is no
+detach key: leave by closing the terminal window, or with ssh's own escape (`Enter`, `~`, `.`).
+The app keeps running. `Ctrl+C` is the app's quit key from either side: it ends the app for both,
+and the unit starts it again. The most recently resized screen sets the shared size, so the
+other screen is clipped when smaller or padded when larger. On migration from a regular
+hand-installed file, the deployer preserves each link's `.prev.bak` when free, otherwise a dated
+`.stale-YYYY-MM-DD` name. A failure to update either convenience link is only a warning.
+
+If an SSH terminal such as Ghostty reports an unknown `TERM`, the attach script uses
+`xterm-256color`; the app still uses the shared console-safe rendering.
+
+`scripts/test-tui-launcher.sh` (needs Docker) runs the launcher, the tmux config and the attach
+script against the tmux the boards install, with a stand-in for the app: start with only stdin a
+terminal as under the unit, every key reaching the app, a second client with an unknown `TERM`,
+re-attach of the console, exit statuses 0 and 75, a dead tmux server, and both fallbacks to a
+direct start. Run it after touching any of those three files.
 
 To roll back, select a prior TUI release only; this never touches the Compose release tree:
 
 ```sh
 ln -sfn /opt/bitchat-tui/releases/<old> /opt/bitchat-tui/releases/current.tmp \
   && mv -T /opt/bitchat-tui/releases/current.tmp /opt/bitchat-tui/releases/current \
+  && cp /opt/bitchat-tui/releases/current/bitchat-tui.service /opt/bitchat-tui/bitchat-tui.service \
+  && sudo install -m 644 -o root -g root /opt/bitchat-tui/bitchat-tui.service /etc/systemd/system/bitchat-tui.service \
+  && sudo systemctl daemon-reload \
   && sudo systemctl restart bitchat-tui.service
 ```
 
-Successful deploys print the equivalent SSH rollback command when they replaced a different
-prior TUI release. Old release directories are retained until the owner removes them manually.
+Reinstalling the selected release's rendered unit is required when rolling back to a pre-tmux
+release, because its `ExecStart` points directly to the kexe. Successful deploys print the
+equivalent SSH rollback command when they replaced a different prior TUI release. Old release
+directories are retained until the owner removes them manually.

@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+# Stand-in for bitchat-tui.kexe: raw mode on its controlling terminal like Mosaic, logs every byte
+# it reads, exits 0 on Ctrl+C and 75 on "x". stdout carries the lines the real app logs first.
+import os, sys, tty, termios, select, signal, fcntl, struct
+print("=== bitchat TUI ===", flush=True); print("fake identity line", flush=True)
+fd = os.open("/dev/tty", os.O_RDWR)
+def size():
+    r, c, _, _ = struct.unpack("HHHH", fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8)); return f"size={r} {c}"
+with open("/tmp/app.env", "w") as f:
+    f.write(f"TERM={os.environ.get('TERM')}\nFORCE={os.environ.get('BITCHAT_TUI_FORCE_CONSOLE_SAFE','unset')}\ntty={os.ttyname(0)}\n{size()}\n")
+    f.write("sigign=" + open("/proc/self/status").read().split("SigIgn:")[1].split()[0] + "\n")
+signal.signal(signal.SIGWINCH, lambda *_: open("/tmp/app.env", "a").write(size() + "\n"))
+old = termios.tcgetattr(fd); tty.setraw(fd)
+os.write(fd, b"\033[2J\033[HFAKE-APP-SCREEN\r\n")
+log = os.open("/tmp/keys.log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+def leave(code, why):
+    termios.tcsetattr(fd, termios.TCSADRAIN, old); print(why, flush=True); sys.exit(code)
+while True:
+    try: r, _, _ = select.select([fd], [], [], 0.5)
+    except InterruptedError: continue
+    if not r: continue
+    data = os.read(fd, 64)
+    if not data: sys.exit(1)
+    for b in data:
+        os.write(log, b"%02x " % b)
+        if b == 3: leave(0, "bye ctrl-c")
+        if b == ord("x"): leave(75, "bye x")

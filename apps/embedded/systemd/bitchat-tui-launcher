@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -u
+
+self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+self="$self_dir/$(basename -- "$0")"
+binary="$self_dir/bitchat-tui.kexe"
+config="$self_dir/bitchat-tui.tmux.conf"
+session=bitchat-tui
+socket=bitchat-tui
+
+# Runs the app on this terminal with no tmux in between, which is what the unit did before the
+# shared session existed. Every way the shared session can fail to come up ends here, so a missing
+# or broken tmux costs the SSH attach and nothing else. The reason goes to the journal.
+direct() {
+  echo "bitchat-tui-launcher: $1; running directly on this terminal (no SSH attach)" >&2
+  if [[ -n "${state_dir:-}" ]]; then
+    cleanup
+    trap - EXIT
+  fi
+  exec "$binary"
+}
+
+if [[ "${1:-}" == --pane ]]; then
+  status_file=${2:?missing status file}
+  tmp_file="$status_file.tmp"
+  write_status() {
+    rc=$?
+    printf '%s\n' "$rc" > "$tmp_file" && mv -f -- "$tmp_file" "$status_file"
+    trap - EXIT
+    exit "$rc"
+  }
+  trap write_status EXIT
+  trap 'exit 129' HUP
+  trap 'exit 143' TERM
+  "$binary" 2>&1 | "$(command -v systemd-cat)" -t bitchat-tui
+  exit "${PIPESTATUS[0]}"
+fi
+
+tmux_bin=$(command -v tmux 2>/dev/null) || direct "tmux is not installed"
+command -v systemd-cat >/dev/null 2>&1 || direct "systemd-cat is missing"
+[[ -x "$binary" && -r "$config" ]] || direct "the release has no tmux config"
+
+umask 077
+state_dir=$(mktemp -d /tmp/bitchat-tui.XXXXXXXX 2>/dev/null) || direct "no place for the exit status"
+status_file="$state_dir/exit"
+cleanup() {
+  rm -f -- "$status_file" "$status_file.tmp"
+  rmdir -- "$state_dir" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+pane_command="exec '$self' --pane '$status_file'"
+"$tmux_bin" -u -L "$socket" kill-server >/dev/null 2>&1 || true
+if ! "$tmux_bin" -u -L "$socket" -f "$config" \
+  new-session -d -s "$session" "$pane_command" >/dev/null 2>&1; then
+  direct "tmux could not start the session"
+fi
+
+# The console client is attached for as long as the session lives; one that is killed or detached
+# is attached again, so tty1 is never left without the app. A client that cannot attach at all
+# returns at once, every time: after five of those in a row the app would be running where nobody
+# at the console can see it, so the session is ended and the app started directly instead.
+quick_returns=0
+while [[ ! -s "$status_file" ]]; do
+  attached_at=$SECONDS
+  "$tmux_bin" -u -L "$socket" -f "$config" attach-session -t "$session" 1>&0 2>/dev/null || true
+  [[ -s "$status_file" ]] && break
+  "$tmux_bin" -u -L "$socket" -f "$config" has-session -t "$session" >/dev/null 2>&1 || exit 1
+  if (( SECONDS - attached_at < 2 )); then
+    quick_returns=$((quick_returns + 1))
+  else
+    quick_returns=0
+  fi
+  if (( quick_returns >= 5 )); then
+    "$tmux_bin" -u -L "$socket" kill-server >/dev/null 2>&1 || true
+    direct "the console could not attach to the tmux session"
+  fi
+  sleep 0.2
+done
+
+IFS= read -r code < "$status_file" || exit 1
+case "$code" in
+  ''|*[!0-9]*|*[!0-9][!0-9][!0-9]*) exit 1 ;;
+esac
+(( code <= 255 )) || exit 1
+exit "$code"

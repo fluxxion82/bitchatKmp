@@ -90,8 +90,8 @@ fun consoleSafe(text: String): String {
  */
 val LocalConsoleSafe: ProvidableCompositionLocal<Boolean> = staticCompositionLocalOf { false }
 
-/** Whether a terminal of type [term] is the Linux virtual console, whose fonts lack wide glyphs. */
-fun consoleSafeFor(term: String?): Boolean = term == "linux" || term?.startsWith("linux-") == true
+/** Whether [term] is the Linux virtual console, or console-safe rendering is [forced]. */
+fun consoleSafeFor(term: String?, forced: Boolean): Boolean = forced || term == "linux" || term?.startsWith("linux-") == true
 
 /** [text] sanitized and, when [LocalConsoleSafe] is on, console-safe: ready for a Text. */
 @Composable

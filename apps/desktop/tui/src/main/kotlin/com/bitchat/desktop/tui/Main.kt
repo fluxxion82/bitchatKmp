@@ -72,7 +72,7 @@ fun main(args: Array<String>) {
                 runBitchatTui(
                     initialize = { koin.get<InitializeApplication>()(Unit) },
                     viewModels = { koin.tuiViewModels() },
-                    consoleSafe = consoleSafeFor(System.getenv("TERM")),
+                    consoleSafe = consoleSafeFor(System.getenv("TERM"), forced = false),
                     background = background,
                     notice = JvmTuiLog.notice,
                 )

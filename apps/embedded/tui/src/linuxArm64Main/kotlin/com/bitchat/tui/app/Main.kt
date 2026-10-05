@@ -48,7 +48,10 @@ fun main(args: Array<String>) {
     if (LogPolicy.messageBodies) println("${LogPolicy.ENV_VAR} is set: message bodies are logged")
 
     // The Linux console's fonts lack wide glyphs; decided once, here (see LocalConsoleSafe).
-    val consoleSafe = consoleSafeFor(getenv("TERM")?.toKString())
+    val consoleSafe = consoleSafeFor(
+        term = getenv("TERM")?.toKString(),
+        forced = getenv("BITCHAT_TUI_FORCE_CONSOLE_SAFE")?.toKString() == "1",
+    )
     val app = TuiApplication(buildIdentity)
     // Rotation, and the Locations view model's teardown, outlive the screens that start them.
     val background = CoroutineScope(Dispatchers.Default)

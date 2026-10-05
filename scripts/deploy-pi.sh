@@ -10,16 +10,17 @@
 #            /opt/bitchat/bitchat.service                               copy owned by the deploy user
 #                                                                         that the sudoers rule lets us install
 #            ~/bitchat-embedded.kexe -> .../current/bitchat-embedded.kexe
-#   TUI:     /opt/bitchat-tui/releases/<sha12>[-dirty]-<build>-<digest8>/ binary, SHA256SUMS,
-#                                                                         BUILD_INFO, bitchat-tui.service,
-#                                                                         bluetooth-bitchat-ble.conf
+#   TUI:     /opt/bitchat-tui/releases/<sha12>[-dirty]-<build>-<digest8>/ binary, launcher, tmux config,
+#                                                                         attach script, SHA256SUMS, BUILD_INFO,
+#                                                                         bitchat-tui.service, bluetooth-bitchat-ble.conf
 #            /opt/bitchat-tui/releases/current -> <release dir>         swapped atomically (ln + mv -T)
 #            /opt/bitchat-tui/bitchat-tui.service                       copy owned by the deploy user
 #            ~/bitchat-tui.kexe -> .../current/bitchat-tui.kexe
+#            ~/bitchat-tui-attach -> .../current/bitchat-tui-attach
 #
 # <digest8> is the first 8 hex chars of sha256 over the SHA256SUMS lines minus the
 # ./BUILD_INFO line, so a release name is a pure function of the shipped payload
-# (executable, compose-resources/, unit, ExecStartPre script, bluetoothd drop-in) and an existing release directory is never
+# (executable, release resources, unit, launcher scripts, bluetoothd drop-in) and an existing release directory is never
 # rewritten with a different payload.
 #
 # Identity comes from the selected board's build-info sidecar that every link task writes
@@ -138,6 +139,10 @@ case "$UI" in
     UNIT_FILE="$REPO/apps/embedded/systemd/bitchat-tui.service"
     OWNER_UNIT_FILE="/opt/bitchat-tui/bitchat-tui.service"
     HOME_LINK_NAME="bitchat-tui.kexe"
+    ATTACH_LINK_NAME="bitchat-tui-attach"
+    TUI_LAUNCHER="$REPO/apps/embedded/systemd/bitchat-tui-launcher"
+    TUI_TMUX_CONFIG="$REPO/apps/embedded/systemd/bitchat-tui.tmux.conf"
+    TUI_ATTACH="$REPO/apps/embedded/systemd/bitchat-tui-attach"
     NEEDS_COMPOSE_RESOURCES=0
     NEEDS_INPUT_WAIT=0
     WAIT_SCRIPT=""
@@ -237,6 +242,13 @@ touch -r "$UNIT_FILE" "$STAGE/$SERVICE_NAME"
 if [[ "$NEEDS_INPUT_WAIT" == 1 ]]; then
   cp -p "$WAIT_SCRIPT" "$STAGE/wait-for-input-devices.sh"
   chmod 755 "$STAGE/wait-for-input-devices.sh"
+fi
+if [[ "$UI" == tui ]]; then
+  cp -p "$TUI_LAUNCHER" "$STAGE/bitchat-tui-launcher"
+  cp -p "$TUI_TMUX_CONFIG" "$STAGE/bitchat-tui.tmux.conf"
+  cp -p "$TUI_ATTACH" "$STAGE/bitchat-tui-attach"
+  chmod 755 "$STAGE/bitchat-tui-launcher" "$STAGE/bitchat-tui-attach"
+  chmod 644 "$STAGE/bitchat-tui.tmux.conf"
 fi
 cp -p "$BT_DROPIN_SRC" "$STAGE/$BT_DROPIN_NAME"
 chmod 644 "$STAGE/$BT_DROPIN_NAME"
@@ -364,6 +376,36 @@ else
          echo "WARNING: ~/$HOME_LINK_NAME points at '${HOME_LINK:-?}' on $HOST, expected $HOME_LINK_TARGET" >&2
        fi ;;
   esac
+fi
+
+HOME_ATTACH_LINK_OK=0
+if [[ "$UI" == tui ]]; then
+  # Keep the SSH attach entry point on the same atomic current-release link and preserve a
+  # hand-installed regular file with the same rule used for the executable convenience link.
+  ATTACH_LINK_TARGET="$RELEASES/current/$ATTACH_LINK_NAME"
+  ATTACH_HOME_CMD='f="$HOME/'"$ATTACH_LINK_NAME"'"
+  if [ ! -w "$HOME" ]; then echo "__unwritable"; exit 0; fi
+  '"$HOME_MIGRATE"'
+  ln -sfn '"'$ATTACH_LINK_TARGET'"' "$f.tmp" && mv -T "$f.tmp" "$f" || exit 45
+  echo "__link=$(readlink "$f")"'
+  rc=0; ATTACH_HOME_OUT="$(remote "$ATTACH_HOME_CMD")" || rc=$?
+  transport_check "$rc" "attach home symlink" "$SWAPPED"
+  if [[ "$rc" != 0 ]]; then
+    echo "WARNING: could not point ~/$ATTACH_LINK_NAME at $ATTACH_LINK_TARGET on $HOST (exit $rc): ${ATTACH_HOME_OUT:-no output}" >&2
+  else
+    MOVED="$(printf '%s\n' "$ATTACH_HOME_OUT" | sed -n 's/^__moved=//p')"
+    ATTACH_HOME_LINK="$(printf '%s\n' "$ATTACH_HOME_OUT" | sed -n 's/^__link=//p')"
+    [[ -z "$MOVED" ]] || log "moved the old regular file aside: $MOVED (delete it by hand when you no longer want it)"
+    case "$ATTACH_HOME_OUT" in
+      *__unwritable*) echo "WARNING: the home directory on $HOST is not writable; ~/$ATTACH_LINK_NAME not updated" >&2 ;;
+      *) if [[ "$ATTACH_HOME_LINK" == "$ATTACH_LINK_TARGET" ]]; then
+           HOME_ATTACH_LINK_OK=1
+           log "home symlink: ~/$ATTACH_LINK_NAME -> $ATTACH_LINK_TARGET"
+         else
+           echo "WARNING: ~/$ATTACH_LINK_NAME points at '${ATTACH_HOME_LINK:-?}' on $HOST, expected $ATTACH_LINK_TARGET" >&2
+         fi ;;
+    esac
+  fi
 fi
 
 # --- 11. install unit, check boot ordering, restart, check the journal -------
@@ -514,6 +556,58 @@ if [[ "$DO_RESTART" == 1 ]]; then
   fi
   echo "--- journal for invocation $INV (last 15 lines) ---"
   printf '%s\n' "$JOURNAL" | tail -n 15
+
+  if [[ "$UI" == tui ]]; then
+    # The private tmux session is optional: the first deploy intentionally runs direct until the
+    # owner installs tmux. Check the direct and shared-terminal arrangements separately.
+    TUI_WIRING_CMD='service='"$SERVICE_NAME"'
+config='"$RELEASES"'/current/bitchat-tui.tmux.conf
+socket=bitchat-tui
+session=bitchat-tui
+pid=$(systemctl show -p MainPID --value "$service") || exit 1
+[ -n "$pid" ] && [ "$pid" != 0 ] || exit 1
+cgroup=$(systemctl show -p ControlGroup --value "$service") || exit 1
+[ -n "$cgroup" ] || exit 1
+cgroup_procs=
+for candidate in /sys/fs/cgroup"$cgroup"/cgroup.procs /sys/fs/cgroup/*"$cgroup"/cgroup.procs; do
+  if [ -r "$candidate" ]; then cgroup_procs=$candidate; break; fi
+done
+[ -n "$cgroup_procs" ] || exit 1
+in_cgroup() { grep -qx "$1" "$cgroup_procs"; }
+tty_of() { ps -o tty= -p "$1" | tr -d " "; }
+in_cgroup "$pid" || exit 1
+tmux_bin=$(command -v tmux 2>/dev/null || true)
+if [ -n "$tmux_bin" ] && "$tmux_bin" -u -L "$socket" -f "$config" has-session -t "$session" >/dev/null 2>&1; then
+  main_cmd=$(tr "\0" " " < "/proc/$pid/cmdline")
+  case "$main_cmd" in *bitchat-tui-launcher*) ;; *) exit 1 ;; esac
+  "$tmux_bin" -u -L "$socket" -f "$config" list-clients -t "$session" -F "#{client_tty}" | grep -qx /dev/tty1 || exit 1
+  pane_pid=$("$tmux_bin" -u -L "$socket" -f "$config" display-message -p -t "$session" "#{pane_pid}") || exit 1
+  case "$pane_pid" in ""|*[!0-9]*) exit 1 ;; esac
+  pane_tty=$(tty_of "$pane_pid")
+  case "$pane_tty" in pts/*) ;; *) exit 1 ;; esac
+  in_cgroup "$pane_pid" || exit 1
+  server_pid=
+  relay_pid=
+  while IFS= read -r candidate; do
+    command=$(ps -o comm= -p "$candidate" | tr -d " ")
+    [ "$command" = "tmux:server" ] && server_pid=$candidate
+    [ "$command" = "systemd-cat" ] && relay_pid=$candidate
+  done < "$cgroup_procs"
+  [ -n "$server_pid" ] && [ -n "$relay_pid" ] || exit 1
+  echo "tmux wiring: launcher $pid tty $(tty_of "$pid"), server $server_pid, pane $pane_pid /dev/$pane_tty, systemd-cat $relay_pid"
+  systemd-cgls --no-pager "$cgroup"
+else
+  exe=$(readlink -f "/proc/$pid/exe") || exit 1
+  case "$exe" in */bitchat-tui.kexe) ;; *) exit 1 ;; esac
+  [ "$(tty_of "$pid")" = tty1 ] || exit 1
+  echo "direct wiring: MainPID $pid is $exe on tty1"
+fi'
+    log "checking TUI terminal wiring"
+    rc=0; WIRING_OUT="$(remote "$TUI_WIRING_CMD")" || rc=$?
+    transport_check "$rc" "TUI terminal wiring" "$SWAPPED"
+    [[ "$rc" == 0 ]] || die "TUI terminal wiring check failed (exit $rc): $WIRING_OUT; $SWAPPED"
+    printf '%s\n' "$WIRING_OUT"
+  fi
 fi
 
 # --- 11a. bluetoothd must stay off everything a phone exposes but bitchat --
@@ -570,7 +664,11 @@ elif [[ "$PREVIOUS" == "$REMOTE_DIR" ]]; then
   echo "previous: $PREVIOUS (same release)"
 else
   echo "previous: $PREVIOUS"
-  echo "rollback: ssh $HOST \"ln -sfn '$PREVIOUS' '$RELEASES/current.tmp' && mv -T '$RELEASES/current.tmp' '$RELEASES/current' && sudo -n systemctl restart $SERVICE_NAME\""
+  if [[ "$UI" == tui ]]; then
+    echo "rollback: ssh $HOST \"ln -sfn '$PREVIOUS' '$RELEASES/current.tmp' && mv -T '$RELEASES/current.tmp' '$RELEASES/current' && cp '$RELEASES/current/$SERVICE_NAME' '$OWNER_UNIT_FILE' && sudo -n install -m 644 -o root -g root '$OWNER_UNIT_FILE' /etc/systemd/system/$SERVICE_NAME && sudo -n systemctl daemon-reload && sudo -n systemctl restart $SERVICE_NAME\""
+  else
+    echo "rollback: ssh $HOST \"ln -sfn '$PREVIOUS' '$RELEASES/current.tmp' && mv -T '$RELEASES/current.tmp' '$RELEASES/current' && sudo -n systemctl restart $SERVICE_NAME\""
+  fi
 fi
 echo "identity: $IDENTITY"
 echo "service:  $STATE"
@@ -578,6 +676,13 @@ if [[ "$HOME_LINK_OK" == 1 ]]; then
   echo "home:     ~/$HOME_LINK_NAME -> current (run with the service stopped: sudo systemctl stop $SERVICE_NAME)"
 else
   echo "home:     ~/$HOME_LINK_NAME not updated (see the warning above)"
+fi
+if [[ "$UI" == tui ]]; then
+  if [[ "$HOME_ATTACH_LINK_OK" == 1 ]]; then
+    echo "attach:   ~/$ATTACH_LINK_NAME -> current"
+  else
+    echo "attach:   ~/$ATTACH_LINK_NAME not updated (see the warning above)"
+  fi
 fi
 [[ -z "$ORDER_WARN" ]] || echo "WARNING:  $ORDER_WARN"
 [[ -z "$BT_WARN" ]] || echo "WARNING:  $BT_WARN"

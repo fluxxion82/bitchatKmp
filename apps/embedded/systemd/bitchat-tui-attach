@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -u
+
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+config="$dir/bitchat-tui.tmux.conf"
+session=bitchat-tui
+socket=bitchat-tui
+
+if [[ -z "${TERM:-}" ]] || ! infocmp -x "$TERM" >/dev/null 2>&1; then
+  export TERM=xterm-256color
+fi
+
+tmux_bin=$(command -v tmux 2>/dev/null) || {
+  echo "bitchat-tui attach: tmux is not installed; tty1 is running directly, so SSH cannot attach."
+  exit 1
+}
+
+if ! "$tmux_bin" -u -L "$socket" -f "$config" has-session -t "$session" >/dev/null 2>&1; then
+  echo "bitchat-tui attach: no shared session; check bitchat-tui.service (or tmux availability)."
+  exit 1
+fi
+
+exec "$tmux_bin" -u -L "$socket" -f "$config" attach-session -t "$session"
