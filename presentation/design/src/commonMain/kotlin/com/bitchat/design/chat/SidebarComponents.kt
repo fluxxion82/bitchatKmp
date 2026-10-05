@@ -43,6 +43,7 @@ import bitchatkmp.presentation.design.generated.resources.cd_direct_bluetooth
 import bitchatkmp.presentation.design.generated.resources.cd_leave_channel
 import bitchatkmp.presentation.design.generated.resources.cd_offline_favorite
 import bitchatkmp.presentation.design.generated.resources.cd_reachable_via_nostr
+import bitchatkmp.presentation.design.generated.resources.cd_reachable_via_lora
 import bitchatkmp.presentation.design.generated.resources.cd_remove_favorite
 import bitchatkmp.presentation.design.generated.resources.cd_routed
 import bitchatkmp.presentation.design.generated.resources.cd_unread_message
@@ -70,6 +71,7 @@ import com.bitchat.domain.chat.model.ChannelInfo
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.user.model.FavoriteRelationship
+import com.bitchat.viewvo.theme.LORA_COLOR
 import org.jetbrains.compose.resources.stringResource
 
 @Composable
@@ -92,6 +94,7 @@ fun SidebarOverlay(
     nickname: String,
     selectedLocationChannel: Channel = Channel.Mesh,
     geohashPeople: List<GeoPerson> = emptyList(),
+    loraPeers: List<GeoPerson> = emptyList(),
     geohashSelfId: String? = null,
     isTeleported: Boolean = false,
     teleportedPeople: Set<String> = emptySet(),
@@ -203,6 +206,7 @@ fun SidebarOverlay(
                                 PeopleSection(
                                     modifier = Modifier.padding(bottom = 8.dp),
                                     connectedPeers = visibleConnectedPeers,
+                                    loraPeers = loraPeers,
                                     peerNicknames = peerNicknames,
                                     peerDirect = peerDirect,
                                     nickname = nickname,
@@ -431,6 +435,7 @@ fun NamedChannelsSection(
 @Composable
 fun PeopleSection(
     connectedPeers: List<String>,
+    loraPeers: List<GeoPerson> = emptyList(),
     peerNicknames: Map<String, String>,
     peerDirect: Map<String, Boolean>,
     nickname: String,
@@ -467,7 +472,7 @@ fun PeopleSection(
             )
         }
 
-        if (connectedPeers.isEmpty()) {
+        if (peopleSectionIsEmpty(connectedPeers, loraPeers)) {
             Text(
                 text = stringResource(Res.string.no_one_connected),
                 style = MaterialTheme.typography.bodyMedium,
@@ -518,8 +523,13 @@ fun PeopleSection(
                 onToggleFavorite = { onToggleFavorite(peerID) }
             )
         }
+
+        loraPeers.forEach { person -> LoRaPeerItem(person) }
     }
 }
+
+internal fun peopleSectionIsEmpty(connectedPeers: List<String>, loraPeers: List<GeoPerson>): Boolean =
+    connectedPeers.isEmpty() && loraPeers.isEmpty()
 
 @Composable
 private fun PeerItem(
@@ -644,6 +654,45 @@ private fun PeerItem(
                 tint = if (isFavorite) Color(0xFFFFD700) else Color(0x87878700)
             )
         }
+    }
+}
+
+@Composable
+private fun LoRaPeerItem(person: GeoPerson) {
+    val colorScheme = MaterialTheme.colorScheme
+    val isDark = colorScheme.background.red + colorScheme.background.green + colorScheme.background.blue < 1.5f
+    val nameColor = colorForPeer(person.id, isDark)
+    val loRaColor = Color(LORA_COLOR)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.SettingsInputAntenna,
+            contentDescription = stringResource(Res.string.cd_reachable_via_lora),
+            modifier = Modifier.size(16.dp),
+            tint = loRaColor,
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = truncateNickname(person.displayName),
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontFamily = FontFamily.Monospace,
+                fontSize = BASE_FONT_SIZE.sp,
+            ),
+            color = nameColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "LoRa",
+            style = MaterialTheme.typography.labelSmall,
+            color = loRaColor,
+        )
     }
 }
 

@@ -36,6 +36,13 @@ fun peerEntries(header: HeaderState, unreadPeers: Set<String>): List<PeerEntry> 
             geoPeerEntries(header.loraPeers, PeerTransport.LoRa, header.favoritePeers, unreadPeers)
     }
 
+/** What the header bar shows; it must equal `peerEntries(header, ...).size`. */
+fun peopleCount(header: HeaderState): Int = when {
+    header.selectedLocationChannel is Channel.Location -> header.geohashPeople.size
+    header.isMeshChannel -> header.meshPeople.size
+    else -> header.connectedPeers.size + header.loraPeers.size
+}
+
 /**
  * The people a nickname can be completed to in the current chat: the same list the peers screen
  * shows, by display name, so `/hug ` offers exactly who is on screen. Names may carry the `#abcd`

@@ -122,6 +122,41 @@ class BindingTest {
         )
     }
 
+    @Test fun peopleCountMatchesEveryMeshPeopleRow() {
+        val header = HeaderState(
+            selectedLocationChannel = Channel.Mesh,
+            meshPeople = listOf(
+                MeshChannelPerson("mesh", "mesh", setOf(MeshChannelTransport.MESH), false, null),
+                MeshChannelPerson("lora", "radio", setOf(MeshChannelTransport.LORA), false, seen),
+                MeshChannelPerson("saved", "saved", emptySet(), true, null),
+            ),
+        )
+
+        assertEquals(2, header.connectedPeers.size, "the old TUI header count misses the LoRa-only row")
+        assertEquals(3, peopleCount(header))
+        assertEquals(peopleCount(header), peerEntries(header, emptySet()).size)
+    }
+
+    @Test fun peopleCountMatchesEveryLocationPeopleRow() {
+        val header = HeaderState(
+            selectedLocationChannel = Channel.Location(GeohashChannelLevel.CITY, "9q8yy"),
+            geohashPeople = listOf(GeoPerson("npub-dora", "dora", seen), GeoPerson("npub-eve", "eve", seen)),
+        )
+
+        assertEquals(peopleCount(header), peerEntries(header, emptySet()).size)
+    }
+
+    @Test fun peopleCountMatchesEveryRowOnAnyOtherChannel() {
+        val header = HeaderState(
+            selectedLocationChannel = Channel.Meshtastic(),
+            geohashPeople = listOf(GeoPerson("npub-dora", "dora", seen)),
+            meshPeople = listOf(MeshChannelPerson("lora", "radio", setOf(MeshChannelTransport.LORA), false, seen)),
+        )
+
+        assertEquals(2, peopleCount(header))
+        assertEquals(peopleCount(header), peerEntries(header, emptySet()).size)
+    }
+
     @Test fun theNamesOfferedToASlashCommandAreThePeersScreensOwn() {
         // Nothing new is plumbed for the completion list: it is the peers list, by name, so it
         // follows the conversation the way that screen does.

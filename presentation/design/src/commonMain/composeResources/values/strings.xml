@@ -182,6 +182,7 @@
     <string name="cd_selected">Selected</string>
     <string name="cd_leave_channel">Leave channel</string>
     <string name="cd_reachable_via_nostr">Reachable via Nostr</string>
+    <string name="cd_reachable_via_lora">Reachable over LoRa</string>
     <string name="cd_offline_favorite">Offline favorite</string>
     <string name="cd_direct_bluetooth">Direct Bluetooth</string>
     <string name="cd_routed">Routed connection</string>

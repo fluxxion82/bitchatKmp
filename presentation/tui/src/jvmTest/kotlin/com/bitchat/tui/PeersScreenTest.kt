@@ -8,11 +8,14 @@ import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.location.model.GeoPerson
 import com.jakewharton.mosaic.terminal.AnsiLevel
 import com.jakewharton.mosaic.terminal.KeyboardEvent
+import com.jakewharton.mosaic.terminal.Terminal
 import com.jakewharton.mosaic.testing.MosaicSnapshots
 import com.jakewharton.mosaic.testing.runMosaicTest
 import com.jakewharton.mosaic.ui.unit.IntSize
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.time.Instant
 import kotlinx.coroutines.test.runTest
 
@@ -170,6 +173,39 @@ class PeersScreenTest {
     @Test fun emptyListSaysNoOneIsConnected() = runTest {
         val rows = render(AnsiLevel.NONE) { PeersScreen(emptyList(), IntSize(30, 3), onOpenDm = {}, onToggleFavorite = {}) }
         assertEquals(listOf(" People (0)", " no one connected", ""), rows)
+    }
+
+    @Test fun aLoRaSelectionExplainsThatItCannotOpenADm() = runTest {
+        val entries = listOf(
+            PeerEntry("lora", "radio", PeerTransport.LoRa),
+            PeerEntry("direct", "bob", PeerTransport.Direct),
+        )
+        val navigation = TuiNavigation(Mode.Peers)
+
+        runMosaicTest {
+            state.size.value = Terminal.Size(85, 12)
+            setContentAndSnapshot {
+                TuiApp(nickname = "anon", peerCount = entries.size, navigation = navigation) { mode, size ->
+                    if (mode == Mode.Peers) PeersScreen(entries, size, onOpenDm = {}, onToggleFavorite = {})
+                }
+            }
+            val loraFooter = awaitSnapshot().lines().last()
+            assertTrue(loraFooter.contains("no DM over LoRa"), loraFooter)
+            assertFalse(loraFooter.contains("Enter DM"), loraFooter)
+
+            sendKeyEvent(KeyboardEvent(KeyboardEvent.Down))
+            // The footer follows the selection a frame later: a screen hands its hints over in an effect.
+            var directFooter = awaitSnapshot().lines().last()
+            if (!directFooter.contains("Enter DM")) directFooter = awaitSnapshot().lines().last()
+            assertTrue(directFooter.contains("Enter DM"), directFooter)
+        }
+    }
+
+    @Test fun peersFooterHintsReplaceTheModeHintsOnlyForLoRa() {
+        val lora = footerText(peersFooterHints(PeerEntry("lora", "radio", PeerTransport.LoRa)) ?: emptyList(), 120).text
+        assertTrue(lora.contains("Enter no DM over LoRa"), lora)
+        assertEquals(null, peersFooterHints(PeerEntry("direct", "bob", PeerTransport.Direct)))
+        assertEquals(null, peersFooterHints(null))
     }
 
     @Test fun narrowRowsEllipsizeTheNameThenDropTheTag() {

@@ -39,6 +39,7 @@ import com.bitchat.tui.dmPeerFor
 import com.bitchat.tui.eraseDrafts
 import com.bitchat.tui.noteMessages
 import com.bitchat.tui.peerEntries
+import com.bitchat.tui.peopleCount
 import com.bitchat.tui.torBlockedNotice
 import com.bitchat.tui.sendOrKeep
 import com.bitchat.tui.tuiTheme
@@ -149,7 +150,7 @@ fun BitchatTui(vms: TuiViewModels, background: CoroutineScope, notices: StateFlo
     CompositionLocalProvider(LocalTuiTheme provides theme) {
         TuiApp(
             nickname = header.nickname,
-            peerCount = header.connectedPeers.size,
+            peerCount = peopleCount(header),
             navigation = navigation,
             unreadDms = dm.unreadPeers.size,
             // The terminal's answer to the Compose shield: with it off there is nothing on screen

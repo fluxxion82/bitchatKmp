@@ -51,6 +51,17 @@ data class PeerEntry(
     val unread: Boolean = false,
 )
 
+private val LoRaPeerHints = listOf(
+    KeyHint("Enter", "no DM over LoRa"),
+    KeyHint("Up/Down", "select"),
+    KeyHint("f", "favourite"),
+    KeyHint("Esc", "back"),
+    KeyHint("Tab", "next"),
+)
+
+internal fun peersFooterHints(selected: PeerEntry?): List<KeyHint>? =
+    LoRaPeerHints.takeIf { selected?.transport == PeerTransport.LoRa }
+
 /**
  * The mesh channel's people (`HeaderState.meshPeople`), one row per device. The rows a private chat
  * can be opened from are sorted like the Compose sidebar (unread DMs first, then favourites, then by
@@ -153,6 +164,7 @@ fun PeersScreen(
     val theme = LocalTuiTheme.current
     val selection = remember { PeerSelection() }
     val selected = selection.resolve(peers)
+    FooterHints(peersFooterHints(peers.getOrNull(selected)))
     // Rows by priority: the selected peer (or the empty note), the title, the rest of the list.
     val budget = RowBudget(size.height)
     val listMinimum = budget.take(1)
