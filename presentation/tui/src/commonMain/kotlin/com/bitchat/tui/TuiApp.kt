@@ -30,8 +30,9 @@ enum class Mode { Chat, Peers, Dm, Locations, Notes, Settings, Wipe }
  * one-line [Footer] of key hints for that mode, in a frame of exactly [size] cells.
  *
  * Keys: `Ctrl+P` peers, `Ctrl+G` locations, `Ctrl+S` settings, `Tab` next mode (chat, peers,
- * locations, settings) and `Shift+Tab` the one before, `Esc` back (to peers from a DM, else to
- * chat), `Ctrl+L` repaints the screen as it does in a shell, and `Ctrl+D` three times in a row
+ * locations, settings) and `Shift+Tab` (or `Alt+Tab` from a Linux console) the one before, `Esc`
+ * back (to peers from a DM, else to chat), `Ctrl+L` repaints the screen as it does in a shell, and
+ * `Ctrl+D` three times in a row
  * opens the emergency wipe (which then asks). A screen sees each key
  * first (through `screenKeys`) and the shell routes it only when the screen declines. Keys are
  * dispatched by [navigation]'s current mode, not by the last frame's tree, so a batch of keys that
@@ -118,8 +119,15 @@ fun frameSize(terminal: Terminal.Size, renderMode: RenderMode = RenderMode.Inlin
 /** `Ctrl+L`: the shell's repaint, handled by [TuiApp] itself rather than by a screen. */
 internal fun isRepaintKey(event: KeyEvent): Boolean = event.ctrl && !event.alt && event.key == "l"
 
+/**
+ * The Linux console's keymap sends Meta_Tab (ESC TAB) for Shift+Tab, the sequence terminfo `linux`
+ * names back-tab. Mosaic reports it as Alt+Tab, and on that console the two are one key.
+ */
+internal fun KeyEvent.isConsoleBackTab(): Boolean = alt && !ctrl && key == "Tab"
+
 /** The mode [event] switches to from [mode], or null when the shell leaves the key alone. */
 internal fun routeKey(mode: Mode, event: KeyEvent): Mode? = when {
+    event.isConsoleBackTab() -> tabbed(mode, -1)
     event.alt -> null
     event.ctrl && event.key == "p" -> Mode.Peers
     event.ctrl && event.key == "s" -> Mode.Settings

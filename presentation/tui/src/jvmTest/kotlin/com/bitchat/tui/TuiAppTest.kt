@@ -211,6 +211,21 @@ class TuiAppTest {
         }
     }
 
+    @Test fun altTabGoesBackThroughEveryTabbedMode() {
+        for (from in listOf(Mode.Chat, Mode.Peers, Mode.Dm, Mode.Locations, Mode.Notes, Mode.Settings, Mode.Wipe)) {
+            assertEquals(
+                routeKey(from, com.jakewharton.mosaic.layout.KeyEvent("Tab", shift = true)),
+                routeKey(from, com.jakewharton.mosaic.layout.KeyEvent("Tab", alt = true)),
+                from.name,
+            )
+        }
+    }
+
+    @Test fun otherAltModifiedKeysAreLeftAlone() {
+        assertNull(routeKey(Mode.Chat, com.jakewharton.mosaic.layout.KeyEvent("p", alt = true)))
+        assertNull(routeKey(Mode.Chat, com.jakewharton.mosaic.layout.KeyEvent("Tab", alt = true, ctrl = true)))
+    }
+
     @Test fun ctrlGShowsLocations() = runTest {
         runMosaicTest {
             app(40, 12)

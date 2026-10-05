@@ -111,7 +111,7 @@ internal class KeyRouter(private val navigation: TuiNavigation) {
         }
     }
 
-    private fun KeyEvent.isHostKey() = alt || (ctrl && (key == "c" || key == "]"))
+    private fun KeyEvent.isHostKey() = (alt && !isConsoleBackTab()) || (ctrl && (key == "c" || key == "]"))
 }
 
 /** The router and the mode a body was composed for, provided by [TuiApp] to its body. */

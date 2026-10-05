@@ -118,4 +118,10 @@ class BatchedKeysTest {
         assertEquals(false, router.dispatch(com.jakewharton.mosaic.layout.KeyEvent("c", ctrl = true)))
         assertEquals(true, router.dispatch(com.jakewharton.mosaic.layout.KeyEvent("a")))
     }
+
+    @Test fun theConsoleBackTabIsHeldLikeAnyOtherKey() {
+        val navigation = TuiNavigation(Mode.Chat)
+        val router = KeyRouter(navigation) // Nothing mounted yet: ordinary keys wait.
+        assertEquals(true, router.dispatch(com.jakewharton.mosaic.layout.KeyEvent("Tab", alt = true)))
+    }
 }
