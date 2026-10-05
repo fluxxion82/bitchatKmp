@@ -69,6 +69,7 @@ import com.bitchat.lora.LoRaPeer
 import com.bitchat.local.prefs.LoRaPreferences
 import com.bitchat.repo.lora.loRaConfiguration
 import com.bitchat.repo.lora.toLoRaConfiguration
+import com.bitchat.repo.utils.CrossTransportTwins
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.LoRaProtocolManager
 import com.bitchat.lora.LoRaProtocolType
@@ -90,7 +91,10 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.io.encoding.Base64
@@ -126,6 +130,7 @@ class ChatRepo(
     private val requestedTorIntent: RequestedTorIntent? = null,
     private val lora: LoRaProtocol? = null,
     private val loraPreferences: LoRaPreferences? = null,
+    private val clock: Clock = Clock.System,
 ) : ChatRepository, BluetoothMeshDelegate {
     private val outbox = mutableMapOf<String, MutableList<Triple<String, String, String>>>()
 
@@ -136,6 +141,13 @@ class ChatRepo(
 
     private val meshChannelMessages = mutableListOf<BitchatMessage>()
     private val meshPeers = mutableListOf<GeoPerson>()
+    // Immutable snapshots, so the LoRa paths can read them from another thread: the connected mesh
+    // peers by lower-cased id with their nickname, and the lower-cased ids with a private chat.
+    private val connectedMeshPeers = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val privateChatPeerIds = MutableStateFlow<Set<String>>(emptySet())
+    private val crossTransportTwins = CrossTransportTwins()
+    // Guards every read and write of [meshChannelMessages], and [crossTransportTwins] with it.
+    private val meshChannelMessagesMutex = Mutex()
 
     private val privateChats = mutableMapOf<String, MutableList<BitchatMessage>>()
     private val unreadPrivatePeers = mutableSetOf<String>()
@@ -264,7 +276,7 @@ class ChatRepo(
     }
 
     override suspend fun getMeshMessages(): List<BitchatMessage> = withContext(coroutinesContextFacade.io) {
-        meshChannelMessages.toList()
+        meshChannelMessagesMutex.withLock { meshChannelMessages.toList() }
     }
 
     override suspend fun getMeshPeers(): List<GeoPerson> = withContext(coroutinesContextFacade.io) {
@@ -272,25 +284,36 @@ class ChatRepo(
     }
 
     override suspend fun getLoRaPeers(): List<GeoPerson> = withContext(coroutinesContextFacade.io) {
-        lora?.peers?.value?.map { peer: LoRaPeer ->
-            GeoPerson(
-                id = "lora-${peer.deviceId}",
-                displayName = peer.nickname,
-                lastSeen = peer.lastSeen
-            )
+        lora?.peers?.value?.let { peers ->
+            loRaPeople(peers, connectedMeshPeers.value.keys + privateChatPeerIds.value)
         } ?: emptyList()
     }
 
     override fun observeLoRaPeers(): Flow<List<GeoPerson>> {
-        return lora?.peers?.map { peers ->
-            peers.map { peer: LoRaPeer ->
-                GeoPerson(
-                    id = "lora-${peer.deviceId}",
-                    displayName = peer.nickname,
-                    lastSeen = peer.lastSeen
-                )
+        return lora?.peers?.let { peers ->
+            combine(peers, connectedMeshPeers, privateChatPeerIds) { loraPeers, connected, privateChatPeers ->
+                loRaPeople(loraPeers, connected.keys + privateChatPeers)
             }
         } ?: kotlinx.coroutines.flow.flowOf(emptyList())
+    }
+
+    /**
+     * LoRa peers the mesh does not already know. [meshKnownPeerIds] are the devices listed as mesh
+     * people: connected over Bluetooth, or the other side of a private chat. A bitchat LoRa
+     * heartbeat announces the mesh identity, so such a device would otherwise appear twice.
+     */
+    private fun loRaPeople(peers: List<LoRaPeer>, meshKnownPeerIds: Set<String>): List<GeoPerson> =
+        peers.filterNot { peer -> peer.deviceId.lowercase() in meshKnownPeerIds }.map { peer ->
+            GeoPerson(
+                id = "lora-${peer.deviceId}",
+                displayName = peer.nickname,
+                lastSeen = peer.lastSeen,
+            )
+        }
+
+    /** Call when [privateChats] gains the conversation with [peerId]. Atomic, so no update is lost. */
+    private fun privateChatAdded(peerId: String) {
+        privateChatPeerIds.update { it + peerId.lowercase() }
     }
 
     override suspend fun switchLoRaProtocol(protocol: String): Boolean = withContext(coroutinesContextFacade.io) {
@@ -636,9 +659,12 @@ class ChatRepo(
                 senderPeerID = mesh.myPeerID
             )
 
-            meshChannelMessages.add(localMessage)
+            val total = meshChannelMessagesMutex.withLock {
+                meshChannelMessages.add(localMessage)
+                meshChannelMessages.size
+            }
             chatEventBus.update(ChatEvent.MeshMessagesUpdated)
-            println("✅ ChatRepo: Added local echo to mesh messages, total: ${meshChannelMessages.size}")
+            println("✅ ChatRepo: Added local echo to mesh messages, total: $total")
 
             // Send via LoRa FIRST (independent of BLE state)
             println("📻 ChatRepo: LoRa check - lora=${lora != null}, isReady=${lora?.isReady}, messageType=$messageType")
@@ -763,9 +789,12 @@ class ChatRepo(
             )
 
             // Store in meshChannelMessages (shared with BLE mesh for UI simplicity)
-            meshChannelMessages.add(localMessage)
+            val total = meshChannelMessagesMutex.withLock {
+                meshChannelMessages.add(localMessage)
+                meshChannelMessages.size
+            }
             chatEventBus.update(ChatEvent.MeshMessagesUpdated)
-            println("✅ ChatRepo: Added local echo to mesh messages, total: ${meshChannelMessages.size}")
+            println("✅ ChatRepo: Added local echo to mesh messages, total: $total")
 
             // Send via LoRa (MeshtasticProtocol)
             if (lora != null && lora.isReady && messageType == BitchatMessageType.Message) {
@@ -1068,6 +1097,7 @@ class ChatRepo(
         sendReadReceipt: Boolean
     ) {
         val messages = privateChats.getOrPut(peerID) { mutableListOf() }
+        privateChatAdded(peerID)
         if (messages.any { it.id == message.id }) return
 
         messages.add(message)
@@ -1112,6 +1142,7 @@ class ChatRepo(
 
         if (updated) {
             privateChats[convKey] = newMessages.toMutableList()
+            privateChatAdded(convKey)
             coroutineScopeFacade.nostrScope.launch {
                 chatEventBus.update(ChatEvent.PrivateChatsUpdated)
             }
@@ -1595,7 +1626,10 @@ class ChatRepo(
     override suspend fun clearMessages(channel: Channel) = withContext(coroutinesContextFacade.io) {
         when (channel) {
             is Channel.Mesh -> {
-                meshChannelMessages.clear()
+                meshChannelMessagesMutex.withLock {
+                    meshChannelMessages.clear()
+                    crossTransportTwins.clear()
+                }
                 chatEventBus.update(ChatEvent.MeshMessagesUpdated)
             }
 
@@ -1739,6 +1773,7 @@ class ChatRepo(
         if (!privateChats.containsKey(peerID)) {
             println("🆕 Initializing new DM: $peerID")
             privateChats[peerID] = mutableListOf()
+            privateChatAdded(peerID)
         }
 
         val person = findPersonByPeerID(peerID)
@@ -1969,6 +2004,10 @@ class ChatRepo(
      * Handle incoming LoRa packet.
      * Format: "nickname:content" for simple text protocol.
      */
+    /** A mesh peer id is eight bytes in hex. */
+    private fun isMeshPeerId(id: String): Boolean =
+        id.length == 16 && id.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }
+
     private suspend fun handleLoRaPacket(packetBytes: ByteArray) = withContext(coroutinesContextFacade.io) {
         try {
             val packetString = packetBytes.decodeToString()
@@ -1987,24 +2026,50 @@ class ChatRepo(
             println("📻 ChatRepo: LoRa message from '$nickname': ${logBody(content)}")
 
             // Create message for mesh channel
-            val messageID = "lora-${Clock.System.now().toEpochMilliseconds()}"
+            val now = clock.now()
+            // Unique, not the arrival time: two packets can be handled in the same millisecond.
+            val messageID = "lora-${Uuid.random()}"
+            // A LoRa packet names its sender only by nickname, so first work out which device that can
+            // be: every mesh identity known under that name, from the mesh itself and from bitchat LoRa
+            // heartbeats. Only the bitchat LoRa stack announces the mesh identity; a Meshtastic or
+            // MeshCore node id is another namespace and identifies nobody on the mesh.
+            val loRaPeersNamed = lora?.peers?.value?.filter { it.nickname == nickname }.orEmpty()
+            val (meshIdentityPeers, foreignPeers) = loRaPeersNamed.partition { isMeshPeerId(it.deviceId) }
+            val knownSenderIds = (
+                meshIdentityPeers.map { it.deviceId.lowercase() } +
+                    connectedMeshPeers.value.filterValues { it == nickname }.keys
+                ).toSet()
+            val peerId = knownSenderIds.singleOrNull()
+            // When the name could be more than one device, pairing could hide one person's message
+            // behind another's, so this copy is shown as it is: a duplicate row at worst. A node of a
+            // foreign LoRa stack cannot be told from a mesh peer of the same name; those two are taken
+            // to be one device, which is what they are when our own app runs that stack.
+            val senderIsUnambiguous = knownSenderIds.size <= 1 &&
+                foreignPeers.size <= 1 &&
+                (foreignPeers.isEmpty() || meshIdentityPeers.isEmpty())
             val message = BitchatMessage(
                 id = messageID,
                 sender = nickname,
                 content = content,
                 type = BitchatMessageType.Message,
-                timestamp = Clock.System.now(),
+                timestamp = now,
                 isPrivate = false,
                 senderPeerID = "lora-$nickname" // Prefix to identify LoRa origin
             )
 
-            // Add to mesh channel messages (avoid duplicates)
-            if (meshChannelMessages.none { it.id == message.id }) {
-                meshChannelMessages.add(message)
-                println("📻 ChatRepo: Added LoRa message to mesh channel, total: ${meshChannelMessages.size}")
-                chatEventBus.update(ChatEvent.MeshMessagesUpdated)
-                println("📻 ChatRepo: Emitted MeshMessagesUpdated event")
-            }
+            // null: the BLE twin is already shown, so this copy is dropped. Otherwise the new row count.
+            val total = meshChannelMessagesMutex.withLock {
+                if (senderIsUnambiguous && crossTransportTwins.onLoRa(message.id, nickname, peerId, content, now)) {
+                    null
+                } else {
+                    meshChannelMessages.add(message)
+                    meshChannelMessages.size
+                }
+            } ?: return@withContext
+
+            println("📻 ChatRepo: Added LoRa message to mesh channel, total: $total")
+            chatEventBus.update(ChatEvent.MeshMessagesUpdated)
+            println("📻 ChatRepo: Emitted MeshMessagesUpdated event")
 
             chatEventBus.update(ChatEvent.MessageReceived)
         } catch (e: Exception) {
@@ -2037,8 +2102,28 @@ class ChatRepo(
             if (message.isPrivate && message.senderPeerID != null) {
                 addPrivateMessage(message.senderPeerID!!, message, markUnread = true, sendReadReceipt = false)
             } else if (message.isPrivate == false && message.channel == null) {
-                if (meshChannelMessages.none { it.id == message.id }) {
-                    meshChannelMessages.add(message)
+                var changed = false
+                meshChannelMessagesMutex.withLock {
+                    if (meshChannelMessages.none { it.id == message.id }) {
+                        val loRaMessageId = crossTransportTwins.onMesh(
+                            message.id,
+                            message.sender,
+                            message.senderPeerID,
+                            message.content,
+                            clock.now(),
+                        )
+                        val loRaMessageIndex = loRaMessageId?.let { id ->
+                            meshChannelMessages.indexOfFirst { it.id == id }
+                        } ?: -1
+                        if (loRaMessageIndex >= 0) {
+                            meshChannelMessages[loRaMessageIndex] = message
+                        } else {
+                            meshChannelMessages.add(message)
+                        }
+                        changed = true
+                    }
+                }
+                if (changed) {
                     chatEventBus.update(ChatEvent.MeshMessagesUpdated)
                 }
             } else if (message.channel != null) {
@@ -2061,16 +2146,18 @@ class ChatRepo(
     private suspend fun updateMessagesFromUnknownPeer(peerID: String, newNickname: String) {
         var updatedCount = 0
 
-        val updatedMeshMessages = meshChannelMessages.map { message ->
-            if (message.senderPeerID == peerID && message.sender == "Unknown") {
-                updatedCount++
-                message.copy(sender = newNickname)
-            } else {
-                message
+        meshChannelMessagesMutex.withLock {
+            val updatedMeshMessages = meshChannelMessages.map { message ->
+                if (message.senderPeerID == peerID && message.sender == "Unknown") {
+                    updatedCount++
+                    message.copy(sender = newNickname)
+                } else {
+                    message
+                }
             }
+            meshChannelMessages.clear()
+            meshChannelMessages.addAll(updatedMeshMessages)
         }
-        meshChannelMessages.clear()
-        meshChannelMessages.addAll(updatedMeshMessages)
 
         privateChats[peerID]?.let { chatMessages ->
             val updatedPrivateMessages = chatMessages.map { message ->
@@ -2142,15 +2229,17 @@ class ChatRepo(
             }
 
             // Convert to GeoPerson for consistency with LocationRepository
-            meshPeers.clear()
-            meshPeers.addAll(activePeers.map { peerID ->
+            val connected = activePeers.map { peerID ->
                 val peerInfo = mesh.getPeerInfo(peerID)
                 GeoPerson(
                     id = peerID,
                     displayName = peerInfo?.nickname ?: peerID.take(12),
                     lastSeen = Clock.System.now(),
                 )
-            })
+            }
+            meshPeers.clear()
+            meshPeers.addAll(connected)
+            connectedMeshPeers.value = connected.associate { it.id.lowercase() to it.displayName }
 
             println("📊 ChatRepo: meshPeers list now contains ${meshPeers.size} peers")
             chatEventBus.update(ChatEvent.MeshPeersUpdated)
@@ -2223,7 +2312,7 @@ class ChatRepo(
                 )
 
                 if (isBroadcast) {
-                    meshChannelMessages.add(bitchatMessage)
+                    meshChannelMessagesMutex.withLock { meshChannelMessages.add(bitchatMessage) }
                     chatEventBus.update(ChatEvent.MeshMessagesUpdated)
                     println("ChatRepo: Added file message to mesh channel")
                 } else {
@@ -2675,10 +2764,15 @@ class ChatRepo(
         channelKeys.clear()
         geohashMessagesFlows.clear()
         activeGeohashSubscriptions.clear()
-        meshChannelMessages.clear()
+        meshChannelMessagesMutex.withLock {
+            meshChannelMessages.clear()
+            crossTransportTwins.clear()
+        }
         meshPeers.clear()
+        connectedMeshPeers.value = emptyMap()
 
         privateChats.clear()
+        privateChatPeerIds.value = emptySet()
         unreadPrivatePeers.clear()
         unreadPrivateMessageIds.clear()
         latestUnreadPrivatePeer = null

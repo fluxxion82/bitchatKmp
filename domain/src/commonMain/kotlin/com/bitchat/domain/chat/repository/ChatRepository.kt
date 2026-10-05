@@ -12,7 +12,17 @@ interface ChatRepository {
     suspend fun getGeohashMessages(geohash: String): List<BitchatMessage>
     suspend fun getMeshMessages(): List<BitchatMessage>
     suspend fun getMeshPeers(): List<GeoPerson>
+
+    /**
+     * The people reachable over LoRa whom the mesh does not already know: not connected over
+     * Bluetooth and not the other side of a private chat. Such a device appears once, as a mesh peer.
+     */
     suspend fun getLoRaPeers(): List<GeoPerson>
+
+    /**
+     * The people reachable over LoRa whom the mesh does not already know: not connected over
+     * Bluetooth and not the other side of a private chat. Such a device appears once, as a mesh peer.
+     */
     fun observeLoRaPeers(): Flow<List<GeoPerson>>
 
     /**

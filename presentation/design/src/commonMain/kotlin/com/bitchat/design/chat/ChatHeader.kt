@@ -292,18 +292,10 @@ internal data class PeerCount(
 )
 
 /**
- * LoRa peers reach the UI namespaced as `lora-<deviceId>` (`ChatRepo.observeLoRaPeers`), while BLE
- * peers keep their bare id. A bitchat LoRa heartbeat carries the same 16-hex bitchat id the BLE
- * announce does, so the namespace has to come off before the two lists are merged.
- */
-private const val LORA_PEER_ID_PREFIX = "lora-"
-
-/**
  * The peers the app actually knows about on [selectedLocationChannel], and how to tint them.
  *
- * The mesh count is the union of BLE and LoRa rather than their sum, so a neighbour heard over both
- * radios counts once. Nothing gates the number itself; only the tone reacts to which transport the
- * peers came in on.
+ * The mesh count is the union of the mesh and LoRa ids the repository provides. Nothing gates the
+ * number itself; only the tone reacts to which transport the peers came in on.
  */
 internal fun peerCountFor(
     selectedLocationChannel: Channel?,
@@ -337,10 +329,10 @@ internal fun peerCountFor(
     is Channel.NamedChannel -> PeerCount(0, PeerCountTone.NONE)
 }
 
-/** Peer ids reduced to one comparable form, dropping blanks and the LoRa namespace. */
+/** Peer ids reduced to one comparable form, dropping blanks. */
 private fun normalizedPeerIds(ids: List<String>): Set<String> =
     ids.mapNotNullTo(LinkedHashSet()) { id ->
-        id.trim().lowercase().removePrefix(LORA_PEER_ID_PREFIX).ifEmpty { null }
+        id.trim().lowercase().ifEmpty { null }
     }
 
 @Composable

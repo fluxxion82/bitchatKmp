@@ -5,7 +5,8 @@ import com.bitchat.domain.location.model.GeoPerson
 import kotlinx.coroutines.flow.Flow
 
 /**
- * Use case to observe currently discovered LoRa peers as a reactive Flow.
+ * The people reachable over LoRa whom the mesh does not already know: not connected over Bluetooth
+ * and not the other side of a private chat. Such a device appears once, as a mesh peer.
  *
  * LoRa peers are discovered via heartbeat broadcasts over LoRa radio.
  * Peers are automatically removed from the list if they haven't been

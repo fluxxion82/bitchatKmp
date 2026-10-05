@@ -80,18 +80,14 @@ class PeerCounterTest {
         assertEquals(2, result.count, "a known peer list must never render as 0")
     }
 
-    /**
-     * A bitchat LoRa heartbeat carries the same 16-hex id the BLE announce does, so the same
-     * neighbour arrives on both lists - once bare, once namespaced.
-     */
     @Test
-    fun `a peer heard over both radios counts once`() {
+    fun `namespaced lora peers remain distinct in the ui`() {
         val result = meshCount(
             connectedPeers = listOf("269e37bb6be7caf9"),
             loraPeers = listOf(geoPerson("lora-269e37bb6be7caf9")),
         )
 
-        assertEquals(1, result.count)
+        assertEquals(2, result.count)
         assertEquals(PeerCountTone.MESH, result.tone)
     }
 
