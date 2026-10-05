@@ -66,7 +66,7 @@ Started 2026-10-02 during the Kotlin `2.5.0-Beta1` fork refresh. Final fork comm
 
 | Kind | Candidate | Where | Fit | Notes |
 |---|---|---|---|---|
-| done | KT-88544 `ComputeTypes` miscompile | fixed by `7c0917898`; Kotlin `2.5.0-Beta1` | — | Apple and embedded workarounds removed; canaries pass |
+| done | KT-88544 `ComputeTypes` miscompile | fixed by `7c0917898`; Kotlin `2.5.0-Beta1` | — | Apple and embedded workarounds removed; the release-mode canaries passed without them on 2.5.0-Beta1 (Apple 3/3, embedded 5/5, 2026-10-04) and were then deleted |
 | issue | Kotlin/Native composable fun-interface SAM conversion across klibs raises `IrLinkageError` | core `TextFieldDefaults.kt` | medium | `TextFieldDecorator.Decoration`; worked around in core fork |
 | note | `macosX64` removed with a "deprecated" error | KGP `2.5.0-Beta1` | low | distribution has no `macos_x64` klibs |
 

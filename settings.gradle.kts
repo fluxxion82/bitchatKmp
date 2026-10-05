@@ -80,7 +80,6 @@ plugins {
 rootProject.name = "bitchatKmp"
 
 include(":apps:droid")
-include(":apps:apple-canary")
 include(":apps:desktop")
 include(":apps:desktop-common")
 include(":data:cache")
@@ -108,7 +107,6 @@ include(":presentation:viewmodel")
 include(":presentation:viewvo")
 if (embeddedEnabled) {
     include(":apps:embedded")
-    include(":apps:embedded-canary")
     include(":apps:embedded-common")
     include(":apps:embedded-tui")
     include(":presentation:tui")

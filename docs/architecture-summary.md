@@ -31,7 +31,7 @@ Modules are declared in `settings.gradle.kts`:
 
 | Area | Modules | Role |
 | --- | --- | --- |
-| Apps | `:apps:droid`, `:apps:desktop`, `:apps:desktop-common`, `:apps:apple-canary`; with `embedded.enabled`: `:apps:embedded`, `:apps:embedded-tui`, `:apps:embedded-common`, `:apps:embedded-canary`; with `tui.enabled`: `:apps:desktop-tui` | Platform entry points and dependency graph assembly, the code the desktop and embedded apps share, and release-mode canary tests. |
+| Apps | `:apps:droid`, `:apps:desktop`, `:apps:desktop-common`; with `embedded.enabled`: `:apps:embedded`, `:apps:embedded-tui`, `:apps:embedded-common`; with `tui.enabled`: `:apps:desktop-tui` | Platform entry points and dependency graph assembly, and the code the desktop and embedded apps share. |
 | Domain | `:domain` | Business use cases, domain models, repository interfaces, event bus contracts, and common DI. |
 | Data core | `:data:cache`, `:data:crypto`, `:data:local:platform`, `:data:mediautils`, `:data:noise`, `:data:repo` | Cache primitives, crypto/noise protocol bindings, platform services, media helpers, and repository implementations. |
 | Remote REST | `:data:remote:rest:client`, `:data:remote:rest:dto` | Ktor clients, websocket clients, DTOs, API errors, and mapping. |
@@ -40,7 +40,7 @@ Modules are declared in `settings.gradle.kts`:
 | Presentation | `:presentation:viewvo`, `:presentation:viewmodel`, `:presentation:design`, `:presentation:design:imagepicker`, `:presentation:screens`; with `embedded.enabled` or `tui.enabled`: `:presentation:tui`, `:presentation:tui:binding` | View state DTOs, viewmodels, reusable Compose UI, image picking, and navigation/screens; the Mosaic terminal UI screens and their viewmodel binding. |
 | iOS bridge | `:iosdi` | Shared framework and DI setup consumed by iOS. |
 
-The embedded profile is opt-in: `embedded.enabled` defaults to `false` in `gradle.properties`, and passing `-Pembedded.enabled=true` (or setting it in `~/.gradle/gradle.properties`) turns on Linux ARM64 targets and includes `:apps:embedded`, `:apps:embedded-tui`, `:apps:embedded-common`, `:apps:embedded-canary`, `:presentation:tui` and `:presentation:tui:binding`. `tui.enabled` (also off by default, and mutually exclusive with `embedded.enabled`) includes `:apps:desktop-tui` with the two `:presentation:tui` modules for the JVM terminal UI. Embedded builds use forked Compose/Koin/lifecycle artifacts published to `~/.m2` where linuxArm64 support is needed (see `docs/FORKED_LIBRARIES.md`).
+The embedded profile is opt-in: `embedded.enabled` defaults to `false` in `gradle.properties`, and passing `-Pembedded.enabled=true` (or setting it in `~/.gradle/gradle.properties`) turns on Linux ARM64 targets and includes `:apps:embedded`, `:apps:embedded-tui`, `:apps:embedded-common`, `:presentation:tui` and `:presentation:tui:binding`. `tui.enabled` (also off by default, and mutually exclusive with `embedded.enabled`) includes `:apps:desktop-tui` with the two `:presentation:tui` modules for the JVM terminal UI. Embedded builds use forked Compose/Koin/lifecycle artifacts published to `~/.m2` where linuxArm64 support is needed (see `docs/FORKED_LIBRARIES.md`).
 
 ## Domain Layer
 
@@ -121,8 +121,6 @@ App modules are intentionally thin shells that assemble the same shared applicat
 `apps:embedded` is an optional Kotlin/Native linuxArm64 app for Orange Pi-style devices. It depends on the same core modules but also handles DRM/GBM/EGL rendering, touch and keyboard. `apps:embedded-tui` is the terminal UI for the same hardware; build identity, the user-state initializer and LoRa protocol selection are shared by both through `apps:embedded-common`. It is gated by `-Pembedded.enabled=true` (off by default).
 
 `apps/iosApp` is the native iOS app folder. `iosdi` exposes shared Kotlin DI/framework wiring to iOS and includes domain, data, presentation, and app-facing modules.
-
-`apps/apple-canary` has no app code: its macosArm64 and iosSimulatorArm64 release-mode tests guard the Kotlin/Native compiler workaround (KT-88544, `apple.kotlinNativeReleaseArgs`) that every release Apple link, the iOS frameworks included, is built with.
 
 ## Dependency Injection Pattern
 

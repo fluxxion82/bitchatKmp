@@ -1,4 +1,3 @@
-import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -24,12 +23,6 @@ val skikoVersion = providers.gradleProperty("embedded.skikoVersion")
 val koinVersion = providers.gradleProperty("embedded.koinForkVersion")
     .orElse("4.2.2-embedded-SNAPSHOT")
     .get()
-// Compiler workarounds for the release link (KT-88544; see gradle.properties).
-val kotlinNativeReleaseArgs = providers.gradleProperty("embedded.kotlinNativeReleaseArgs")
-    .orElse("")
-    .get()
-    .split(' ')
-    .filter(String::isNotBlank)
 
 // Pin the linuxArm64 Skiko artifact. Root build.gradle.kts owns fork version forcing.
 configurations.all {
@@ -49,9 +42,6 @@ kotlin {
             executable {
                 entryPoint = "com.bitchat.embedded.main"
                 baseName = "bitchat-embedded"
-                if (buildType == NativeBuildType.RELEASE) {
-                    freeCompilerArgs += kotlinNativeReleaseArgs
-                }
                 // Link against DRM, GBM, EGL, GLESv2
                 val sysrootLib = project.file("sysroot/usr/lib/aarch64-linux-gnu").absolutePath
                 // Bluetooth module library paths (linkerOpts in .def propagate -l flags,

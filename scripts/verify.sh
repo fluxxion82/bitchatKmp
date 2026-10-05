@@ -5,15 +5,11 @@
 #   scripts/verify.sh desktop    # quick + packageDmg + macOS arm64 BLE dylib link (on macOS arm64)
 #   scripts/verify.sh android    # :apps:droid:assembleDebug
 #   scripts/verify.sh ios        # :iosdi debug frameworks for iosSimulatorArm64 and iosArm64 (the only iOS targets)
-#                                # + the release iosArm64 framework, the one an Xcode archive ships, linked with the
-#                                #   KT-88544 workaround (apple.kotlinNativeReleaseArgs in gradle.properties)
-#                                # + :apps:apple-canary release tests on macosArm64 and the simulator, which fail if
-#                                #   that workaround stops reaching release Apple links
+#                                # + the release iosArm64 framework, the one an Xcode archive ships
 #                                # + the Darwin SOCKS capture harness (rest client macosArm64Test, iosSimulatorArm64Test;
 #                                #   the simulator run needs CoreSimulatorService, so run it outside a sandbox; the DNS
 #                                #   leak cases skip loudly without /etc/resolver/bitchat-leak.test)
-#   scripts/verify.sh embedded   # -Pembedded.enabled=true linuxArm64 debug and release links + compose resources,
-#                                # + the release-mode Kotlin/Native canary on the build host (:apps:embedded-canary);
+#   scripts/verify.sh embedded   # -Pembedded.enabled=true linuxArm64 debug and release links + compose resources;
 #                                #   on-device startup check after a deploy: scripts/embedded-smoke.py
 #   scripts/verify.sh tui        # -Pembedded.enabled=true :presentation:tui JVM tests + linuxArm64 compile + TUI debug
 #                                # and release links
@@ -54,12 +50,11 @@ case "$MODE" in
   android)  gradle :apps:droid:assembleDebug ;;
   ios)
     gradle :iosdi:linkDebugFrameworkIosSimulatorArm64 :iosdi:linkDebugFrameworkIosArm64 :iosdi:linkReleaseFrameworkIosArm64 \
-      :apps:apple-canary:macosArm64ReleaseTest :apps:apple-canary:iosSimulatorArm64ReleaseTest \
       :data:crypto:macosArm64Test :data:crypto:iosSimulatorArm64Test :data:remote:rest:client:macosArm64Test :data:remote:rest:client:iosSimulatorArm64Test
     ;;
   # Release links too: the deployed binaries are release builds, and only an optimized link runs the
-  # whole-program passes that miscompiled the release bitchat-embedded (KT-88544, see gradle.properties).
-  embedded) gradle_embedded :apps:embedded:linkDebugExecutableLinuxArm64 :apps:embedded:linkReleaseExecutableLinuxArm64 :apps:embedded-canary:hostReleaseTest ;;
+  # whole-program passes, so a debug-only gate would not see a release-only failure.
+  embedded) gradle_embedded :apps:embedded:linkDebugExecutableLinuxArm64 :apps:embedded:linkReleaseExecutableLinuxArm64 ;;
   tui)      gradle_embedded :presentation:tui:jvmTest :presentation:tui:compileKotlinLinuxArm64 :apps:embedded-tui:linkDebugExecutableLinuxArm64 :apps:embedded-tui:linkReleaseExecutableLinuxArm64 ;;
   desktop-tui)
     gradle_tui :presentation:tui:jvmTest :presentation:tui:binding:jvmTest :apps:desktop-common:test :apps:desktop-tui:test :apps:desktop-tui:verifyRuntimeJarNames :apps:desktop-tui:installDist

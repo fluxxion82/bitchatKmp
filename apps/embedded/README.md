@@ -136,8 +136,8 @@ with the same invocation and no `Uncaught Kotlin exception` (`--help` for the op
 scripts/embedded-smoke.py --build release   # uses $PI_HOST like deploy-pi.sh; exit 0 only if it came all the way up
 ```
 
-Release links use Kotlin/Native 2.5.0-Beta1 without `embedded.kotlinNativeReleaseArgs`. KT-88544 is fixed in this
-version. `scripts/verify.sh embedded` links both builds and runs `:apps:embedded-canary:hostReleaseTest`.
+Release links use Kotlin/Native 2.5.0-Beta1, which carries the fix for KT-88544, so they need no compiler
+workaround. `scripts/verify.sh embedded` links both build types.
 
 Release layout on the device:
 

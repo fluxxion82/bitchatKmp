@@ -12,7 +12,7 @@ This project keeps protocol-level compatibility with legacy clients while adding
 - `data:*`: repositories + transport/crypto/network implementations.
 - `presentation:*`: shared design system, screens, and viewmodels, plus the terminal UI screens (`presentation:tui`).
 - `apps:*`: platform applications (`droid`, `desktop`, `desktop-tui`, `iosApp`, `embedded`, `embedded-tui`), the code they
-  share (`desktop-common`, `embedded-common`) and the release-mode canaries (`apple-canary`, `embedded-canary`).
+  share (`desktop-common`, `embedded-common`).
 - `iosdi`: shared KMP framework used by iOS.
 
 ## Prerequisites
@@ -165,7 +165,7 @@ For iOS, open `apps/iosApp/iosApp.xcodeproj` in Xcode. The shared framework is `
 ./gradlew :iosdi:linkDebugFrameworkIosArm64           # device
 ./gradlew :iosdi:linkReleaseFrameworkIosArm64         # device, release (what an archive ships)
 ```
-Release Apple links use Kotlin/Native 2.5.0-Beta1. KT-88544 is fixed in this version; `:apps:apple-canary` holds release-mode tests without the former workaround.
+Release Apple links use Kotlin/Native 2.5.0-Beta1, which carries the fix for KT-88544, so they need no compiler workaround.
 
 ### 4. Verify
 

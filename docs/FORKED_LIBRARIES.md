@@ -366,8 +366,8 @@ the old `9999.0.0-SNAPSHOT` / Koin `4.2.2` artifacts; only Mosaic's `0.19.0-embe
 whatever promotion overwrites first, merge (not replace) artifact-root `maven-metadata-local.xml` files, and keep
 the staging repository and archives until the result has been proven on the device.
 
-Before promotion, the embedded binaries must also pass `scripts/embedded-smoke.py` on a board: link gates and the
-host canary cannot see run-loop bugs (the 1.12 port briefly dropped the main-dispatcher pumping and every link still
+Before promotion, the embedded binaries must also pass `scripts/embedded-smoke.py` on a board: link gates cannot
+see run-loop bugs (the 1.12 port briefly dropped the main-dispatcher pumping and every link still
 succeeded).
 
 ## First-time setup
