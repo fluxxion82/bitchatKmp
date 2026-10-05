@@ -34,7 +34,7 @@ Modules are declared in `settings.gradle.kts`:
 | Apps | `:apps:droid`, `:apps:desktop:compose`; with `tui.enabled`: `:apps:desktop:tui`; with `embedded.enabled`: `:apps:embedded:compose`, `:apps:embedded:tui` | Platform entry points and dependency graph assembly. |
 | App support | `:apps:desktop` (always); with `embedded.enabled`: `:apps:embedded` | What each pair of apps shares, kept in the pair's parent module. No UI toolkit may be depended on here: that is what keeps Mosaic out of the Compose apps and the Compose fork out of the terminal ones. |
 | Domain | `:domain` | Business use cases, domain models, repository interfaces, event bus contracts, and common DI. |
-| Data core | `:data:cache`, `:data:crypto`, `:data:local:platform`, `:data:mediautils`, `:data:noise`, `:data:repo` | Cache primitives, crypto/noise protocol bindings, platform services, media helpers, and repository implementations. |
+| Data core | `:data:cache`, `:data:crypto`, `:data:local:platform`, `:data:local:statedir` (embedded only), `:data:mediautils`, `:data:noise`, `:data:repo` | Cache primitives, crypto/noise protocol bindings, platform services, media helpers, and repository implementations. |
 | Remote REST | `:data:remote:rest:client`, `:data:remote:rest:dto` | Ktor clients, websocket clients, DTOs, API errors, and mapping. |
 | Remote transport | `:data:remote:transport`, `:data:remote:transport:bluetooth`, `:data:remote:transport:nostr`, `:data:remote:transport:lora`, `:data:remote:transport:lora:bitchat`, `:data:remote:transport:lora:meshtastic`, `:data:remote:transport:lora:meshcore` | Transport abstractions and concrete mesh, Nostr, Bluetooth, and LoRa protocol implementations. |
 | Privacy/network | `:data:remote:tor` | Tor/Arti integration and platform-specific native setup. |
@@ -71,7 +71,7 @@ The data layer is split by infrastructure concern and protocol boundary.
 
 `data:cache` provides named in-memory/cache infrastructure used by repositories and transports, including caches for geohash aliases, conversations, and relay info.
 
-`data:local:platform` contains platform-local services such as settings, location, connectivity, geocoding, preferences, resource reading, and background service support. It uses `expect`/`actual` style Koin modules like `commonLocal` plus platform-specific `localModule`.
+`data:local:platform` contains platform-local services such as settings, location, connectivity, geocoding, preferences, resource reading, and background service support. It uses `expect`/`actual` style Koin modules like `commonLocal` plus platform-specific `localModule`. On embedded Linux it uses `data:local:statedir` to require an owned, private state directory.
 
 `data:crypto` and `data:noise` isolate cryptography and Noise protocol concerns. JVM/Android can use Maven dependencies, while iOS/macOS/Linux ARM64 use native libraries such as libsodium, secp256k1, and noise-c via cinterop.
 

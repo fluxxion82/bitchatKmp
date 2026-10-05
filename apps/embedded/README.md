@@ -179,6 +179,17 @@ Without the `stop`, the hand-run copy is refused: both embedded binaries take on
 touches DRM, the radio or Bluetooth. `bitchat.service` has `RestartPreventExitStatus=75`, so a unit refused that way
 goes to `failed` instead of retrying; details in [`tui/README.md`](tui/README.md#one-app-per-board).
 
+Before the lock, both binaries check the directory their state goes in, and exit with status 78
+(`status=78/CONFIG` in `systemctl status`) after one line on stderr, such as
+`bitchat-tui: /home/u/.bitchat belongs to uid 0, not to the user this app runs as (uid 1000); not starting`,
+when it is not their user's own: `HOME` is unset or not an absolute path, `~/.bitchat` belongs to someone
+else, or it is a symbolic link. The identity keys are written there, so nothing is started on a directory
+whose owner could swap them. The units keep restarting, and the app comes up by itself once the directory is
+repaired (`sudo chown -R "$USER": ~/.bitchat`, or replace the link with the directory). The directories
+inside it (`prefs`, `settings`, `tor`, `data`, the incoming files) are held to the same rule by the data
+layer when it first needs each one; a refusal there is not this line but an exception naming the directory,
+during startup.
+
 One-time device preparation (needs the password once):
 
 Run these on the device, as the account you ssh in as (`$USER` below is that account):

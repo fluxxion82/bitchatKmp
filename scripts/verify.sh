@@ -13,8 +13,9 @@
 #                                #   on-device startup check after a deploy: scripts/embedded-smoke.py
 #   scripts/verify.sh tui        # -Pembedded.enabled=true :presentation:tui JVM tests + linuxArm64 compile + TUI debug
 #                                # and release links
-#                                # (embedded and tui also run :apps:embedded:macosArm64Test on macOS arm64: the
-#                                #  single-instance lock both embedded apps take)
+#                                # (embedded and tui also run :data:local:statedir:macosArm64Test and
+#                                #  :apps:embedded:macosArm64Test on macOS arm64: the state directory check the
+#                                #  Linux data layer makes, and the gate and single-instance lock both apps take)
 #   scripts/verify.sh desktop-tui # JVM desktop TUI tests and installDist
 #   scripts/verify.sh full       # all of the above (desktop packaging included)
 #
@@ -40,11 +41,12 @@ gradle()          { echo "== ./gradlew ${BASE[*]} -Pembedded.enabled=false -Ptui
 gradle_embedded() { echo "== ./gradlew ${BASE[*]} -Pembedded.enabled=true -Ptui.enabled=false $*";  ./gradlew "${BASE[@]}" -Pembedded.enabled=true -Ptui.enabled=false "$@"; }
 gradle_tui()      { echo "== ./gradlew ${BASE[*]} -Pembedded.enabled=false -Ptui.enabled=true $*"; ./gradlew "${BASE[@]}" -Pembedded.enabled=false -Ptui.enabled=true "$@"; }
 
-# The lock both embedded apps take first (:apps:embedded, SingleInstanceLock) is plain POSIX with a host
-# test target, so both embedded gates run its tests where the host can.
+# The state directory check (:data:local:statedir) and the gate and lock both embedded apps take first
+# (:apps:embedded) are plain POSIX with a host test target, so both embedded gates run their tests where the
+# host can.
 embedded_host_tests=()
 if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
-  embedded_host_tests+=(:apps:embedded:macosArm64Test)
+  embedded_host_tests+=(:data:local:statedir:macosArm64Test :apps:embedded:macosArm64Test)
 fi
 
 case "$MODE" in

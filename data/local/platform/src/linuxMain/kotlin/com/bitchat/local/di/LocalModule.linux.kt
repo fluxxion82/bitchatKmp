@@ -4,6 +4,7 @@ import com.bitchat.local.identity.DomainInspector
 import com.bitchat.local.identity.LedgerStore
 import com.bitchat.local.identity.LinuxDomainInspector
 import com.bitchat.local.identity.LinuxLedgerStore
+import com.bitchat.local.identity.LinuxIdentityPaths
 import com.bitchat.local.prefs.EncryptionSettingsFactory
 import com.bitchat.local.prefs.LinuxEncryptionSettingsFactory
 import com.bitchat.local.prefs.LinuxFileSettings
@@ -15,12 +16,8 @@ import com.bitchat.local.service.LocationService
 import com.bitchat.local.service.SettingsService
 import com.bitchat.local.service.impl.StubGeocoderService
 import com.russhwolf.settings.Settings
-import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.toKString
 import org.koin.dsl.module
-import platform.posix.getenv
 
-@OptIn(ExperimentalForeignApi::class)
 actual val localModule = module {
     single<Settings.Factory> {
         LinuxSettingsFactory()
@@ -51,13 +48,10 @@ actual val localModule = module {
  * Linux-specific Settings.Factory implementation.
  * Creates file-based settings in ~/.bitchat/settings/
  */
-@OptIn(ExperimentalForeignApi::class)
 class LinuxSettingsFactory : Settings.Factory {
     private val settingsDir: String by lazy {
-        val home = getenv("HOME")?.toKString() ?: "/tmp"
-        val baseDir = "$home/.bitchat"
-        val dir = "$baseDir/settings"
-        ensureDirectory(baseDir)
+        val dir = LinuxIdentityPaths.settingsDir
+        ensureDirectory(LinuxIdentityPaths.stateDir)
         ensureDirectory(dir)
         dir
     }

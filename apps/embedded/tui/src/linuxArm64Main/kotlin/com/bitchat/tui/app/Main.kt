@@ -4,6 +4,7 @@ import com.bitchat.domain.base.LogPolicy
 import com.bitchat.domain.base.invoke
 import com.bitchat.embedded.BuildIdentity
 import com.bitchat.embedded.SingleInstanceLock
+import com.bitchat.embedded.StateDirectoryGate
 import com.bitchat.tui.consoleSafeFor
 import kotlin.system.exitProcess
 import kotlin.time.Duration.Companion.seconds
@@ -25,9 +26,10 @@ private val buildIdentity = BuildIdentity("bitchat-tui")
  * Entry point of the bitchat terminal UI.
  *
  * `--version` (or `-v`) prints the build identity and exits, touching nothing else, so a deploy can
- * verify the binary on the device. Otherwise the board's [SingleInstanceLock] comes first: when the
- * unit or another embedded app already runs, this prints one line on stderr and exits with status 75,
- * leaving the terminal and the log as they were. Then, before anything prints: when standard output is a
+ * verify the binary on the device. Otherwise two checks come first, each printing one line on stderr and
+ * leaving the terminal and the log as they were: [StateDirectoryGate] exits with status 78 when `~/.bitchat`
+ * is not a directory this user owns (or `HOME` is not set), and the board's [SingleInstanceLock] exits with
+ * status 75 when the unit or another embedded app already runs. Then, before anything prints: when standard output is a
  * terminal, stdout and stderr go to `~/.bitchat/tui.log` (see [TuiLog]; to /dev/null if that fails,
  * with a notice in the UI, and startup stops if even that fails), because the data layer's `println`s would scroll the screen under
  * Mosaic's frames (Mosaic draws on the controlling tty, not on stdout). Under systemd stdout is the
@@ -40,6 +42,7 @@ fun main(args: Array<String>) {
         println(buildIdentity.line)
         return
     }
+    StateDirectoryGate.requireOrExit(buildIdentity.name) // Exits when ~/.bitchat is not this user's own directory.
     SingleInstanceLock.acquireOrExit(buildIdentity.name) // Exits when another embedded app holds the board.
     TuiLog.redirectIfTerminal() // Exits when output cannot be kept off the terminal.
     LogPolicy.configure(getenv(LogPolicy.ENV_VAR)?.toKString())

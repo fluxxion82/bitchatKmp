@@ -107,6 +107,8 @@ include(":presentation:screens")
 include(":presentation:viewmodel")
 include(":presentation:viewvo")
 if (embeddedEnabled) {
+    // Linux data-layer state directory; linuxArm64 plus a macOS host test target.
+    include(":data:local:statedir")
     // :apps:embedded holds what the two embedded apps share; the apps themselves are its children.
     include(":apps:embedded")
     include(":apps:embedded:compose")

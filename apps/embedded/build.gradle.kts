@@ -7,7 +7,8 @@ plugins {
 // Embedded-only code that does not depend on a UI toolkit, shared by the Compose app
 // (:apps:embedded:compose) and the terminal app (:apps:embedded:tui): the build identity, the Koin
 // build-config module, the user-state initializer, the LoRa protocol selector and the
-// single-instance lock. Included only in the embedded profile (see settings.gradle.kts).
+// single-instance lock. Included only in the embedded profile (see settings.gradle.kts). commonMain may depend on
+// :data:local:statedir, the plain-POSIX state directory guard shared by the Linux data layer.
 
 val koinVersion = providers.gradleProperty("embedded.koinForkVersion")
     .orElse("4.2.2-embedded-SNAPSHOT")
@@ -21,6 +22,11 @@ kotlin {
     macosArm64()
 
     sourceSets {
+        commonMain {
+            dependencies {
+                implementation(project(":data:local:statedir"))
+            }
+        }
         commonTest {
             dependencies {
                 implementation(libs.kotlin.test)

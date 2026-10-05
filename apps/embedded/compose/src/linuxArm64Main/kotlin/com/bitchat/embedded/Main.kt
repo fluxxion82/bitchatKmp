@@ -119,12 +119,15 @@ class App : KoinComponent {
  * so a deploy script can verify a binary on the device. Everything else runs the app, once the
  * board's [SingleInstanceLock] is taken: when another embedded app already runs, this prints one
  * line on stderr and exits with status 75 before Koin, the radio, Bluetooth or DRM are touched.
+ * Before that, [StateDirectoryGate]: when `~/.bitchat` is not a directory this user owns (or `HOME` is not
+ * set), one line on stderr and status 78.
  */
 fun main(args: Array<String>) {
     if (args.any { it == "--version" || it == "-v" }) {
         println(buildIdentity.line)
         return
     }
+    StateDirectoryGate.requireOrExit(buildIdentity.name) // Exits when ~/.bitchat is not this user's own directory.
     SingleInstanceLock.acquireOrExit(buildIdentity.name) // Exits when another embedded app holds the board.
     // Message bodies stay out of the journal unless explicitly asked for.
     LogPolicy.configure(getenv(LogPolicy.ENV_VAR)?.toKString())

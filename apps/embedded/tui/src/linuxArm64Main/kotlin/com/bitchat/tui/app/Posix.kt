@@ -2,6 +2,8 @@
 
 package com.bitchat.tui.app
 
+import com.bitchat.local.statedir.StateDirectory
+import com.bitchat.local.statedir.StateDirectoryException
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.setUnhandledExceptionHook
 import kotlin.system.exitProcess
@@ -16,7 +18,6 @@ import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import platform.posix.EEXIST
 import platform.posix.ENOENT
 import platform.posix.F_DUPFD_CLOEXEC
 import platform.posix.O_APPEND
@@ -33,9 +34,7 @@ import platform.posix.fchmod
 import platform.posix.fcntl
 import platform.posix.fstat
 import platform.posix.ftruncate
-import platform.posix.getenv
 import platform.posix.isatty
-import platform.posix.mkdir
 import platform.posix.open
 import platform.posix.rename
 import platform.posix.stat
@@ -122,9 +121,12 @@ internal object TuiLog {
 
     /** Sets up `~/.bitchat/tui.log` on stdout and stderr; returns why not, or null when done. */
     private fun openLog(): String? {
-        val home = getenv("HOME")?.toKString()?.takeIf { it.isNotEmpty() } ?: return "HOME is not set"
-        val dir = "$home/.bitchat"
-        if (mkdir(dir, 0x1C0u) != 0 && errno != EEXIST) return "cannot create $dir: ${lastError()}" // 0700
+        // The log goes where the rest of the state goes, under the same rule: this user's own directory.
+        val dir = try {
+            StateDirectory.own()
+        } catch (e: StateDirectoryException) {
+            return e.message
+        }
         val file = "$dir/tui.log"
         chmod(file, 0x180u) // 0600 before anything else, even if it cannot be reopened; missing is fine.
         val failure = if (fileSize(file)?.let { it >= MAX_BYTES } == true) rotate(file) else pointStdioAt(file, create = true)

@@ -33,6 +33,7 @@ kotlin {
                 implementation("io.insert-koin:koin-core-linuxarm64:$koinVersion")
 
                 implementation(project(":apps:embedded"))
+                implementation(project(":data:local:statedir"))
                 implementation(project(":presentation:tui"))
                 implementation(project(":presentation:tui:binding"))
 

@@ -1,5 +1,7 @@
 package com.bitchat.embedded.di
 
+import com.bitchat.local.statedir.StateDirectory
+import com.bitchat.local.statedir.StateDirectoryException
 import com.bitchat.lora.LoRaProtocolType
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -11,7 +13,6 @@ import platform.posix.access
 import platform.posix.fclose
 import platform.posix.fgets
 import platform.posix.fopen
-import platform.posix.getenv
 
 /**
  * Reads the preferred LoRa protocol from saved app settings.
@@ -61,8 +62,15 @@ object LoRaProtocolSelector {
 
     @OptIn(ExperimentalForeignApi::class)
     private fun getSettingsFilePath(): String? {
-        val home = getenv("HOME")?.toKString() ?: return null
-        return "$home/.bitchat/settings/lora_settings.prefs"
+        // This runs before Koin, so before the data layer has checked anything: the file is read only
+        // from a settings directory that is this user's own, not from wherever a link in its place leads.
+        // And nothing is created: the identity domain's first-run reading comes later and must not find
+        // this app's own footprints.
+        return try {
+            StateDirectory.present("settings")?.let { "$it/lora_settings.prefs" }
+        } catch (_: StateDirectoryException) {
+            null
+        }
     }
 
     /**

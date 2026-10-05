@@ -2,6 +2,8 @@
 
 package com.bitchat.embedded
 
+import com.bitchat.local.statedir.StateDirectory
+import com.bitchat.local.statedir.StateDirectoryException
 import kotlin.system.exitProcess
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
@@ -26,7 +28,6 @@ import platform.posix.close
 import platform.posix.errno
 import platform.posix.fstat
 import platform.posix.ftruncate
-import platform.posix.getenv
 import platform.posix.geteuid
 import platform.posix.getpid
 import platform.posix.mkdir
@@ -72,10 +73,14 @@ object SingleInstanceLock {
      */
     fun acquireOrExit(
         name: String,
-        directory: String = defaultDirectory(),
+        directory: String? = defaultDirectory(),
         stderr: (String) -> Unit = ::printToStandardError,
         exit: (Int) -> Unit = ::exitProcess,
     ) {
+        if (directory == null) {
+            stderr("$name: no instance lock (HOME is not set or not an absolute path); starting without one")
+            return
+        }
         when (val attempt = tryAcquire(directory, Holder(name, getpid(), terminalName()))) {
             is Attempt.Acquired -> Unit // The descriptor stays open until the process ends.
             is Attempt.Held -> {
@@ -93,9 +98,9 @@ object SingleInstanceLock {
         }
         // The directory is opened and checked before anything in it is trusted: whoever can write
         // a directory can move any file to the lock file's name, and the holder's line is written
-        // into that file. A private ~/.bitchat always passes; with HOME unset the directory is
-        // under /tmp, where another user may have made it first.
-        val folder = open(directory, O_RDONLY or O_DIRECTORY or O_CLOEXEC)
+        // into that file. O_NOFOLLOW, as in the data layer's own check (StateDirectory): the name has
+        // to be a directory itself, not a link to wherever someone pointed it.
+        val folder = open(directory, O_RDONLY or O_DIRECTORY or O_NOFOLLOW or O_CLOEXEC)
         if (folder < 0) return Attempt.Unavailable("cannot open $directory: ${lastError()}")
         try {
             if (!isPrivateDirectory(folder)) {
@@ -181,12 +186,11 @@ object SingleInstanceLock {
     private fun terminalName(): String? =
         listOf(STDIN_FILENO, STDERR_FILENO, STDOUT_FILENO).firstNotNullOfOrNull { ttyname(it)?.toKString() }
 
-    /** `~/.bitchat` as the data layer resolves it (`LinuxSettingsFactory`): the state this lock guards. */
-    private fun defaultDirectory(): String = (getenv("HOME")?.toKString() ?: "/tmp") + "/.bitchat"
-
-    private fun printToStandardError(line: String) {
-        val bytes = "$line\n".encodeToByteArray()
-        bytes.usePinned { write(STDERR_FILENO, it.addressOf(0), bytes.size.convert()) }
+    /** `~/.bitchat`, from the resolver the data layer uses: the state this lock guards. Null when `HOME` cannot be used. */
+    private fun defaultDirectory(): String? = try {
+        StateDirectory.path()
+    } catch (_: StateDirectoryException) {
+        null
     }
 
     private fun lastError(): String = strerror(errno)?.toKString() ?: "error $errno"
@@ -200,6 +204,11 @@ object SingleInstanceLock {
     private const val PERMISSIONS = 0x1FF // 0777
     private const val WRITABLE_BY_OTHERS = 0x12 // 0022
     private const val OPEN_TO_OTHERS = 0x3F // 0077
+}
+
+internal fun printToStandardError(line: String) {
+    val bytes = "$line\n".encodeToByteArray()
+    bytes.usePinned { write(STDERR_FILENO, it.addressOf(0), bytes.size.convert()) }
 }
 
 /*

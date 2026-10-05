@@ -116,6 +116,18 @@ class SingleInstanceLockTest {
     }
 
     @Test
+    fun aSymbolicLinkWhereTheLockDirectoryGoesIsUnavailableAndNotFollowed() {
+        val target = temporaryDirectory() + "/target"
+        check(mkdir(target, 0x1C0.convert()) == 0) { "cannot create $target" }
+        check(symlink(target, directory) == 0) { "cannot link $target" }
+
+        val attempt = SingleInstanceLock.tryAcquire(directory, tui)
+
+        assertIs<Attempt.Unavailable>(attempt)
+        assertTrue(access("$target/instance.lock", F_OK) != 0, "a lock was created in the link target")
+    }
+
+    @Test
     fun aSymbolicLinkWhereTheLockFileGoesIsNotWrittenThrough() {
         val target = temporaryDirectory() + "/some-other-file"
         writeFile(target, "keep me")
@@ -153,6 +165,20 @@ class SingleInstanceLockTest {
         assertEquals(listOf(75), statuses)
         assertEquals(75, SingleInstanceLock.REFUSED_EXIT_STATUS)
         close(holder.descriptor)
+    }
+
+    @Test
+    fun aMissingHomeStartsWithoutAnInstanceLock() {
+        val lines = mutableListOf<String>()
+        val statuses = mutableListOf<Int>()
+
+        SingleInstanceLock.acquireOrExit("bitchat-tui", directory = null, stderr = { lines += it }, exit = { statuses += it })
+
+        assertEquals(
+            listOf("bitchat-tui: no instance lock (HOME is not set or not an absolute path); starting without one"),
+            lines,
+        )
+        assertEquals(emptyList(), statuses)
     }
 
     @Test

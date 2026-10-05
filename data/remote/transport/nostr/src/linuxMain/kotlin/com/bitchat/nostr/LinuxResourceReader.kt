@@ -1,8 +1,9 @@
 package com.bitchat.nostr
 
+import com.bitchat.local.statedir.StateDirectory
+import com.bitchat.local.statedir.StateDirectoryException
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.refTo
-import kotlinx.cinterop.toKString
 import platform.posix.SEEK_END
 import platform.posix.SEEK_SET
 import platform.posix.fclose
@@ -11,7 +12,6 @@ import platform.posix.fread
 import platform.posix.fseek
 import platform.posix.ftell
 import platform.posix.fwrite
-import platform.posix.getenv
 import platform.posix.mkdir
 
 /**
@@ -20,14 +20,13 @@ import platform.posix.mkdir
 @OptIn(ExperimentalForeignApi::class)
 class LinuxResourceReader : ResourceReader {
 
-    private val homeDir: String by lazy {
-        getenv("HOME")?.toKString() ?: "/tmp"
-    }
-
-    private val dataDir: String by lazy {
-        val dir = "$homeDir/.bitchat/data"
-        mkdir(dir, 0x1C0u) // 0700
-        dir
+    private val dataDir: String? by lazy {
+        try {
+            StateDirectory.own("data")
+        } catch (e: StateDirectoryException) {
+            println("LinuxResourceReader: ${e.message}")
+            null
+        }
     }
 
     override fun readResourceFile(filename: String): ByteArray? {
@@ -37,7 +36,7 @@ class LinuxResourceReader : ResourceReader {
     }
 
     override fun readFile(filepath: String): ByteArray? {
-        val fullPath = if (filepath.startsWith("/")) filepath else "$dataDir/$filepath"
+        val fullPath = if (filepath.startsWith("/")) filepath else "${dataDir ?: return null}/$filepath"
         val file = fopen(fullPath, "rb") ?: return null
 
         try {
@@ -59,7 +58,7 @@ class LinuxResourceReader : ResourceReader {
     }
 
     override fun writeFile(data: ByteArray, filepath: String): Boolean {
-        val fullPath = if (filepath.startsWith("/")) filepath else "$dataDir/$filepath"
+        val fullPath = if (filepath.startsWith("/")) filepath else "${dataDir ?: return false}/$filepath"
 
         // Ensure parent directory exists
         val parentDir = fullPath.substringBeforeLast("/")

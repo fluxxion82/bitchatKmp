@@ -168,6 +168,7 @@ kotlin {
             // Linux-specific - uses Arti native libs (cross-compiled)
             val linuxMain by getting {
                 dependencies {
+                    implementation(project(":data:local:statedir"))
                     // Arti native library linked via cinterop
                 }
             }

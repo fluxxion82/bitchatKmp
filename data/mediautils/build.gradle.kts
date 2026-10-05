@@ -67,6 +67,13 @@ kotlin {
 
             }
         }
+        if (embeddedEnabled) {
+            val linuxArm64Main by getting {
+                dependencies {
+                    implementation(project(":data:local:statedir"))
+                }
+            }
+        }
     }
 }
 

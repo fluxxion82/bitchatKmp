@@ -105,6 +105,7 @@ kotlin {
             val linuxMain by getting {
                 dependencies {
                     implementation(libs.ktor.client.curl)
+                    implementation(project(":data:local:statedir"))
                 }
             }
         }

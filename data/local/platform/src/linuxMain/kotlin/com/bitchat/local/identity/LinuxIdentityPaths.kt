@@ -1,5 +1,6 @@
 package com.bitchat.local.identity
 
+import com.bitchat.local.statedir.StateDirectory
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
 import platform.posix.getenv
@@ -15,22 +16,22 @@ import platform.posix.getenv
  * `SHELL` from the account database for a `User=` unit) and `XDG_CONFIG_HOME` is not, so the
  * `$HOME/.config` branch is the production path rather than an edge case.
  *
- * The `?: "/tmp"` fallback mirrors, deliberately, what `LinuxEncryptionSettingsFactory` and
- * `LinuxSettingsFactory` already do with an unset `HOME`. The scan has to look where the stores
- * are actually written, not where they ought to be, or it would report an empty domain for a
- * device whose files are all in `/tmp`. Tightening the unset-`HOME` case is a later task's job,
- * and it has to change all three call sites at once.
+ * There is no `/tmp` fallback. Another local user can create a state directory there first, and
+ * it does not survive a reboot; an unset or invalid `HOME` therefore refuses startup instead.
  */
 @OptIn(ExperimentalForeignApi::class)
 object LinuxIdentityPaths {
 
-    val home: String = getenv("HOME")?.toKString()?.takeIf { it.isNotEmpty() } ?: "/tmp"
+    val home: String = StateDirectory.home()
+
+    /** The private state directory shared by preferences and settings. */
+    val stateDir: String = StateDirectory.path()
 
     /** Secret stores: `*.prefs`, and later `*.prefs.enc`. */
-    val prefsDir: String = "$home/.bitchat/prefs"
+    val prefsDir: String = "$stateDir/prefs"
 
     /** The nine non-secret stores. No secrets, but their existence proves the app has run here. */
-    val settingsDir: String = "$home/.bitchat/settings"
+    val settingsDir: String = "$stateDir/settings"
 
     /** The identity ledger, and later the master key. Deliberately outside `~/.bitchat`. */
     val configDir: String = run {

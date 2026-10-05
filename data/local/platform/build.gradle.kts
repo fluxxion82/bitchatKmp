@@ -102,6 +102,9 @@ kotlin {
         if (embeddedEnabled) {
             // Linux-specific - uses file-based settings
             val linuxMain by getting {
+                dependencies {
+                    implementation(project(":data:local:statedir"))
+                }
             }
         }
 //        val iosTest by getting

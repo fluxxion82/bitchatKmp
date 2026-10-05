@@ -4,6 +4,7 @@ import com.bitchat.local.prefs.ensureDirectory
 import com.bitchat.local.prefs.ensureParentDirectory
 import com.bitchat.local.prefs.readWholeFileOrNull
 import com.bitchat.local.prefs.writeFileDurably
+import com.bitchat.local.statedir.StateDirectory
 
 /**
  * The identity ledger as a file in the config directory.
@@ -24,7 +25,10 @@ class LinuxLedgerStore(
     override val location: String = "$configDir/${IdentityLedger.FILE_NAME}"
 
     override fun read(): LedgerClaims = try {
-        IdentityLedger.parse(readWholeFileOrNull(location))
+        // Only from a directory that is this user's own: one that someone else owns throws here and reads
+        // as Damaged, like any ledger that cannot be read. A directory that is not there has no ledger.
+        if (!StateDirectory.ownIfPresent(configDir)) LedgerClaims.Absent
+        else IdentityLedger.parse(readWholeFileOrNull(location))
     } catch (e: Throwable) {
         LedgerClaims.Damaged(listOf("$location could not be read: ${e.message}"))
     }

@@ -2,6 +2,7 @@ package com.bitchat.mediautils
 
 import com.bitchat.domain.base.logPath
 import com.bitchat.domain.base.logError
+import com.bitchat.local.statedir.StateDirectory
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.convert
@@ -9,16 +10,24 @@ import kotlinx.cinterop.usePinned
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
+import platform.posix.EINTR
+import platform.posix.O_CLOEXEC
+import platform.posix.O_CREAT
+import platform.posix.O_NOFOLLOW
+import platform.posix.O_TRUNC
+import platform.posix.O_WRONLY
 import platform.posix.SEEK_END
 import platform.posix.SEEK_SET
+import platform.posix.close
+import platform.posix.errno
 import platform.posix.fclose
 import platform.posix.fopen
 import platform.posix.fread
 import platform.posix.fseek
 import platform.posix.ftell
-import platform.posix.fwrite
-import platform.posix.getenv
-import platform.posix.mkdir
+import platform.posix.open
+import platform.posix.unlink
+import platform.posix.write
 
 /**
  * Linux ARM64 (embedded) implementation of media file utilities.
@@ -77,25 +86,34 @@ actual fun getMimeType(path: String): String {
     }
 }
 
+/**
+ * Saves a received file as `~/.bitchat/<subDir>/<fileName>` and returns that path, or null when it was not
+ * saved.
+ *
+ * [fileName] is the name the sending peer gave the file, so it is used only when it is one plain path
+ * component: anything else could name a place outside the incoming directory. The directories on the way
+ * are this user's own private ones ([StateDirectory]), and the file is opened without following a link.
+ */
 @OptIn(ExperimentalForeignApi::class)
 actual suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: String): String? = withContext(Dispatchers.IO) {
     try {
-        // Use /home/bitchat or /tmp for embedded
-        val homeDir = getenv("HOME")?.toString() ?: "/tmp"
-        val appDir = "$homeDir/.bitchat"
-        val outDir = "$appDir/$subDir"
-
-        // Create directories if needed
-        mkdir(appDir, 0x1FF.convert()) // 0777
-        mkdir(outDir, 0x1FF.convert())
-
-        val outputPath = "$outDir/$fileName"
-        val file = fopen(outputPath, "wb") ?: return@withContext null
-
-        bytes.usePinned { pinned ->
-            fwrite(pinned.addressOf(0), 1u.convert(), bytes.size.convert(), file)
+        if (!StateDirectory.isPlainName(fileName)) {
+            println("MediaFileUtils linuxArm64: Not saving a file whose name is not a plain file name: ${logPath(fileName)}")
+            return@withContext null
         }
-        fclose(file)
+        val outDir = StateDirectory.own(*subDir.split('/').toTypedArray())
+        val outputPath = "$outDir/$fileName"
+        val descriptor = open(outputPath, O_WRONLY or O_CREAT or O_TRUNC or O_NOFOLLOW or O_CLOEXEC, MODE_0600)
+        if (descriptor < 0) return@withContext null
+        val written = writeAll(descriptor, bytes)
+        // Closed exactly once, whatever the write did: a second close could hit a descriptor another
+        // thread has opened in between.
+        val closed = close(descriptor) == 0
+        if (!written || !closed) {
+            unlink(outputPath)
+            println("MediaFileUtils linuxArm64: Could not write ${logPath(outputPath)}")
+            return@withContext null
+        }
 
         println("MediaFileUtils linuxArm64: Saved file to ${logPath(outputPath)}")
         outputPath
@@ -104,6 +122,24 @@ actual suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: S
         null
     }
 }
+
+/** Writes all of [bytes] to [descriptor]; false when the file could not take them. */
+@OptIn(ExperimentalForeignApi::class)
+private fun writeAll(descriptor: Int, bytes: ByteArray): Boolean {
+    if (bytes.isEmpty()) return true
+    return bytes.usePinned { pinned ->
+        var offset = 0
+        while (offset < bytes.size) {
+            val count = write(descriptor, pinned.addressOf(offset), (bytes.size - offset).convert()).toLong()
+            if (count < 0 && errno == EINTR) continue
+            if (count <= 0) return@usePinned false
+            offset += count.toInt()
+        }
+        true
+    }
+}
+
+private const val MODE_0600 = 0x180
 
 /**
  * Embedded platform: Image compression is not supported.

@@ -1,5 +1,8 @@
 package com.bitchat.local.prefs
 
+import com.bitchat.local.identity.LinuxIdentityPaths
+import com.bitchat.local.statedir.StateDirectory
+import com.bitchat.local.statedir.StateDirectoryException
 import com.russhwolf.settings.Settings
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -15,7 +18,6 @@ import platform.posix.EEXIST
 import platform.posix.EINTR
 import platform.posix.ENOENT
 import platform.posix.O_RDONLY
-import platform.posix.chmod
 import platform.posix.close
 import platform.posix.errno
 import platform.posix.fchmod
@@ -24,7 +26,6 @@ import platform.posix.ferror
 import platform.posix.fopen
 import platform.posix.fread
 import platform.posix.fsync
-import platform.posix.getenv
 import platform.posix.mkdir
 import platform.posix.mkstemp
 import platform.posix.open
@@ -57,18 +58,17 @@ private fun posixError(action: String, path: String): PreferenceStoreIOException
 }
 
 /**
- * Creates [path] with mode 0700.
+ * Makes [path] a private directory owned by this user.
  *
- * `mkdir`'s mode argument is masked by the process umask and is ignored outright when the
- * directory already exists, so the mode is set explicitly either way. Directories created by
- * older builds are therefore repaired on the next start.
+ * An existing directory owned by this user is tightened to 0700. A directory another user owns
+ * is refused rather than repaired or used, because its owner can replace the preference files.
  */
-@OptIn(ExperimentalForeignApi::class)
 internal fun ensureDirectory(path: String) {
-    if (mkdir(path, MODE_0700) != 0 && errno != EEXIST) {
-        throw posixError("creating directory", path)
+    try {
+        StateDirectory.ensureOwn(path)
+    } catch (e: StateDirectoryException) {
+        throw PreferenceStoreIOException(e.message ?: "cannot secure path", path)
     }
-    chmod(path, MODE_0700)
 }
 
 /**
@@ -221,10 +221,8 @@ internal fun writeFileDurably(path: String, payload: ByteArray) {
 class LinuxEncryptionSettingsFactory : EncryptionSettingsFactory {
 
     private val prefsDir: String by lazy {
-        val home = getenv("HOME")?.toKString() ?: "/tmp"
-        val baseDir = "$home/.bitchat"
-        val dir = "$baseDir/prefs"
-        ensureDirectory(baseDir)
+        val dir = LinuxIdentityPaths.prefsDir
+        ensureDirectory(LinuxIdentityPaths.stateDir)
         ensureDirectory(dir)
         dir
     }
