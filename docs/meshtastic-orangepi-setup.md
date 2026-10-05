@@ -122,13 +122,13 @@ Build from macOS host:
 ```bash
 cd bitchatKmp
 ./scripts/build-all-linux.sh
-./gradlew -Pembedded.enabled=true :apps:embedded:linkReleaseExecutableLinuxArm64
+./gradlew -Pembedded.enabled=true :apps:embedded:compose:linkReleaseExecutableLinuxArm64
 ```
 
 Deploy and run:
 
 ```bash
-scp apps/embedded/build/bin/linuxArm64/releaseExecutable/bitchat-embedded.kexe user@<orangepi-ip>:/tmp/
+scp apps/embedded/compose/build/bin/linuxArm64/releaseExecutable/bitchat-embedded.kexe user@<orangepi-ip>:/tmp/
 ssh user@<orangepi-ip> '/tmp/bitchat-embedded.kexe'
 ```
 

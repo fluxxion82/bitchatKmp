@@ -14,8 +14,8 @@ if [ "$APP" = tui ] && [ ! -t 0 ]; then
 fi
 bash data/remote/tor/native/build-desktop.sh --install
 if [ "$APP" = tui ]; then
-  ./gradlew -Pembedded.enabled=false -Ptui.enabled=true :apps:desktop-tui:installDist --console=plain
-  exec apps/desktop-tui/build/install/bitchat-tui/bin/bitchat-tui
+  ./gradlew -Pembedded.enabled=false -Ptui.enabled=true :apps:desktop:tui:installDist --console=plain
+  exec apps/desktop/tui/build/install/bitchat-tui/bin/bitchat-tui
 else
-  exec ./gradlew -Pembedded.enabled=false -Ptui.enabled=false :apps:desktop:run --console=plain
+  exec ./gradlew -Pembedded.enabled=false -Ptui.enabled=false :apps:desktop:compose:run --console=plain
 fi

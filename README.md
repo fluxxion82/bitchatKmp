@@ -11,8 +11,8 @@ This project keeps protocol-level compatibility with legacy clients while adding
 - `domain`: business logic contracts and models.
 - `data:*`: repositories + transport/crypto/network implementations.
 - `presentation:*`: shared design system, screens, and viewmodels, plus the terminal UI screens (`presentation:tui`).
-- `apps:*`: platform applications (`droid`, `desktop`, `desktop-tui`, `iosApp`, `embedded`, `embedded-tui`), the code they
-  share (`desktop-common`, `embedded-common`).
+- `apps:*`: the platform applications and nothing else: `droid`, `iosApp`, `desktop/compose`, `desktop/tui`,
+  `embedded/compose` and `embedded/tui`. `apps:desktop` and `apps:embedded` themselves hold what each pair of apps shares.
 - `iosdi`: shared KMP framework used by iOS.
 
 ## Prerequisites
@@ -89,7 +89,7 @@ cd bitchatKmp/
 
 ### 3. Build and run
 
-Plain `./gradlew :apps:desktop:run` works without any native build.
+Plain `./gradlew :apps:desktop:compose:run` works without any native build.
 
 On **Linux** that includes working Bluetooth: the desktop talks to BlueZ over D-Bus from the JVM, so
 there is no native library to build. **Apple Silicon macOS** can use `-PbleNative=macos`, which bridges to a
@@ -106,16 +106,16 @@ runs.
 ./gradlew :apps:droid:installDebug
 
 # Desktop (JVM; Linux gets BLE with no native prerequisites)
-./gradlew :apps:desktop:run
+./gradlew :apps:desktop:compose:run
 
 # Desktop, with readable output for a log
-./gradlew :apps:desktop:run --console=plain
+./gradlew :apps:desktop:compose:run --console=plain
 
 # Desktop (Apple Silicon macOS native BLE)
-./gradlew :apps:desktop:clean :apps:desktop:run -PbleNative=macos --rerun-tasks
+./gradlew :apps:desktop:compose:clean :apps:desktop:compose:run -PbleNative=macos --rerun-tasks
 
 # Desktop + Apple Silicon macOS location native bindings
-./gradlew :apps:desktop:clean :apps:desktop:run -PbleNative=macos -PlocationNative=macos --rerun-tasks
+./gradlew :apps:desktop:compose:clean :apps:desktop:compose:run -PbleNative=macos -PlocationNative=macos --rerun-tasks
 ```
 
 Desktop packaging (`packageDmg`/`packageDeb`/`packageRpm`/`packageMsi`) only produces host-OS formats,
@@ -142,17 +142,17 @@ scripts/run-desktop.sh tui        # terminal UI; refuses to start without an int
   `-PlocationNative=macos`) are not applied. Use the Gradle commands above when you need them.
 - Only one desktop app runs at a time: both take `~/.bitchat/desktop.lock`, so close the other one first.
 
-See [Desktop TUI launch instructions](apps/desktop-tui/README.md) for IntelliJ/terminal launch,
+See [Desktop TUI launch instructions](apps/desktop/tui/README.md) for IntelliJ/terminal launch,
 Tor library installation, logs, and the distinction from the ARM64 embedded TUI.
 
 Build the desktop terminal UI with:
 ```bash
-./gradlew -Pembedded.enabled=false -Ptui.enabled=true :apps:desktop-tui:installDist
+./gradlew -Pembedded.enabled=false -Ptui.enabled=true :apps:desktop:tui:installDist
 ```
 
 Run the installed binary from a real terminal (not `./gradlew run`, as Mosaic opens the controlling tty):
 ```bash
-apps/desktop-tui/build/install/bitchat-tui/bin/bitchat-tui
+apps/desktop/tui/build/install/bitchat-tui/bin/bitchat-tui
 ```
 
 The terminal UI shares the desktop GUI's identity, preferences, and Tor state (same data layer). Only one bitchat desktop application (GUI or TUI) can run at a time (single-instance lock at `~/.bitchat/desktop.lock`). Logs are written to `~/.bitchat/desktop-tui.log` (mode 0600, rotated at 5 MB).
@@ -169,7 +169,7 @@ Release Apple links use Kotlin/Native 2.5.0-Beta1, which carries the fix for KT-
 
 ### 4. Verify
 
-`scripts/verify.sh [quick|desktop|android|ios|embedded|tui|desktop-tui|full]` runs the per-platform build gates (default `quick` = `:domain:jvmTest`, the desktop compile and `:apps:desktop-common:test`); the last recorded results are written to `docs/baseline/`, which is untracked and local to each machine.
+`scripts/verify.sh [quick|desktop|android|ios|embedded|tui|desktop-tui|full]` runs the per-platform build gates (default `quick` = `:domain:jvmTest`, the desktop compile and `:apps:desktop:test`); the last recorded results are written to `docs/baseline/`, which is untracked and local to each machine.
 On a Homebrew JDK, `desktop`/`full` need `GRADLE_ARGS='-Pcompose.desktop.packaging.checkJdkVendor=false'` (see the `scripts/verify.sh` header).
 
 Agent/editor notes live in the gitignored CLAUDE.md; docs/architecture-summary.md is the tracked source for the module map.
@@ -238,7 +238,7 @@ Run `./scripts/build-all-ios.sh` or `./scripts/build-all-desktop.sh`. You need R
    ```
 2. Build the embedded binary:
    ```bash
-   ./gradlew -Pembedded.enabled=true :apps:embedded:linkReleaseExecutableLinuxArm64
+   ./gradlew -Pembedded.enabled=true :apps:embedded:compose:linkReleaseExecutableLinuxArm64
    ```
 3. Deploy to the device and (re)start `bitchat.service` (this step also does the link from step 2). The target is
    yours to supply: no host or account is checked into this repository, so set `PI_HOST` (or pass `--host`):

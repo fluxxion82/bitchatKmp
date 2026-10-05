@@ -51,8 +51,8 @@ apps/embedded/docs/MESHTASTIC_RUNBOOK.md
 apps/embedded/docs/MESHTASTIC_RECOVERY_2026-02-17.md
 
 ### Desktop ###
-apps/desktop/kcef-bundle
-apps/desktop/kcef-cache
+apps/desktop/compose/kcef-bundle
+apps/desktop/compose/kcef-cache
 
 ### IntelliJ IDEA ###
 .idea

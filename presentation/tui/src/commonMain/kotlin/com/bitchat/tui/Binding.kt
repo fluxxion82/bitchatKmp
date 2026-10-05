@@ -8,7 +8,7 @@ import com.bitchat.domain.tor.model.TorAvailability
 import com.bitchat.viewvo.chat.HeaderState
 import kotlin.time.Instant
 
-// Pure helpers for the binding layer (apps/embedded-tui), which maps view-model state onto these
+// Pure helpers for the binding layer (presentation/tui/binding), which maps view-model state onto these
 // screens. They take viewvo and domain types only, so they are tested here on the JVM.
 
 /** What the chat shows for a failed slash command; the same wording as the Compose app. */

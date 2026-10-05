@@ -71,7 +71,7 @@ Compose 1.12.1 and Koin 4.2.2 from Maven Central and never touches `~/.m2`.
    modules the forks actually publish, per group, each forced to its property. Modules the forks do not publish —
    Apple-only `*-uikit` modules, upstream `annotation-internal`/`collection-internal` forwards, Koin modules other than
    the four forked ones, `org.jetbrains.compose.desktop` — resolve from Maven Central as usual.
-4. **Explicit platform artifacts** (`apps/embedded/build.gradle.kts`, `presentation/*/build.gradle.kts`): Kotlin/Native
+4. **Explicit platform artifacts** (`apps/embedded/compose/build.gradle.kts`, `presentation/*/build.gradle.kts`): Kotlin/Native
    cannot resolve multiplatform metadata modules for an unsupported target, so the embedded modules declare
    `-linuxarm64` coordinates directly, using the same properties.
 
@@ -196,7 +196,7 @@ cd forks/.worktrees/koin-k25/projects
 ## 4. Mosaic
 
 **What:** Jake Wharton's Mosaic, the Compose-runtime terminal UI library behind `:presentation:tui`,
-`:apps:embedded-tui` and `:apps:desktop-tui`.
+`:apps:embedded:tui` and `:apps:desktop:tui`.
 
 **Why a fork:** upstream already publishes linuxArm64. The fork adds what the Orange Pi's Linux console needs, plus the
 owner's wasmJs work: F1–F5 parsed from the Linux console's `ESC [ [ A`..`E`; the cursor hidden even when the terminal
@@ -208,7 +208,7 @@ two of the fork's fixes (#1215 nanoTime, #1219 ArcSpline binarySearch), which th
 
 **Branch:** `embedded`, on upstream `trunk`. The `wasm-js` branch (published as `0.19.0-wasm-SNAPSHOT` for the owner's
 site) is separate and was not touched. Mosaic depends on Google's `androidx.compose.runtime`, not on the Compose fork,
-so it must never be linked into `:apps:embedded`.
+so it must never be linked into `:apps:embedded:compose`.
 
 **Build & publish:** JDK 23 (JDK 21 fails on the fork's `jvmJdk22` source set). The build downloads Zig 0.15.1 itself.
 Burst 2.14.0 is required: Burst 2.13.0's compiler plugin crashes `mosaic-tty`'s JVM test compilation on Kotlin 2.4.20
@@ -227,7 +227,7 @@ If C sources changed, first re-run `:mosaic-tty:cinteropMosaic<Target>`, `:mosai
 **Tests:** JVM tests of `mosaic-runtime`, `mosaic-tty`, `mosaic-terminal`, `mosaic-tty-terminal`; host-native
 (`macosArm64Test`) tests of `mosaic-tty` and `mosaic-tty-terminal`; linuxArm64 and wasmJs compilation; `apiCheck`.
 
-**Consumed via:** catalog `mosaic`, declared by `:presentation:tui`, `:presentation:tui:binding` and `:apps:desktop-tui` (`:apps:embedded-tui` gets it through `:presentation:tui`). The desktop TUI profile (`-Ptui.enabled=true`) adds `mavenLocal` restricted to
+**Consumed via:** catalog `mosaic`, declared by `:presentation:tui`, `:presentation:tui:binding` and `:apps:desktop:tui` (`:apps:embedded:tui` gets it through `:presentation:tui`). The desktop TUI profile (`-Ptui.enabled=true`) adds `mavenLocal` restricted to
 group `com.jakewharton.mosaic`.
 
 ## Skiko
@@ -385,7 +385,7 @@ Publish in this order: core → Compose Gradle plugin → compose-resources and 
 the embedded sysroot ([embedded README](../apps/embedded/README.md), step 1) and verify:
 
 ```bash
-./gradlew -Pembedded.enabled=true :apps:embedded:linkDebugExecutableLinuxArm64 --console=plain
+./gradlew -Pembedded.enabled=true :apps:embedded:compose:linkDebugExecutableLinuxArm64 --console=plain
 ```
 
 ## Rollback

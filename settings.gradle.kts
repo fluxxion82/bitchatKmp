@@ -36,7 +36,7 @@ val embeddedEnabled = providers.gradleProperty("embedded.enabled")
     .orElse(false)
     .get()
 
-// Desktop terminal UI profile (opt-in, JVM only): adds :presentation:tui and :apps:desktop-tui and lets
+// Desktop terminal UI profile (opt-in, JVM only): adds :presentation:tui and :apps:desktop:tui and lets
 // the Mosaic fork resolve from mavenLocal. Unlike embedded.enabled it forces no fork versions.
 val tuiEnabled = providers.gradleProperty("tui.enabled")
     .map(String::toBoolean)
@@ -80,8 +80,9 @@ plugins {
 rootProject.name = "bitchatKmp"
 
 include(":apps:droid")
+// :apps:desktop holds what the two desktop apps share; the apps themselves are its children.
 include(":apps:desktop")
-include(":apps:desktop-common")
+include(":apps:desktop:compose")
 include(":data:cache")
 include(":data:crypto")
 include(":data:local:platform")
@@ -106,14 +107,15 @@ include(":presentation:screens")
 include(":presentation:viewmodel")
 include(":presentation:viewvo")
 if (embeddedEnabled) {
+    // :apps:embedded holds what the two embedded apps share; the apps themselves are its children.
     include(":apps:embedded")
-    include(":apps:embedded-common")
-    include(":apps:embedded-tui")
+    include(":apps:embedded:compose")
+    include(":apps:embedded:tui")
     include(":presentation:tui")
     include(":presentation:tui:binding")
 }
 if (tuiEnabled) {
     include(":presentation:tui")
     include(":presentation:tui:binding")
-    include(":apps:desktop-tui")
+    include(":apps:desktop:tui")
 }

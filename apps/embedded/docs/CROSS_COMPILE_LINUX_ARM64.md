@@ -4,7 +4,7 @@ This document covers the process of cross-compiling native C libraries (libsodiu
 
 ## Overview
 
-The embedded app (`apps/embedded`) targets linuxArm64 for deployment on Raspberry Pi and similar ARM64 Linux devices. The crypto and noise modules require native C libraries that must be cross-compiled from macOS.
+The embedded apps (`apps/embedded/compose` and `apps/embedded/tui`) target linuxArm64 for deployment on Raspberry Pi and similar ARM64 Linux devices. The crypto and noise modules require native C libraries that must be cross-compiled from macOS.
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ This builds:
 Then build the embedded app:
 
 ```bash
-./gradlew -Pembedded.enabled=true :apps:embedded:linkDebugExecutableLinuxArm64
+./gradlew -Pembedded.enabled=true :apps:embedded:compose:linkDebugExecutableLinuxArm64
 ```
 
 ## Docker Image Details
@@ -317,13 +317,13 @@ After successful build:
 | secp256k1 | `data/crypto/native/secp256k1/build/linux-arm64/lib/libsecp256k1.a` |
 | noise-c | `data/noise/native/noise-c/build/linux-arm64/lib/libnoiseprotocol.a` |
 | GattLib | `data/remote/transport/bluetooth/native/gattlib/build/linux-arm64/install/lib/libgattlib.a` |
-| Embedded app | `apps/embedded/build/bin/linuxArm64/debugExecutable/bitchat-embedded.kexe` |
+| Embedded app | `apps/embedded/compose/build/bin/linuxArm64/debugExecutable/bitchat-embedded.kexe` |
 
 ## Deploying to Raspberry Pi
 
 ```bash
 # Copy binary to Pi
-scp apps/embedded/build/bin/linuxArm64/debugExecutable/bitchat-embedded.kexe pi@raspberrypi:/tmp/
+scp apps/embedded/compose/build/bin/linuxArm64/debugExecutable/bitchat-embedded.kexe pi@raspberrypi:/tmp/
 
 # Run on Pi
 ssh pi@raspberrypi 'chmod +x /tmp/bitchat-embedded.kexe && /tmp/bitchat-embedded.kexe'

@@ -1,11 +1,11 @@
 import java.security.MessageDigest
 
 // ---------------------------------------------------------------------------
-// Sidecar for an embedded executable, applied by :apps:embedded and
-// :apps:embedded-tui. Set `extra["embeddedBinaryBaseName"]` to the executable's
+// Sidecar for an embedded executable, applied by :apps:embedded:compose and
+// :apps:embedded:tui. Set `extra["embeddedBinaryBaseName"]` to the executable's
 // base name before applying. Every link of that executable writes
 // <base name>.build-info next to the binary: name=<base name>, the raw metadata
-// :apps:embedded-common generates, build=<debug|release> (from the binary's
+// :apps:embedded generates, build=<debug|release> (from the binary's
 // debuggable flag, see below), kexe_sha256=<sha256 of the executable> and
 // identity=<line>. The identity line must be byte-for-byte what
 // BuildIdentity(name).line prints (`<name> <version> (<sha12>, <branch>,
@@ -14,7 +14,7 @@ import java.security.MessageDigest
 // on the device to print exactly that line. Keep the two formats in sync.
 // ---------------------------------------------------------------------------
 val baseName = extra["embeddedBinaryBaseName"] as String
-val buildInfoProject = project(":apps:embedded-common")
+val buildInfoProject = project(":apps:embedded")
 
 // A script plugin cannot see the Kotlin Gradle plugin's classes (they live in the applying build
 // script's class loader), so its task and binary types are loaded from the plugin's own loader
@@ -45,7 +45,7 @@ tasks.withType(linkType).configureEach {
     val props = buildInfoProject.layout.buildDirectory.file("generated/embeddedBuildInfo/build-info.properties")
     val kexe = destination.file("$name.kexe")
     val sidecar = destination.file("$name.build-info")
-    dependsOn(":apps:embedded-common:generateEmbeddedBuildInfo")
+    dependsOn(":apps:embedded:generateEmbeddedBuildInfo")
     inputs.file(props).withPropertyName("embeddedBuildInfo").withPathSensitivity(PathSensitivity.NONE)
     outputs.file(sidecar).withPropertyName("embeddedBuildInfoSidecar")
     doLast {

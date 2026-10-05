@@ -199,15 +199,15 @@ On macOS (cross-compiles to linuxArm64):
 
 ```bash
 cd bitchatKmp
-./gradlew -Pembedded.enabled=true :apps:embedded:linkReleaseExecutableLinuxArm64
+./gradlew -Pembedded.enabled=true :apps:embedded:compose:linkReleaseExecutableLinuxArm64
 ```
 
-Output: `apps/embedded/build/bin/linuxArm64/releaseExecutable/bitchat-embedded.kexe`
+Output: `apps/embedded/compose/build/bin/linuxArm64/releaseExecutable/bitchat-embedded.kexe`
 
 ### Deploy to Orange Pi
 
 ```bash
-scp apps/embedded/build/bin/linuxArm64/releaseExecutable/bitchat-embedded.kexe \
+scp apps/embedded/compose/build/bin/linuxArm64/releaseExecutable/bitchat-embedded.kexe \
     user@<orangepi-ip>:~/
 ```
 

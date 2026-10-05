@@ -30,14 +30,14 @@ This builds:
 ### 2. Build the Embedded App
 
 ```bash
-./gradlew -Pembedded.enabled=true :apps:embedded:linkDebugExecutableLinuxArm64
+./gradlew -Pembedded.enabled=true :apps:embedded:compose:linkDebugExecutableLinuxArm64
 ```
 
 ### 3. Deploy and Run
 
 ```bash
 # Copy to device (replace with your device's IP/hostname)
-scp apps/embedded/build/bin/linuxArm64/debugExecutable/bitchat-embedded.kexe user@device:/tmp/
+scp apps/embedded/compose/build/bin/linuxArm64/debugExecutable/bitchat-embedded.kexe user@device:/tmp/
 
 # Run (requires root for Bluetooth D-Bus access)
 ssh user@device 'sudo /tmp/bitchat-embedded.kexe'

@@ -125,7 +125,7 @@ subprojects {
     tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {
         compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
-    // Plain kotlin("jvm") modules (apps/desktop) do run the validation, and their Java plugin
+    // Plain kotlin("jvm") modules (apps/desktop and its two apps) do run the validation, and their Java plugin
     // defaults compileJava to the host JDK, so pin Java to 17 there as well (AGP modules already
     // pin it through android.compileOptions).
     plugins.withId("org.jetbrains.kotlin.jvm") {

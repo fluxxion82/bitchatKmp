@@ -1,184 +1,147 @@
+import java.time.Instant
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
-    alias(libs.plugins.compose.compiler)
-    alias(libs.plugins.jetbrains.compose)
 }
 
-val composeVersion = providers.gradleProperty("embedded.composeForkVersion")
-    .orElse("1.12.1-embedded-SNAPSHOT")
-    .get()
-val material3Version = providers.gradleProperty("embedded.material3ForkVersion")
-    .orElse("1.12.1-embedded-SNAPSHOT")
-    .get()
-val lifecycleVersion = providers.gradleProperty("embedded.lifecycleForkVersion")
-    .orElse("2.11.0-embedded-SNAPSHOT")
-    .get()
-val savedstateVersion = providers.gradleProperty("embedded.savedstateForkVersion")
-    .orElse("1.5.0-alpha01-embedded-SNAPSHOT")
-    .get()
-val skikoVersion = providers.gradleProperty("embedded.skikoVersion")
-    .orElse("0.150.1")
-    .get()
+// Embedded-only code that does not depend on a UI toolkit, shared by the Compose app
+// (:apps:embedded:compose) and the terminal app (:apps:embedded:tui): the build identity, the Koin
+// build-config module, the user-state initializer and the LoRa protocol selector. Included only
+// in the embedded profile (see settings.gradle.kts).
+
 val koinVersion = providers.gradleProperty("embedded.koinForkVersion")
     .orElse("4.2.2-embedded-SNAPSHOT")
     .get()
 
-// Pin the linuxArm64 Skiko artifact. Root build.gradle.kts owns fork version forcing.
-configurations.all {
-    resolutionStrategy.eachDependency {
-        if (requested.group == "org.jetbrains.skiko" && requested.name == "skiko") {
-            // Kotlin/Native cannot resolve the multiplatform metadata module for this target,
-            // so redirect to the published platform artifact.
-            useTarget("org.jetbrains.skiko:skiko-linuxarm64:$skikoVersion")
-            because("Kotlin/Native needs the explicit linuxarm64 Skiko artifact")
+kotlin {
+    linuxArm64()
+
+    sourceSets {
+        named("linuxArm64Main") {
+            dependencies {
+                implementation(project(":domain"))
+                implementation(project(":data:repo"))
+                implementation(project(":data:remote:transport:lora"))
+                // Explicit linuxarm64 artifact to bypass multiplatform module resolution (as in :apps:embedded:compose).
+                implementation("io.insert-koin:koin-core-linuxarm64:$koinVersion")
+            }
         }
     }
 }
 
-kotlin {
-    linuxArm64 {
-        binaries {
-            executable {
-                entryPoint = "com.bitchat.embedded.main"
-                baseName = "bitchat-embedded"
-                // Link against DRM, GBM, EGL, GLESv2
-                val sysrootLib = project.file("sysroot/usr/lib/aarch64-linux-gnu").absolutePath
-                // Bluetooth module library paths (linkerOpts in .def propagate -l flags,
-                // but -L paths must be on the binary since .def can't use relative paths)
-                val btGattlibLib = project.file("../../data/remote/transport/bluetooth/native/gattlib/build/linux-arm64/install/lib").absolutePath
-                val btSysrootLib = project.file("../../data/remote/transport/bluetooth/native/sysroot/lib/aarch64-linux-gnu").absolutePath
-                linkerOpts(
-                    "-L$sysrootLib",
-                    "-L$btGattlibLib",
-                    "-L$btSysrootLib",
-                    "-ldrm", "-lgbm", "-lEGL", "-lGLESv2",
-                    // Skia/Skiko font dependencies
-                    "-lfontconfig", "-lfreetype",
-                    "-lpng16", "-lz", "-lexpat", "-lbz2",
-                    // Nothing to do with Skiko, whatever the old comment here said: skiko
-                    // linuxarm64 ships static archives inside the klib, and this flag only relaxes
-                    // symbol resolution for shared objects on the link line. What it covers is
-                    // glibc version skew between the extracted Pi sysroot and the older glibc
-                    // Kotlin/Native links linux_arm64 against. Dropping it fails with exactly
-                    // three errors, measured:
-                    //   stat64@GLIBC_2.33, fstat64@GLIBC_2.33  <- sysroot libdrm.so
-                    //   pow@GLIBC_2.29                         <- sysroot libpng16.so
-                    // All three resolve fine on the device (Debian bookworm, glibc 2.36), so this
-                    // is a build-host artefact, not a missing symbol. libgbm.so.1 and
-                    // libEGL_mesa.so.0 never even reach the check: LLD skips a DSO whose own
-                    // DT_NEEDED entries are not all on the link line, and the sysroot has no
-                    // libwayland-*, libxcb-* or libexpat.so.1. Keep the flag; the experiment has
-                    // been run twice now.
-                    "--allow-shlib-undefined",
+// ---------------------------------------------------------------------------
+// Build identity. A Gradle task writes EmbeddedBuildInfo.kt so each embedded
+// binary can report the commit it was built from (printed at startup and by
+// --version), plus a raw build-info.properties for tooling; the link sidecar
+// (gradle/embedded-link-sidecar.gradle.kts) copies it next to each binary, with
+// the binary's own name. Uses providers.exec so it stays configuration-cache
+// safe. On a clean tree the generated files are a pure function of (version,
+// sha, branch) and the commit time, so the task, compile and link stay
+// UP-TO-DATE. On a dirty tree the build time is the wall clock and the task
+// reruns every build on purpose.
+//
+// "Dirty" means any modified, staged, deleted or untracked file under the roots
+// that feed the binary (apps, data, domain, presentation, iosdi and the root
+// Gradle files). Untracked files count because an un-added source file is
+// compiled into the binary just like a committed one. Gitignored paths (build/,
+// sysroot/, native outputs) never show up in --porcelain, and submodule
+// worktree changes are ignored (--ignore-submodules=dirty), so a clean tree is
+// reported as clean.
+// ---------------------------------------------------------------------------
+version = providers.gradleProperty("embedded.version").orElse("1.0.0").get()
+
+fun git(vararg args: String): Provider<String> = providers.exec {
+    workingDir(rootProject.projectDir)
+    commandLine("git", *args)
+    isIgnoreExitValue = true
+}.standardOutput.asText.map { it.trim() }
+
+val gitSha = git("rev-parse", "--verify", "HEAD").map { it.ifEmpty { "unknown" } }
+val gitBranch = git("rev-parse", "--abbrev-ref", "HEAD").map { it.ifEmpty { "unknown" } }
+val gitCommitTime = git("show", "-s", "--format=%cI", "HEAD").map { it.ifEmpty { "unknown" } }
+val gitDirty = git(
+    "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=dirty", "--",
+    "apps", "data", "domain", "presentation", "iosdi",
+    "build.gradle.kts", "settings.gradle.kts", "gradle.properties", "gradle",
+).map { it.isNotEmpty() }
+
+val embeddedBuildInfoDir = layout.buildDirectory.dir("generated/embeddedBuildInfo")
+
+val generateEmbeddedBuildInfo = tasks.register("generateEmbeddedBuildInfo") {
+    group = "build"
+    description = "Writes EmbeddedBuildInfo.kt and build-info.properties (git SHA, branch, dirty flag, build time, version)."
+    val kotlinOutputDir = embeddedBuildInfoDir.map { it.dir("kotlin") }
+    val propsFile = embeddedBuildInfoDir.map { it.file("build-info.properties") }
+    inputs.property("version", version.toString())
+    inputs.property("gitSha", gitSha)
+    inputs.property("gitBranch", gitBranch)
+    inputs.property("gitCommitTime", gitCommitTime)
+    inputs.property("gitDirty", gitDirty)
+    outputs.dir(kotlinOutputDir)
+    outputs.file(propsFile)
+    // Bind to a local so the serialized lambdas below capture the provider, not the script object
+    // (the configuration cache cannot serialize Gradle script object references).
+    val dirtyProvider = gitDirty
+    outputs.upToDateWhen { !dirtyProvider.get() }
+    outputs.cacheIf { !dirtyProvider.get() }
+    doLast {
+        // Defined here, not at script level: a script-level function would drag the script
+        // object into this lambda and break the configuration cache.
+        fun String.kotlinLiteral(): String = buildString {
+            for (c in this@kotlinLiteral) when (c) {
+                '\\' -> append("\\\\"); '"' -> append("\\\""); '$' -> append("\\$")
+                '\n' -> append("\\n"); '\r' -> append("\\r"); '\t' -> append("\\t")
+                else -> if (c < ' ') append("\\u%04x".format(c.code)) else append(c)
+            }
+        }
+        val props = inputs.properties
+        val versionValue = props.getValue("version").toString()
+        val sha = props.getValue("gitSha").toString()
+        val branch = props.getValue("gitBranch").toString()
+        // A newline in either value would split the identity line and leave an unparsable
+        // build-info.properties line; refuse it rather than write a sidecar the deploy misreads.
+        for ((key, value) in listOf("embedded.version" to versionValue, "git branch" to branch)) {
+            if ('\n' in value || '\r' in value) {
+                throw GradleException(
+                    "embedded build info: $key must not contain a newline, got \"${value.kotlinLiteral()}\""
                 )
             }
         }
-        val sysrootInclude = project.file("sysroot/usr/include")
-
-        compilations.getByName("main") {
-            cinterops {
-                val drm by creating {
-                    defFile(project.file("src/nativeInterop/cinterop/drm.def"))
-                    includeDirs(sysrootInclude, project.file("sysroot/usr/include/libdrm"))
-                }
-                val gbm by creating {
-                    defFile(project.file("src/nativeInterop/cinterop/gbm.def"))
-                    includeDirs(sysrootInclude)
-                }
-                val egl by creating {
-                    defFile(project.file("src/nativeInterop/cinterop/egl.def"))
-                    includeDirs(sysrootInclude)
-                    compilerOpts("-DMESA_EGL_NO_X11_HEADERS")
-                }
-                val gles2 by creating {
-                    defFile(project.file("src/nativeInterop/cinterop/gles2.def"))
-                    includeDirs(sysrootInclude)
-                }
-                val evdev by creating {
-                    defFile(project.file("src/nativeInterop/cinterop/evdev.def"))
-                    includeDirs(sysrootInclude)
-                }
-                val i2c by creating {
-                    defFile(project.file("src/nativeInterop/cinterop/i2c.def"))
-                    includeDirs(sysrootInclude)
-                }
-                val select by creating {
-                    defFile(project.file("src/nativeInterop/cinterop/select.def"))
-                    includeDirs(sysrootInclude)
-                }
-            }
-        }
-    }
-
-    sourceSets {
-        val linuxArm64Main by getting {
-            dependencies {
-                implementation(libs.kotlinx.coroutines.core)
-
-                // Upstream Skiko from Maven Central. Since 0.9.47 the linuxarm64 artifact
-                // bundles an EGL-only Skia (no GLX object at all), which is why the local
-                // EGL fork was dropped -- see docs/FORKED_LIBRARIES.md.
-                implementation("org.jetbrains.skiko:skiko-linuxarm64:$skikoVersion")
-
-                implementation("org.jetbrains.compose.runtime:runtime:$composeVersion")
-                implementation("org.jetbrains.compose.foundation:foundation-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.compose.material3:material3-linuxarm64:$material3Version")
-                implementation("org.jetbrains.compose.ui:ui-linuxarm64:$composeVersion")
-
-                implementation("org.jetbrains.compose.foundation:foundation-layout-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.compose.animation:animation-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.compose.animation:animation-core-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.compose.ui:ui-geometry-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.compose.ui:ui-graphics-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.compose.ui:ui-text-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.compose.ui:ui-unit-linuxarm64:$composeVersion")
-                implementation("org.jetbrains.compose.ui:ui-util-linuxarm64:$composeVersion")
-
-                // Koin - explicit linuxarm64 artifacts to bypass multiplatform module resolution
-                implementation("io.insert-koin:koin-core-linuxarm64:$koinVersion")
-                implementation("io.insert-koin:koin-compose-linuxarm64:$koinVersion")
-                implementation("io.insert-koin:koin-compose-viewmodel-linuxarm64:$koinVersion")
-
-                // Lifecycle - explicit linuxarm64 artifacts to bypass multiplatform module resolution
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-common-linuxarm64:$lifecycleVersion")
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-linuxarm64:$lifecycleVersion")
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose-linuxarm64:$lifecycleVersion")
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-runtime-linuxarm64:$lifecycleVersion")
-                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-savedstate-linuxarm64:$lifecycleVersion")
-
-                implementation("org.jetbrains.androidx.savedstate:savedstate-linuxarm64:$savedstateVersion")
-
-                // Build identity, build-config module, user-state initializer, LoRa protocol selector
-                implementation(project(":apps:embedded-common"))
-
-                // Domain for BitchatMessage model
-                implementation(project(":domain"))
-                implementation(project(":presentation:design"))
-                implementation(project(":presentation:viewmodel"))
-                implementation(project(":presentation:viewvo"))
-                implementation(project(":presentation:screens"))
-
-                // Data layer modules for real data access
-                implementation(project(":data:crypto"))
-                implementation(project(":data:local:platform"))
-                implementation(project(":data:remote:rest:client"))
-                implementation(project(":data:repo"))
-                implementation(project(":data:cache"))
-                implementation(project(":data:remote:transport:nostr"))
-                implementation(project(":data:remote:transport:bluetooth"))
-                implementation(project(":data:remote:transport:lora"))
-                implementation(project(":data:remote:transport:lora:bitchat"))
-                implementation(project(":data:remote:transport:lora:meshtastic"))
-                implementation(project(":data:remote:transport:lora:meshcore"))
-                implementation(project(":data:noise"))
-                implementation(project(":data:remote:tor"))
-            }
-        }
+        val dirty = props.getValue("gitDirty") as Boolean
+        val builtAt = if (dirty) Instant.now().toString() else props.getValue("gitCommitTime").toString()
+        val dir = kotlinOutputDir.get().asFile.resolve("com/bitchat/embedded")
+        dir.mkdirs()
+        dir.resolve("EmbeddedBuildInfo.kt").writeText(
+            """
+            |// Generated by :apps:embedded:generateEmbeddedBuildInfo. Do not edit.
+            |package com.bitchat.embedded
+            |
+            |internal object EmbeddedBuildInfo {
+            |    const val VERSION = "${versionValue.kotlinLiteral()}"
+            |    const val GIT_SHA = "${sha.kotlinLiteral()}"
+            |    const val GIT_BRANCH = "${branch.kotlinLiteral()}"
+            |    const val GIT_DIRTY = $dirty
+            |    const val BUILT_AT = "${builtAt.kotlinLiteral()}"
+            |}
+            |""".trimMargin()
+        )
+        // Raw (unescaped) metadata for tooling. No name= line: the link sidecar starts with the
+        // name of the binary it describes (gradle/embedded-link-sidecar.gradle.kts).
+        propsFile.get().asFile.writeText(
+            """
+            |version=$versionValue
+            |git_sha=$sha
+            |git_branch=$branch
+            |git_dirty=$dirty
+            |built_at=$builtAt
+            |""".trimMargin()
+        )
     }
 }
 
-// Build identity: generated in :apps:embedded-common (one git identity for every embedded binary);
-// the link sidecar is written by the shared script below, named after this executable.
-extra["embeddedBinaryBaseName"] = "bitchat-embedded"
-apply(from = rootProject.file("gradle/embedded-link-sidecar.gradle.kts"))
+kotlin.sourceSets.named("linuxArm64Main") {
+    // Only kotlin/ is a source root (the task also writes build-info.properties);
+    // mapping the task provider keeps the compile -> generate task dependency.
+    val generatedKotlin = embeddedBuildInfoDir.map { it.dir("kotlin") }
+    kotlin.srcDir(generateEmbeddedBuildInfo.map { generatedKotlin.get() })
+}

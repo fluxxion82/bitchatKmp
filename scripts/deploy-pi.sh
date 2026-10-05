@@ -115,8 +115,8 @@ case "$BUILD" in debug) BUILD_CAP=Debug ;; release) BUILD_CAP=Release ;; esac
 TASK="link${BUILD_CAP}ExecutableLinuxArm64"
 case "$UI" in
   compose)
-    APP_PROJECT="apps:embedded"
-    APP_DIR="apps/embedded"
+    APP_PROJECT="apps:embedded:compose"
+    APP_DIR="apps/embedded/compose"
     BINARY_BASENAME="bitchat-embedded"
     SERVICE_NAME="bitchat.service"
     RELEASES="/opt/bitchat/releases"
@@ -130,12 +130,12 @@ case "$UI" in
     WAIT_SCRIPT="$REPO/apps/embedded/systemd/wait-for-input-devices.sh"
     ;;
   tui)
-    APP_PROJECT="apps:embedded-tui"
-    APP_DIR="apps/embedded-tui"
+    APP_PROJECT="apps:embedded:tui"
+    APP_DIR="apps/embedded/tui"
     BINARY_BASENAME="bitchat-tui"
     SERVICE_NAME="bitchat-tui.service"
     RELEASES="/opt/bitchat-tui/releases"
-    UNIT_FILE="$REPO/apps/embedded-tui/systemd/bitchat-tui.service"
+    UNIT_FILE="$REPO/apps/embedded/systemd/bitchat-tui.service"
     OWNER_UNIT_FILE="/opt/bitchat-tui/bitchat-tui.service"
     HOME_LINK_NAME="bitchat-tui.kexe"
     NEEDS_COMPOSE_RESOURCES=0
@@ -207,7 +207,7 @@ KEXE_SHA256="$(field kexe_sha256)"; IDENTITY_EXPECTED="$(field identity)"
    && -n "$SIDECAR_BUILD" && -n "$KEXE_SHA256" && -n "$IDENTITY_EXPECTED" ]] \
   || die "could not parse version/git_sha/git_branch/git_dirty/built_at/build/kexe_sha256/identity from $SIDECAR"
 [[ "$SIDECAR_BUILD" == "$BUILD" ]] \
-  || die "sidecar says build=$SIDECAR_BUILD but --$BUILD was selected; relink with :apps:embedded:$TASK"
+  || die "sidecar says build=$SIDECAR_BUILD but --$BUILD was selected; relink with :$APP_PROJECT:$TASK"
 LOCAL_SHA256="$(shasum -a 256 "$BINARY" | cut -d' ' -f1)"
 [[ "$LOCAL_SHA256" == "$KEXE_SHA256" ]] || die "sidecar does not match the executable; rebuild"
 SHA12="${GIT_SHA:0:12}"

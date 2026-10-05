@@ -106,7 +106,7 @@ kotlin {
                 // BlueZ over D-Bus: the org.bluez API is reached through the system bus, which
                 // dbus-java speaks over an AF_UNIX socket. Only the SLF4J facade belongs here --
                 // a library that ships a binding forces one on every consumer and races whatever
-                // the app configured. The backend lives in :apps:desktop, and the spike gets its
+                // the app configured. The backend lives in the desktop apps (:apps:desktop:compose, :apps:desktop:tui), and the spike gets its
                 // own through the bleSpikeRuntime configuration below.
                 implementation(libs.dbus.java.core)
                 implementation(libs.dbus.java.transport.native.unixsocket)

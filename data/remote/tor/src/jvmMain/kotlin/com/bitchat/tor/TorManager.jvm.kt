@@ -372,8 +372,8 @@ actual class TorManager internal constructor(
 
         /**
          * Set by the Compose Desktop runtime to the application's resources directory: a staged
-         * directory under `build/compose/tmp/prepareAppResources` for `:apps:desktop:run`, and
-         * `$APPDIR/resources` inside an installed package. `:apps:desktop` stages the Arti library
+         * directory under `build/compose/tmp/prepareAppResources` for `:apps:desktop:compose:run`, and
+         * `$APPDIR/resources` inside an installed package. `:apps:desktop:compose` stages the Arti library
          * there (see its `stageAppResources` task), so an installed app finds it relative to the
          * installation instead of an absolute build-machine path.
          */

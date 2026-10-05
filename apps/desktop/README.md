@@ -1,4 +1,4 @@
-# `:apps:desktop` — JVM desktop app
+# `:apps:desktop:compose` — JVM desktop app
 
 Compose Multiplatform desktop application (`com.bitchat.desktop.AppKt`). macOS is the verified host;
 Linux builds and runs but has never been shipped, and Windows is untried.
@@ -12,7 +12,7 @@ scripts/run-desktop.sh compose
 ```
 
 `compose` is the default mode, so the argument can be omitted; `scripts/run-desktop.sh tui` launches the
-[terminal UI](../desktop-tui/README.md) instead. What the launcher needs and does not do:
+[terminal UI](tui/README.md) instead. What the launcher needs and does not do:
 
 - It runs `data/remote/tor/native/build-desktop.sh --install` every time before starting the app. That needs
   `rustc` with the toolchain pinned in `data/remote/tor/native/RUST_TOOLCHAIN`, the Arti submodule checked out
@@ -21,13 +21,13 @@ scripts/run-desktop.sh compose
 - It passes no Gradle properties through, so `-PbleNative=macos` and `-PlocationNative=macos` are not applied: on
   macOS a launcher start has the BLE stubs and IP-based location. Use the Gradle command below for native BLE.
 - Only one desktop app runs at a time. Compose and the terminal UI both take `~/.bitchat/desktop.lock`
-  (`SingleInstanceLock` in `:apps:desktop-common`) and the second one exits with a message.
+  (`SingleInstanceLock` in `:apps:desktop`) and the second one exits with a message.
 
 For a Gradle-only launch using already installed native libraries:
 
 ```bash
-./gradlew :apps:desktop:run --console=plain                            # no native prerequisites
-./gradlew :apps:desktop:run -PbleNative=macos -PlocationNative=macos   # macOS-only native BLE/location
+./gradlew :apps:desktop:compose:run --console=plain                            # no native prerequisites
+./gradlew :apps:desktop:compose:run -PbleNative=macos -PlocationNative=macos   # macOS-only native BLE/location
 ```
 
 On Apple Silicon, `-PbleNative=macos` / `-PlocationNative=macos` build Kotlin/Native dylibs and bundle them as classpath
@@ -35,9 +35,9 @@ resources; `NativeBleLoader` / `NativeLocationLoader` extract and `System.load` 
 non-macOS host. Without them, Intel Macs and non-macOS hosts fall back to the desktop BLE stubs and IP-based location; Linux
 needs no native library for BLE (BlueZ over D-Bus, see the Linux notes below) and also uses IP-based location.
 
-IntelliJ can use a Gradle run configuration with task `:apps:desktop:run`; it follows the same
+IntelliJ can use a Gradle run configuration with task `:apps:desktop:compose:run`; it follows the same
 resource staging as the command above. Running `AppKt` directly can bypass that staging. See
-[Desktop terminal UI](../desktop-tui/README.md) for the terminal app.
+[Desktop terminal UI](tui/README.md) for the terminal app.
 
 ## Native libraries and app resources
 
@@ -86,10 +86,10 @@ so its JVM loads the new file.
 ## Packaging
 
 ```bash
-./gradlew :apps:desktop:packageDmg   # macOS host
-./gradlew :apps:desktop:packageDeb   # Linux host
-./gradlew :apps:desktop:packageRpm   # Linux host, needs rpm-build
-./gradlew :apps:desktop:packageMsi   # Windows host
+./gradlew :apps:desktop:compose:packageDmg   # macOS host
+./gradlew :apps:desktop:compose:packageDeb   # Linux host
+./gradlew :apps:desktop:compose:packageRpm   # Linux host, needs rpm-build
+./gradlew :apps:desktop:compose:packageMsi   # Windows host
 ```
 
 jpackage only produces host-OS formats, so **each package must be built on its target OS**. There is no
@@ -104,7 +104,7 @@ Homebrew JDK. Linux packaging never needs it.
 
 ```bash
 sudo dnf install -y rpm-build          # required for packageRpm
-./gradlew :apps:desktop:packageRpm --console=plain
+./gradlew :apps:desktop:compose:packageRpm --console=plain
 ```
 
 Debian/Ubuntu need `fakeroot` for `packageDeb`.

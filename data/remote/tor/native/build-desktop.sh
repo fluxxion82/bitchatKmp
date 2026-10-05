@@ -36,7 +36,7 @@ LIBS_DIR="$SCRIPT_DIR/libs/desktop"
 # writes across the whole tree. Both trees are copied out instead.
 BUILD_ROOT="${BITCHAT_ARTI_BUILD_ROOT:-$HOME/.cache/bitchat-arti}"
 
-# Where a successful build is left. Deliberately NOT $LIBS_DIR: apps/desktop/build.gradle.kts
+# Where a successful build is left. Deliberately NOT $LIBS_DIR: apps/desktop/compose/build.gradle.kts
 # stages every .so from there into the application resources, so copying there would put a library
 # that has not been through the native-correctness review into the next run of the app.
 OUTPUT_DIR="$BUILD_ROOT/output"

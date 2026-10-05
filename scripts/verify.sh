@@ -39,9 +39,9 @@ gradle_embedded() { echo "== ./gradlew ${BASE[*]} -Pembedded.enabled=true -Ptui.
 gradle_tui()      { echo "== ./gradlew ${BASE[*]} -Pembedded.enabled=false -Ptui.enabled=true $*"; ./gradlew "${BASE[@]}" -Pembedded.enabled=false -Ptui.enabled=true "$@"; }
 
 case "$MODE" in
-  quick)    gradle :domain:jvmTest :apps:desktop:compileKotlin :apps:desktop-common:test ;;
+  quick)    gradle :domain:jvmTest :apps:desktop:compose:compileKotlin :apps:desktop:test ;;
   desktop)
-    desktop_tasks=(:domain:jvmTest :apps:desktop:compileKotlin :apps:desktop-common:test :apps:desktop:packageDmg)
+    desktop_tasks=(:domain:jvmTest :apps:desktop:compose:compileKotlin :apps:desktop:test :apps:desktop:compose:packageDmg)
     if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
       desktop_tasks+=(:data:remote:transport:bluetooth:linkDebugSharedMacosArm64)
     fi
@@ -54,11 +54,11 @@ case "$MODE" in
     ;;
   # Release links too: the deployed binaries are release builds, and only an optimized link runs the
   # whole-program passes, so a debug-only gate would not see a release-only failure.
-  embedded) gradle_embedded :apps:embedded:linkDebugExecutableLinuxArm64 :apps:embedded:linkReleaseExecutableLinuxArm64 ;;
-  tui)      gradle_embedded :presentation:tui:jvmTest :presentation:tui:compileKotlinLinuxArm64 :apps:embedded-tui:linkDebugExecutableLinuxArm64 :apps:embedded-tui:linkReleaseExecutableLinuxArm64 ;;
+  embedded) gradle_embedded :apps:embedded:compose:linkDebugExecutableLinuxArm64 :apps:embedded:compose:linkReleaseExecutableLinuxArm64 ;;
+  tui)      gradle_embedded :presentation:tui:jvmTest :presentation:tui:compileKotlinLinuxArm64 :apps:embedded:tui:linkDebugExecutableLinuxArm64 :apps:embedded:tui:linkReleaseExecutableLinuxArm64 ;;
   desktop-tui)
-    gradle_tui :presentation:tui:jvmTest :presentation:tui:binding:jvmTest :apps:desktop-common:test :apps:desktop-tui:test :apps:desktop-tui:verifyRuntimeJarNames :apps:desktop-tui:installDist
-    version_line="$(apps/desktop-tui/build/install/bitchat-tui/bin/bitchat-tui --version)"
+    gradle_tui :presentation:tui:jvmTest :presentation:tui:binding:jvmTest :apps:desktop:test :apps:desktop:tui:test :apps:desktop:tui:verifyRuntimeJarNames :apps:desktop:tui:installDist
+    version_line="$(apps/desktop/tui/build/install/bitchat-tui/bin/bitchat-tui --version)"
     [[ "$version_line" == bitchat-tui\ * ]] || { echo "desktop-tui --version did not start with bitchat-tui: $version_line" >&2; exit 1; }
     ;;
   full)     for m in desktop android ios embedded tui desktop-tui; do "$SELF" "$m"; done ;;

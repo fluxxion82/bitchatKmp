@@ -113,7 +113,7 @@ jobs:
           # The whole tree rather than per-format globs: the exact subdirectory names come from
           # the Compose plugin, and this has never been run here -- the local JDK has no jmods, so
           # jpackage cannot execute. Uploading the directory removes the guess.
-          path: apps/desktop/build/compose/binaries/main/**
+          path: apps/desktop/compose/build/compose/binaries/main/**
           if-no-files-found: error
 
   release:
