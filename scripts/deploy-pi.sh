@@ -587,14 +587,19 @@ if [ -n "$tmux_bin" ] && "$tmux_bin" -u -L "$socket" -f "$config" has-session -t
   case "$pane_tty" in pts/*) ;; *) exit 1 ;; esac
   in_cgroup "$pane_pid" || exit 1
   server_pid=
-  relay_pid=
   while IFS= read -r candidate; do
     command=$(ps -o comm= -p "$candidate" | tr -d " ")
     [ "$command" = "tmux:server" ] && server_pid=$candidate
-    [ "$command" = "systemd-cat" ] && relay_pid=$candidate
   done < "$cgroup_procs"
-  [ -n "$server_pid" ] && [ -n "$relay_pid" ] || exit 1
-  echo "tmux wiring: launcher $pid tty $(tty_of "$pid"), server $server_pid, pane $pane_pid /dev/$pane_tty, systemd-cat $relay_pid"
+  [ -n "$server_pid" ] || exit 1
+  # The journal relay is the pane shell child whose stdout is the journal socket. systemd-cat with
+  # no command execs cat, so on a real board its name is "cat", not "systemd-cat".
+  relay_pid=
+  for candidate in $(ps -o pid= --ppid "$pane_pid"); do
+    case "$(readlink "/proc/$candidate/fd/1" 2>/dev/null)" in socket:*) relay_pid=$candidate ;; esac
+  done
+  [ -n "$relay_pid" ] && in_cgroup "$relay_pid" || exit 1
+  echo "tmux wiring: launcher $pid tty $(tty_of "$pid"), server $server_pid, pane $pane_pid /dev/$pane_tty, journal relay $relay_pid"
   systemd-cgls --no-pager "$cgroup"
 else
   exe=$(readlink -f "/proc/$pid/exe") || exit 1
