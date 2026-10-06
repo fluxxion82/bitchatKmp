@@ -76,6 +76,10 @@ actual fun getMimeType(path: String): String {
  * Save file bytes to local storage in a specified subdirectory.
  */
 actual suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: String): String? = withContext(Dispatchers.IO) {
+    if (!isPlainFileName(fileName)) {
+        println("MediaFileUtils Desktop: not saving a file whose name is not a plain file name: ${logPath(fileName)}")
+        return@withContext null
+    }
     try {
         // Use user home directory for desktop
         val userHome = System.getProperty("user.home")
@@ -87,6 +91,11 @@ actual suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: S
         }
 
         val outputFile = File(outDir, fileName)
+        // Created here or not written at all: a file that is already there may be one a message shows.
+        if (!outputFile.createNewFile()) {
+            println("MediaFileUtils Desktop: not replacing an existing file: ${logPath(outputFile.absolutePath)}")
+            return@withContext null
+        }
         outputFile.writeBytes(bytes)
 
         println("MediaFileUtils Desktop: Saved file to ${logPath(outputFile.absolutePath)}")

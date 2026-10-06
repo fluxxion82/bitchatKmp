@@ -47,6 +47,7 @@ import com.bitchat.mediautils.getFileName
 import com.bitchat.mediautils.getMimeType
 import com.bitchat.mediautils.readFileBytes
 import com.bitchat.mediautils.saveFileToLocal
+import com.bitchat.mediautils.safeReceivedFileName
 import com.bitchat.noise.model.NoisePayload
 import com.bitchat.noise.model.NoisePayloadType
 import com.bitchat.noise.model.PrivateMessagePacket
@@ -2271,13 +2272,18 @@ class ChatRepo(
                     else -> BitchatMessageType.Message
                 }
 
-                val subDir = when (messageType) {
+                val incomingDir = when (messageType) {
                     BitchatMessageType.Image -> "images/incoming"
                     BitchatMessageType.Audio -> "audio/incoming"
                     else -> "files/incoming"
                 }
+                // Each received file gets a directory of its own, named here and never by the peer: a later
+                // file with the same name, from anyone, cannot replace one that a message already shows.
+                val subDir = "$incomingDir/${Uuid.random()}"
 
-                val localPath = saveFileToLocal(filePacket.content, filePacket.fileName, subDir)
+                // A peer's name is never used as a path.
+                val fileName = safeReceivedFileName(filePacket.fileName)
+                val localPath = saveFileToLocal(filePacket.content, fileName, subDir)
                 if (localPath == null) {
                     println("❌ ChatRepo: Failed to save received file: ${logPath(filePacket.fileName)}")
                     return@launch

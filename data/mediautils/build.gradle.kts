@@ -62,6 +62,11 @@ kotlin {
                 implementation("org.bytedeco:ffmpeg-platform:6.1.1-1.5.10")
             }
         }
+        val desktopTest by getting {
+            dependencies {
+                implementation(libs.kotlin.test.junit)
+            }
+        }
         val iosMain by getting {
             dependencies {
 

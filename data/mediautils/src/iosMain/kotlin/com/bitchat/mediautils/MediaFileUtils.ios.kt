@@ -69,6 +69,10 @@ actual fun getMimeType(path: String): String {
 
 @OptIn(ExperimentalForeignApi::class)
 actual suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: String): String? = withContext(Dispatchers.IO) {
+    if (!isPlainFileName(fileName)) {
+        println("MediaFileUtils iOS: not saving a file whose name is not a plain file name: ${logPath(fileName)}")
+        return@withContext null
+    }
     try {
         val fileManager = NSFileManager.defaultManager
         val documentsUrl = fileManager.URLsForDirectory(NSDocumentDirectory, NSUserDomainMask).firstOrNull() as? NSURL
@@ -86,6 +90,11 @@ actual suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: S
             ?: return@withContext null
 
         val filePath = fileUrl.path ?: return@withContext null
+        // A file that is already there may be one a message shows: it is not replaced.
+        if (fileManager.fileExistsAtPath(filePath)) {
+            println("MediaFileUtils iOS: not replacing an existing file: ${logPath(filePath)}")
+            return@withContext null
+        }
 
         // Write ByteArray directly
         val success = bytes.usePinned { pinned ->

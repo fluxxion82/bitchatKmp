@@ -86,6 +86,10 @@ actual fun getMimeType(path: String): String {
  * Save file bytes to local storage in a specified subdirectory.
  */
 actual suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: String): String? = withContext(Dispatchers.IO) {
+    if (!isPlainFileName(fileName)) {
+        println("MediaFileUtils: not saving a file whose name is not a plain file name: ${logPath(fileName)}")
+        return@withContext null
+    }
     val context = appContext ?: return@withContext null
     try {
         val outDir = File(context.filesDir, subDir)
@@ -94,6 +98,11 @@ actual suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: S
         }
 
         val outputFile = File(outDir, fileName)
+        // Created here or not written at all: a file that is already there may be one a message shows.
+        if (!outputFile.createNewFile()) {
+            println("MediaFileUtils: not replacing an existing file: ${logPath(outputFile.absolutePath)}")
+            return@withContext null
+        }
         FileOutputStream(outputFile).use { output ->
             output.write(bytes)
         }

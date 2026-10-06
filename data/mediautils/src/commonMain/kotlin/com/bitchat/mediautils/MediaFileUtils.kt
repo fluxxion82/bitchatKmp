@@ -3,6 +3,14 @@ package com.bitchat.mediautils
 expect suspend fun resolveMediaToLocalPath(mediaUrl: String): String?
 expect suspend fun readFileBytes(path: String): ByteArray?
 expect fun getMimeType(path: String): String
+/**
+ * Saves a received file as `<subDir>/<fileName>` in the app's own storage and returns its path, or null when
+ * nothing was saved.
+ *
+ * [fileName] must be one plain path component ([isPlainFileName]): callers pass a peer's name through
+ * [safeReceivedFileName] first, and an actual saves nothing otherwise. An existing file is never replaced
+ * (null is returned instead): a message may already show it, and whoever sends a file chooses its name.
+ */
 expect suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: String): String?
 
 fun getFileName(path: String): String {

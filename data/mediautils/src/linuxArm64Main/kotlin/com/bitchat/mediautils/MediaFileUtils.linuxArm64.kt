@@ -13,8 +13,8 @@ import kotlinx.coroutines.withContext
 import platform.posix.EINTR
 import platform.posix.O_CLOEXEC
 import platform.posix.O_CREAT
+import platform.posix.O_EXCL
 import platform.posix.O_NOFOLLOW
-import platform.posix.O_TRUNC
 import platform.posix.O_WRONLY
 import platform.posix.SEEK_END
 import platform.posix.SEEK_SET
@@ -90,21 +90,26 @@ actual fun getMimeType(path: String): String {
  * Saves a received file as `~/.bitchat/<subDir>/<fileName>` and returns that path, or null when it was not
  * saved.
  *
- * [fileName] is the name the sending peer gave the file, so it is used only when it is one plain path
- * component: anything else could name a place outside the incoming directory. The directories on the way
- * are this user's own private ones ([StateDirectory]), and the file is opened without following a link.
+ * [fileName] is used only when it is one plain path component: anything else could name a place outside
+ * [subDir]. The directories on the way are this user's own private ones ([StateDirectory]), and the file
+ * is created here or not written at all: an existing one is not replaced and a link is not followed.
  */
 @OptIn(ExperimentalForeignApi::class)
 actual suspend fun saveFileToLocal(bytes: ByteArray, fileName: String, subDir: String): String? = withContext(Dispatchers.IO) {
+    if (!isPlainFileName(fileName)) {
+        println("MediaFileUtils linuxArm64: not saving a file whose name is not a plain file name: ${logPath(fileName)}")
+        return@withContext null
+    }
     try {
-        if (!StateDirectory.isPlainName(fileName)) {
-            println("MediaFileUtils linuxArm64: Not saving a file whose name is not a plain file name: ${logPath(fileName)}")
-            return@withContext null
-        }
         val outDir = StateDirectory.own(*subDir.split('/').toTypedArray())
         val outputPath = "$outDir/$fileName"
-        val descriptor = open(outputPath, O_WRONLY or O_CREAT or O_TRUNC or O_NOFOLLOW or O_CLOEXEC, MODE_0600)
-        if (descriptor < 0) return@withContext null
+        // O_EXCL: created here or not written at all. A file that is already there may be one a message
+        // shows, and it is not replaced (nor is a link in its place followed).
+        val descriptor = open(outputPath, O_WRONLY or O_CREAT or O_EXCL or O_NOFOLLOW or O_CLOEXEC, MODE_0600)
+        if (descriptor < 0) {
+            println("MediaFileUtils linuxArm64: Could not create ${logPath(outputPath)}")
+            return@withContext null
+        }
         val written = writeAll(descriptor, bytes)
         // Closed exactly once, whatever the write did: a second close could hit a descriptor another
         // thread has opened in between.
