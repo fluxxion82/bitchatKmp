@@ -225,7 +225,7 @@ class BluetoothMeshService(
                 logInfo("BluetoothMeshService", "Peer announced: $nickname ($peerID)")
             }
 
-            override fun onMessageReceived(peerID: String, message: String, isBroadcast: Boolean) {
+            override fun onMessageReceived(peerID: String, message: String) {
                 val peer = peerManager.getPeer(peerID)
                 val senderName = peer?.nickname ?: "Unknown"
                 val now = Clock.System.now()
@@ -236,24 +236,24 @@ class BluetoothMeshService(
                     content = message,
                     type = BitchatMessageType.Message,
                     timestamp = now,
-                    isPrivate = !isBroadcast,
+                    isPrivate = false,
                     senderPeerID = peerID,
-                    channel = null,  // Routing handled by isPrivate flag
+                    channel = null,
                     deliveryStatus = DeliveryStatus.Delivered(to = myPeerID, at = now)
                 )
 
                 delegate?.didReceiveMessage(bitchatMessage)
             }
 
-            override fun onEncryptedMessageReceived(peerID: String, message: String) {
+            override fun onAuthenticatedPrivateMessage(peerID: String, messageId: String, content: String) {
                 val peer = peerManager.getPeer(peerID)
                 val senderName = peer?.nickname ?: "Unknown"
                 val now = Clock.System.now()
 
                 val bitchatMessage = BitchatMessage(
-                    id = generateMessageID(),
+                    id = messageId,
                     sender = senderName,
-                    content = message,
+                    content = content,
                     type = BitchatMessageType.Message,
                     timestamp = now,
                     isPrivate = true,
@@ -261,7 +261,20 @@ class BluetoothMeshService(
                     deliveryStatus = DeliveryStatus.Delivered(to = myPeerID, at = now)
                 )
 
-                delegate?.didReceiveMessage(bitchatMessage)
+                delegate?.didReceiveAuthenticatedPrivateMessage(bitchatMessage)
+            }
+
+            override fun onAuthenticatedPrivateFile(peerID: String, file: BitchatFilePacket) {
+                logInfo("BluetoothMeshService", "📎 Authenticated private file received from $peerID: ${logPath(file.fileName)}")
+                delegate?.didReceiveAuthenticatedPrivateFile(peerID, file)
+            }
+
+            override fun onAuthenticatedDelivered(peerID: String, messageId: String) {
+                delegate?.didReceiveAuthenticatedDeliveryAck(messageId, peerID)
+            }
+
+            override fun onAuthenticatedRead(peerID: String, messageId: String) {
+                delegate?.didReceiveAuthenticatedReadReceipt(messageId, peerID)
             }
 
             override fun onHandshakeReceived(peerID: String) {
@@ -313,9 +326,9 @@ class BluetoothMeshService(
                 logDebug("BluetoothMeshService", "Fragment received from $peerID")
             }
 
-            override fun onFileReceived(peerID: String, filePacket: BitchatFilePacket, isBroadcast: Boolean) {
+            override fun onPublicFileReceived(peerID: String, filePacket: BitchatFilePacket) {
                 logInfo("BluetoothMeshService", "📎 File received from $peerID: ${logPath(filePacket.fileName)}")
-                delegate?.didReceiveFile(peerID, filePacket, isBroadcast)
+                delegate?.didReceivePublicFile(peerID, filePacket)
             }
         }
 
@@ -1012,13 +1025,15 @@ class BluetoothMeshService(
 
 interface BluetoothMeshDelegate {
     fun didReceiveMessage(message: BitchatMessage)
+    fun didReceiveAuthenticatedPrivateMessage(message: BitchatMessage)
     fun didUpdatePeerList(peers: List<String>)
     fun didReceiveChannelLeave(channel: String, fromPeer: String)
-    fun didReceiveDeliveryAck(messageID: String, recipientPeerID: String)
-    fun didReceiveReadReceipt(messageID: String, recipientPeerID: String)
+    fun didReceiveAuthenticatedDeliveryAck(messageID: String, recipientPeerID: String)
+    fun didReceiveAuthenticatedReadReceipt(messageID: String, recipientPeerID: String)
     suspend fun decryptChannelMessage(encryptedContent: ByteArray, channel: String): String?
     fun getNickname(): String?
     fun isFavorite(peerID: String): Boolean
     suspend fun onSessionEstablished(peerID: String)
-    fun didReceiveFile(peerID: String, filePacket: BitchatFilePacket, isBroadcast: Boolean)
+    fun didReceivePublicFile(peerID: String, filePacket: BitchatFilePacket)
+    fun didReceiveAuthenticatedPrivateFile(peerID: String, filePacket: BitchatFilePacket)
 }

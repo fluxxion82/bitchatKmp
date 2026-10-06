@@ -2077,8 +2077,13 @@ class ChatRepo(
     }
 
     override fun didReceiveMessage(message: BitchatMessage) {
+        if (message.isPrivate) {
+            println("Bluetooth: Dropped unauthenticated private mesh message id=${message.id} from ${message.senderPeerID}")
+            return
+        }
+
         coroutineScopeFacade.applicationScope.launch {
-            println("Bluetooth: Received ${if (message.isPrivate) "private " else ""}message ${message.id} from ${message.sender} (${message.senderPeerID}): ${logBody(message.content)}")
+            println("Bluetooth: Received message ${message.id} from ${message.sender} (${message.senderPeerID}): ${logBody(message.content)}")
 
             message.senderPeerID?.let { peerID ->
                 if (blockListPreferences.isMeshUserBlocked(peerID)) {
@@ -2087,19 +2092,7 @@ class ChatRepo(
                 }
             }
 
-            if (message.isPrivate && message.senderPeerID != null) {
-                val handled = handleFavoriteNotificationIfNeeded(
-                    content = message.content,
-                    convKey = message.senderPeerID!!,
-                    senderDisplayName = message.sender
-                )
-                if (handled) return@launch
-            }
-
-            // Add to appropriate storage based on message type
-            if (message.isPrivate && message.senderPeerID != null) {
-                addPrivateMessage(message.senderPeerID!!, message, markUnread = true, sendReadReceipt = false)
-            } else if (message.isPrivate == false && message.channel == null) {
+            if (message.channel == null) {
                 // The first copy to arrive is the one shown: a BLE copy whose LoRa twin is already on
                 // screen is dropped, and never replaces it (neither transport authenticates its sender).
                 val changed = meshChannelMessagesMutex.withLock {
@@ -2130,6 +2123,31 @@ class ChatRepo(
                 }
             }
 
+            chatEventBus.update(ChatEvent.MessageReceived)
+        }
+    }
+
+    override fun didReceiveAuthenticatedPrivateMessage(message: BitchatMessage) {
+        val peerID = message.senderPeerID
+        if (!message.isPrivate || peerID == null) {
+            println("Bluetooth: Dropped malformed authenticated private mesh message id=${message.id}")
+            return
+        }
+
+        coroutineScopeFacade.applicationScope.launch {
+            if (blockListPreferences.isMeshUserBlocked(peerID)) {
+                println("🚫 ChatRepo: BLOCKED authenticated mesh message from $peerID")
+                return@launch
+            }
+
+            val handled = handleFavoriteNotificationIfNeeded(
+                content = message.content,
+                convKey = peerID,
+                senderDisplayName = message.sender
+            )
+            if (handled) return@launch
+
+            addPrivateMessage(peerID, message, markUnread = true, sendReadReceipt = false)
             chatEventBus.update(ChatEvent.MessageReceived)
         }
     }
@@ -2239,11 +2257,15 @@ class ChatRepo(
         println("Bluetooth: Peer $fromPeer left channel $channel")
     }
 
-    override fun didReceiveDeliveryAck(messageID: String, recipientPeerID: String) {
+    // Mesh receipts arrive only out of a Noise session (see MessageHandler), but they are not applied
+    // yet. Applying one rewrites a conversation, and the private-chat lists have no writer lock: a peer
+    // could time receipts against the user's own send and drop the message being added. They are
+    // wired once those writes are serialised.
+    override fun didReceiveAuthenticatedDeliveryAck(messageID: String, recipientPeerID: String) {
         println("Bluetooth: Message $messageID delivered to $recipientPeerID")
     }
 
-    override fun didReceiveReadReceipt(messageID: String, recipientPeerID: String) {
+    override fun didReceiveAuthenticatedReadReceipt(messageID: String, recipientPeerID: String) {
         println("Bluetooth: Message $messageID read by $recipientPeerID")
     }
 
@@ -2258,7 +2280,15 @@ class ChatRepo(
         return userPreferences.getFavorite(peerID) != null
     }
 
-    override fun didReceiveFile(peerID: String, filePacket: BitchatFilePacket, isBroadcast: Boolean) {
+    override fun didReceivePublicFile(peerID: String, filePacket: BitchatFilePacket) {
+        receiveMeshFile(peerID, filePacket, isPrivate = false)
+    }
+
+    override fun didReceiveAuthenticatedPrivateFile(peerID: String, filePacket: BitchatFilePacket) {
+        receiveMeshFile(peerID, filePacket, isPrivate = true)
+    }
+
+    private fun receiveMeshFile(peerID: String, filePacket: BitchatFilePacket, isPrivate: Boolean) {
         coroutineScopeFacade.applicationScope.launch {
             try {
                 val firstBytes = filePacket.content.take(10).joinToString(" ") { byte ->
@@ -2299,13 +2329,13 @@ class ChatRepo(
                     content = localPath,
                     type = messageType,
                     timestamp = now,
-                    isPrivate = !isBroadcast,
+                    isPrivate = isPrivate,
                     senderPeerID = peerID,
                     channel = null,
                     deliveryStatus = DeliveryStatus.Delivered(to = mesh.myPeerID, at = now)
                 )
 
-                if (isBroadcast) {
+                if (!isPrivate) {
                     meshChannelMessagesMutex.withLock { meshChannelMessages.add(bitchatMessage) }
                     chatEventBus.update(ChatEvent.MeshMessagesUpdated)
                     println("ChatRepo: Added file message to mesh channel")

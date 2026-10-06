@@ -33,7 +33,7 @@ class ChatRepoReceivedFileNameTest {
     fun savesAReceivedFileUnderItsSafeNameInADirectoryOfItsOwn() = withChatRepo { chatRepo, home ->
         val bytes = byteArrayOf(1, 2, 3)
 
-        chatRepo.didReceiveFile("peer", packet("../../../escaped.txt", bytes), isBroadcast = true)
+        chatRepo.didReceivePublicFile("peer", packet("../../../escaped.txt", bytes))
         awaitMeshMessages(chatRepo, 1)
 
         val saved = regularFiles(home).single()
@@ -50,9 +50,9 @@ class ChatRepoReceivedFileNameTest {
         val first = byteArrayOf(1, 1, 1)
         val second = byteArrayOf(2, 2, 2, 2)
 
-        chatRepo.didReceiveFile("alice", packet("photo.jpg", first), isBroadcast = true)
+        chatRepo.didReceivePublicFile("alice", packet("photo.jpg", first))
         awaitMeshMessages(chatRepo, 1)
-        chatRepo.didReceiveFile("mallory", packet("photo.jpg", second), isBroadcast = true)
+        chatRepo.didReceivePublicFile("mallory", packet("photo.jpg", second))
         awaitMeshMessages(chatRepo, 2)
 
         val paths = chatRepo.getMeshMessages().map { Path.of(it.content) }
@@ -61,6 +61,24 @@ class ChatRepoReceivedFileNameTest {
         assertContentEquals(first, paths[0].readBytes())
         assertContentEquals(second, paths[1].readBytes())
         assertEquals(2, regularFiles(home).size)
+    }
+
+    @Test
+    fun aPrivateFileOutOfANoiseSessionIsSavedTheSameWay() = withChatRepo { chatRepo, home ->
+        val bytes = byteArrayOf(4, 5, 6)
+
+        // A peer that holds a session still chooses the name; private files share the public save path.
+        chatRepo.didReceiveAuthenticatedPrivateFile("peer", packet("../../../escaped.txt", bytes))
+        withContext(Dispatchers.Default) {
+            withTimeout(5_000) { while (chatRepo.getPrivateChats()["peer"].isNullOrEmpty()) delay(10) }
+        }
+
+        val saved = regularFiles(home).single()
+        assertEquals("_.._.._escaped.txt", saved.fileName.toString())
+        assertEquals(home.resolve(".bitchat/files/incoming"), saved.parent.parent)
+        assertContentEquals(bytes, saved.readBytes())
+        assertEquals(saved.toString(), chatRepo.getPrivateChats().getValue("peer").single().content)
+        assertTrue(chatRepo.getMeshMessages().isEmpty())
     }
 
     private fun packet(name: String, bytes: ByteArray) =

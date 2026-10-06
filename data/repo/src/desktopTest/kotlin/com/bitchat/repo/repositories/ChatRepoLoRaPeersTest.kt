@@ -85,10 +85,10 @@ class ChatRepoLoRaPeersTest {
             val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), lora = FakeLoRaProtocol(peerIdsAreMeshIds = true))
             runCurrent()
 
-            chatRepo.didReceiveMessage(privateMessage("dm-1", "first name", sentAt = 1))
-            chatRepo.didReceiveMessage(privateMessage("dm-3", "third name", sentAt = 3))
+            chatRepo.didReceiveAuthenticatedPrivateMessage(privateMessage("dm-1", "first name", sentAt = 1))
+            chatRepo.didReceiveAuthenticatedPrivateMessage(privateMessage("dm-3", "third name", sentAt = 3))
             // The message sent in between is handled last: the newest message still names the chat.
-            chatRepo.didReceiveMessage(privateMessage("dm-2", "second name", sentAt = 2))
+            chatRepo.didReceiveAuthenticatedPrivateMessage(privateMessage("dm-2", "second name", sentAt = 2))
             runCurrent()
 
             assertEquals(mapOf("X" to "third name"), chatRepo.getPrivateChatNames())

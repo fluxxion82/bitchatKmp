@@ -78,14 +78,18 @@ class MessageHandler(
     }
 
     private fun handleMessage(packet: BitchatPacket, peerID: String) {
+        val isBroadcast = packet.recipientID == null || packet.recipientID.contentEquals(SpecialRecipients.BROADCAST)
+        if (!isBroadcast) {
+            dropAddressedPlaintext(packet, peerID, MessageType.MESSAGE, "private delivery requires Noise")
+            return
+        }
+
         if (peerID == myPeerID) {
             logDebug("MessageHandler", "Ignoring self-message (local echo exists)")
             return
         }
 
-        val messageText = packet.payload.decodeToString()
-        val isBroadcast = packet.recipientID == null || packet.recipientID.contentEquals(SpecialRecipients.BROADCAST)
-        delegate?.onMessageReceived(peerID, messageText, isBroadcast = isBroadcast)
+        delegate?.onMessageReceived(peerID, packet.payload.decodeToString())
     }
 
     private suspend fun handleNoiseHandshake(packet: BitchatPacket, peerID: String) {
@@ -155,10 +159,22 @@ class MessageHandler(
     }
 
     private fun handleFragment(packet: BitchatPacket, peerID: String) {
+        val isBroadcast = packet.recipientID == null || packet.recipientID.contentEquals(SpecialRecipients.BROADCAST)
+        if (!isBroadcast) {
+            dropAddressedPlaintext(packet, peerID, MessageType.FRAGMENT, "private fragments are unsupported")
+            return
+        }
+
         delegate?.onFragmentReceived(peerID)
     }
 
     private fun handleFileTransfer(packet: BitchatPacket, peerID: String) {
+        val isBroadcast = packet.recipientID == null || packet.recipientID.contentEquals(SpecialRecipients.BROADCAST)
+        if (!isBroadcast) {
+            dropAddressedPlaintext(packet, peerID, MessageType.FILE_TRANSFER, "private delivery requires Noise")
+            return
+        }
+
         if (peerID == myPeerID) {
             logDebug("MessageHandler", "Ignoring self-file transfer (local echo exists)")
             return
@@ -174,8 +190,7 @@ class MessageHandler(
 
         logInfo("MessageHandler", "📎 File: ${logPath(filePacket.fileName)} (${filePacket.fileSize} bytes, ${filePacket.mimeType})")
 
-        val isBroadcast = packet.recipientID == null || packet.recipientID.contentEquals(SpecialRecipients.BROADCAST)
-        delegate?.onFileReceived(peerID, filePacket, isBroadcast = isBroadcast)
+        delegate?.onPublicFileReceived(peerID, filePacket)
     }
 
     private fun handleEncryptedPayload(peerID: String, payload: ByteArray, requeueOnFailure: Boolean) {
@@ -192,27 +207,31 @@ class MessageHandler(
                     val privateMessage = PrivateMessagePacket.decode(noisePayload.data)
                     if (privateMessage != null) {
                         println("✅ Decrypted message from $peerID: ${logBody(privateMessage.content, 50)}")
-                        delegate?.onEncryptedMessageReceived(peerID, privateMessage.content)
+                        // decryptFromPeer only succeeds from an established session. A2 will add
+                        // identity validation when that session is promoted.
+                        delegate?.onAuthenticatedPrivateMessage(
+                            peerID,
+                            privateMessage.messageID,
+                            privateMessage.content
+                        )
                     } else {
                         println("❌ Failed to parse PrivateMessagePacket from $peerID")
                     }
                 }
 
                 NoisePayloadType.READ_RECEIPT -> {
-                    // TODO: Handle read receipts
-                    println("📖 Read receipt from $peerID")
+                    delegate?.onAuthenticatedRead(peerID, noisePayload.data.decodeToString())
                 }
 
                 NoisePayloadType.DELIVERED -> {
-                    // TODO: Handle delivery confirmations
-                    println("✓ Delivery confirmation from $peerID")
+                    delegate?.onAuthenticatedDelivered(peerID, noisePayload.data.decodeToString())
                 }
 
                 NoisePayloadType.FILE_TRANSFER -> {
                     val filePacket = noisePayload.data.toBitchatFilePacket()
                     if (filePacket != null) {
                         logInfo("MessageHandler", "📎 Received encrypted file from $peerID: ${logPath(filePacket.fileName)} (${filePacket.fileSize} bytes)")
-                        delegate?.onFileReceived(peerID, filePacket, isBroadcast = false)
+                        delegate?.onAuthenticatedPrivateFile(peerID, filePacket)
                     } else {
                         logError("MessageHandler", "❌ Failed to decode encrypted file from $peerID")
                     }
@@ -262,6 +281,20 @@ class MessageHandler(
         println("✅ Finished processing pending messages for $peerID")
     }
 
+    private fun dropAddressedPlaintext(
+        packet: BitchatPacket,
+        peerID: String,
+        type: MessageType,
+        reason: String
+    ) {
+        logInfo(
+            "MessageHandler",
+            "Dropped addressed plaintext type=${type.name} sender=$peerID " +
+                "recipient=${packet.recipientID?.toHexString() ?: "none"} " +
+                "length=${packet.payload.size} reason=$reason"
+        )
+    }
+
     private fun calculateSHA256Fingerprint(publicKey: ByteArray): String {
         val hash = Cryptography.getDigestHash(publicKey)
         return hash.joinToString("") { it.toHexString() }
@@ -270,8 +303,11 @@ class MessageHandler(
 
 interface MessageHandlerDelegate {
     fun onPeerAnnounced(peerID: String, nickname: String)
-    fun onMessageReceived(peerID: String, message: String, isBroadcast: Boolean)
-    fun onEncryptedMessageReceived(peerID: String, message: String)
+    fun onMessageReceived(peerID: String, message: String)
+    fun onAuthenticatedPrivateMessage(peerID: String, messageId: String, content: String)
+    fun onAuthenticatedPrivateFile(peerID: String, file: BitchatFilePacket)
+    fun onAuthenticatedDelivered(peerID: String, messageId: String)
+    fun onAuthenticatedRead(peerID: String, messageId: String)
     fun onHandshakeReceived(peerID: String)
     fun onHandshakeResponse(peerID: String, responsePacket: ByteArray)
     fun onSessionEstablished(peerID: String)
@@ -283,5 +319,5 @@ interface MessageHandlerDelegate {
     fun onSessionUnusable(peerID: String)
     fun onPeerLeft(peerID: String)
     fun onFragmentReceived(peerID: String)
-    fun onFileReceived(peerID: String, filePacket: BitchatFilePacket, isBroadcast: Boolean)
+    fun onPublicFileReceived(peerID: String, filePacket: BitchatFilePacket)
 }
