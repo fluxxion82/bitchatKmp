@@ -540,9 +540,11 @@ private object FallbackNoOpAdvertisingService : AdvertisingService {
 }
 
 private suspend fun eventually(description: String, condition: suspend () -> Boolean) {
-    // The service works on its own dispatcher in real time; runTest's clock is virtual.
+    // The service works on its own dispatcher in real time; runTest's clock is virtual. The wait
+    // is long because this has timed out at five seconds on a machine busy with another build
+    // (load average above 80); it costs nothing when the condition is reached.
     val reached = withContext(Dispatchers.Default) {
-        withTimeoutOrNull(5.seconds) {
+        withTimeoutOrNull(30.seconds) {
             while (!condition()) delay(10)
             true
         } ?: false

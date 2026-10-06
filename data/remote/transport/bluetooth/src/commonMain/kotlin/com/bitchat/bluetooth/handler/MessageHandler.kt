@@ -36,6 +36,7 @@ class MessageHandler(
 
     // A session can report itself established and be unusable; this is what notices.
     private val sessionFailures = SessionFailureTracker()
+    internal val sessionFailureTracker: SessionFailureTracker get() = sessionFailures
 
     suspend fun handlePacket(packet: BitchatPacket, peerID: String, link: String = "") {
         val messageType = MessageType.fromValue(packet.type) ?: return
@@ -44,7 +45,7 @@ class MessageHandler(
             MessageType.ANNOUNCE -> handleAnnounce(packet, peerID)
             MessageType.MESSAGE -> handleMessage(packet, peerID)
             MessageType.NOISE_HANDSHAKE -> handleNoiseHandshake(packet, peerID, link)
-            MessageType.NOISE_ENCRYPTED -> handleNoiseEncrypted(packet, peerID)
+            MessageType.NOISE_ENCRYPTED -> handleNoiseEncrypted(packet, peerID, link)
             MessageType.LEAVE -> handleLeave(packet, peerID)
             MessageType.FRAGMENT -> handleFragment(packet, peerID)
             MessageType.FILE_TRANSFER -> handleFileTransfer(packet, peerID)
@@ -134,7 +135,7 @@ class MessageHandler(
         delegate?.onHandshakeReceived(peerID)
     }
 
-    private fun handleNoiseEncrypted(packet: BitchatPacket, peerID: String) {
+    private fun handleNoiseEncrypted(packet: BitchatPacket, peerID: String, link: String) {
         if (peerID == myPeerID) {
             logDebug("MessageHandler", "Ignoring self-encrypted message")
             return
@@ -159,7 +160,7 @@ class MessageHandler(
         // handshake in flight could still make readable but there is no room to keep it, that
         // record would make every later copy (the mesh relays, so copies do arrive) look like a
         // duplicate, and the message would be lost for good.
-        val result = handleEncryptedPayload(peerID, packet.payload, requeueOnFailure = true)
+        val result = handleEncryptedPayload(peerID, packet.payload, requeueOnFailure = true, link = link)
         if (result == EncryptedPayloadResult.REFUSED) securityManager.forgetPacket(packet, peerID)
     }
 
@@ -206,14 +207,15 @@ class MessageHandler(
     private fun handleEncryptedPayload(
         peerID: String,
         payload: ByteArray,
-        requeueOnFailure: Boolean
+        requeueOnFailure: Boolean,
+        link: String
     ): EncryptedPayloadResult {
         val decrypted = securityManager.decryptFromPeer(peerID, payload)
         if (decrypted != null) {
             val noisePayload = NoisePayload.decode(decrypted.plaintext)
             if (noisePayload == null) {
                 println("❌ Failed to parse NoisePayload from $peerID")
-                recordDecryptOutcome(peerID, decrypted.via)
+                recordDecryptOutcome(peerID, decrypted.via, link)
                 return EncryptedPayloadResult.READ
             }
 
@@ -252,40 +254,45 @@ class MessageHandler(
                     }
                 }
             }
-            recordDecryptOutcome(peerID, decrypted.via)
+            recordDecryptOutcome(peerID, decrypted.via, link)
             return EncryptedPayloadResult.READ
         } else if (requeueOnFailure) {
             val hasCandidate = securityManager.hasCandidate(peerID)
-            val outcome = if (hasCandidate && queueEncryptedMessage(peerID, payload)) {
+            val outcome = if (hasCandidate && queueEncryptedMessage(peerID, payload, link)) {
                 EncryptedPayloadResult.KEPT
             } else if (hasCandidate) {
                 EncryptedPayloadResult.REFUSED
             } else {
                 EncryptedPayloadResult.UNREADABLE
             }
-            condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.UNDECRYPTABLE)
+            condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.UNDECRYPTABLE, link)
             return outcome
         } else {
+            // A kept payload tried again after a handshake completed, and still unreadable. It
+            // counts, as it always has: when this node restarted and the peer still uses the old
+            // session, these are what ask for another handshake. [link] here is the link the
+            // payload ARRIVED on, not the one that carried the handshake, so whoever sent it is
+            // the one whose allowance a recovery is charged to.
             println("❌ Failed to decrypt from $peerID, not requeueing")
-            condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.UNDECRYPTABLE)
+            condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.UNDECRYPTABLE, link)
             return EncryptedPayloadResult.UNREADABLE
         }
     }
 
-    private fun recordDecryptOutcome(peerID: String, via: NoiseEncryptionFacade.DecryptionVia) {
+    private fun recordDecryptOutcome(peerID: String, via: NoiseEncryptionFacade.DecryptionVia, link: String) {
         if (via == NoiseEncryptionFacade.DecryptionVia.ESTABLISHED) {
             sessionFailures.onDecryptSucceeded(peerID)
         } else if (securityManager.hasEstablishedSession(peerID)) {
             // The peer authenticated this payload with the predecessor, proving it has not
             // switched to the established session. Deliver it, but do not let it bless that
             // session or suppress the ordinary recovery lifecycle.
-            condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.FALLBACK_SUCCESS)
+            condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.FALLBACK_SUCCESS, link)
         } else if (!securityManager.isHandshaking(peerID)) {
             // Only the predecessor is left and no handshake is in flight: the one that was owed
             // was lost, abandoned or destroyed, and nothing else would notice, because this traffic
             // still reads. Before the fallback existed these payloads failed to decrypt and that is
             // what asked for the next attempt, so they ask for it still, at the tracker's pace.
-            condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.UNDECRYPTABLE)
+            condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.UNDECRYPTABLE, link)
         }
     }
 
@@ -293,7 +300,11 @@ class MessageHandler(
      * A run of undecryptable payloads or fallback-only proofs means the established session needs
      * recovery. The latter is delivered, but cannot certify that the newer session is shared.
      */
-    private fun condemnSessionIfHopeless(peerID: String, evidence: SessionFailureTracker.FailureEvidence) {
+    private fun condemnSessionIfHopeless(
+        peerID: String,
+        evidence: SessionFailureTracker.FailureEvidence,
+        link: String
+    ) {
         val hasSession = securityManager.hasValidatedSession(peerID)
         if (!hasSession && securityManager.hasCandidate(peerID)) {
             // There is no session to condemn and a handshake is already in flight; its outcome
@@ -301,7 +312,7 @@ class MessageHandler(
             return
         }
         val recovery = sessionFailures.onDecryptFailed(
-            peerID, clock.now().toEpochMilliseconds(), evidence, hasSession
+            peerID, clock.now().toEpochMilliseconds(), evidence, hasSession, link
         ) ?: return
 
         println("🔁 ${SessionFailureTracker.FAILURES_BEFORE_RECOVERY} consecutive session-recovery " +
@@ -314,8 +325,8 @@ class MessageHandler(
         }
     }
 
-    private fun queueEncryptedMessage(peerID: String, payload: ByteArray): Boolean {
-        if (pendingEncryptedPayloads.offer(peerID, payload, clock.now().toEpochMilliseconds())) {
+    private fun queueEncryptedMessage(peerID: String, payload: ByteArray, link: String): Boolean {
+        if (pendingEncryptedPayloads.offer(peerID, payload, clock.now().toEpochMilliseconds(), link)) {
             println("📦 Queued encrypted message from $peerID")
             return true
         }
@@ -329,8 +340,8 @@ class MessageHandler(
             return
         }
         println("📬 Processing ${queue.size} pending encrypted messages for $peerID")
-        queue.forEach { payload ->
-            handleEncryptedPayload(peerID, payload, requeueOnFailure = false)
+        queue.forEach { kept ->
+            handleEncryptedPayload(peerID, kept.payload, requeueOnFailure = false, link = kept.link)
         }
         println("✅ Finished processing pending messages for $peerID")
     }

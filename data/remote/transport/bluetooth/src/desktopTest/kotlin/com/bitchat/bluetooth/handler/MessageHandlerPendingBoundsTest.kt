@@ -125,6 +125,82 @@ class MessageHandlerPendingBoundsTest {
     }
 
     @Test
+    fun anEarlyPayloadTakesAPlaceOnTheLinkThatDeliveredIt() = runTest {
+        // One place per link. Two peers, each with a handshake open, send an early payload.
+        suspend fun keptWhenSecondPeerUses(secondLink: String): Int {
+            Fixture(PendingEncryptedPayloads(maxPeersPerLink = 1)).use { fixture ->
+                val others = listOf("3a", "4b").map { CryptoSigningFacade(it.repeat(32)) }
+                others.forEachIndexed { index, crypto ->
+                    val id = crypto.getIdentityFingerprint()
+                    val opening = NoiseEncryptionFacade(id).initiateHandshake(
+                        fixture.localID, crypto.getNoisePrivateKey(), crypto.getNoisePublicKey()
+                    )
+                    fixture.handler.handlePacket(
+                        fixture.packet(MessageType.NOISE_HANDSHAKE, opening, (10 + index).toULong()), id, link = "open-$index"
+                    )
+                    fixture.handler.handlePacket(
+                        fixture.packet(MessageType.NOISE_ENCRYPTED, ByteArray(48) { 1 }, (20 + index).toULong()),
+                        id,
+                        link = if (index == 0) "first" else secondLink
+                    )
+                }
+                return fixture.handler.pendingEncryptedPayloadCount
+            }
+        }
+
+        assertEquals(1, keptWhenSecondPeerUses("first"))
+        assertEquals(2, keptWhenSecondPeerUses("second"))
+    }
+
+    @Test
+    fun aKeptPayloadThatStaysUnreadableIsChargedToTheLinkItArrivedOn() = runTest {
+        Fixture().use { fixture ->
+            val message1 = fixture.remoteNoise.initiateHandshake(fixture.localID, fixture.remoteCrypto.getNoisePrivateKey(), fixture.remoteCrypto.getNoisePublicKey())
+            fixture.handler.handlePacket(fixture.packet(MessageType.NOISE_HANDSHAKE, message1, 1u), fixture.remoteID, link = "honest")
+            val message3 = (fixture.remoteNoise.processHandshake(
+                fixture.localID, fixture.delegate.response!!, fixture.remoteCrypto.getNoisePrivateKey(), fixture.remoteCrypto.getNoisePublicKey()
+            ) as NoiseEncryptionFacade.HandshakeResult.Established).response!!
+
+            // Someone else, on another link, sends three unreadable packets under the peer's id.
+            // They are kept, and tried when the handshake completes over the honest link.
+            repeat(3) {
+                fixture.handler.handlePacket(
+                    fixture.packet(MessageType.NOISE_ENCRYPTED, ByteArray(48) { 5 }, (10 + it).toULong()), fixture.remoteID, link = "other"
+                )
+            }
+            assertEquals(3, fixture.handler.pendingEncryptedPayloadCount)
+            fixture.handler.handlePacket(fixture.packet(MessageType.NOISE_HANDSHAKE, message3, 2u), fixture.remoteID, link = "honest")
+
+            // Three failures still ask for a recovery, as they always have. What it costs is taken
+            // from the link the junk came in on, not from the one that carried the handshake.
+            assertEquals(listOf(fixture.remoteID), fixture.delegate.unusable)
+            assertEquals(1, fixture.handler.sessionFailureTracker.recoveriesChargedTo("other"))
+            assertEquals(0, fixture.handler.sessionFailureTracker.recoveriesChargedTo("honest"))
+        }
+    }
+
+    @Test
+    fun unreadablePayloadRecoveryIsLimitedByTheLinkThatDeliveredIt() = runTest {
+        Fixture().use { fixture ->
+            repeat(9) { index ->
+                fixture.handler.handlePacket(
+                    fixture.packet(MessageType.NOISE_ENCRYPTED, ByteArray(48), index.toULong()),
+                    "invented-$index",
+                    link = "first"
+                )
+            }
+            assertEquals((0 until 8).map { "invented-$it" }, fixture.delegate.unusable)
+
+            fixture.handler.handlePacket(
+                fixture.packet(MessageType.NOISE_ENCRYPTED, ByteArray(48), 9u),
+                "other-link",
+                link = "second"
+            )
+            assertEquals((0 until 8).map { "invented-$it" } + "other-link", fixture.delegate.unusable)
+        }
+    }
+
+    @Test
     fun noMoreThanThePerPeerLimitIsKeptDuringAHandshake() = runTest {
         Fixture().use { fixture ->
             val message1 = fixture.remoteNoise.initiateHandshake(fixture.localID, fixture.remoteCrypto.getNoisePrivateKey(), fixture.remoteCrypto.getNoisePublicKey())

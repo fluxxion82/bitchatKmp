@@ -26,7 +26,11 @@ const val MAX_PENDING_PAYLOADS_PER_PEER = 4
 /** 128 KiB covers text, voice notes and this app's 100 KiB compressed images; a larger file that
  * overtakes its own handshake is not kept. */
 const val MAX_PENDING_BYTES_PER_PEER = 128 * 1024
-/** At most 128 peers can hold pending data: 128 peers x 128 KiB is 16 MiB for 30 seconds. */
+/** Places for early payloads on one link; a place is one sender id on one link (see
+ * PendingEncryptedPayloads). Filling a link's takes 16 ids that each had a handshake open when they
+ * offered on that link, renewed every 30 seconds; other links keep theirs. */
+const val MAX_PENDING_PEERS_PER_LINK = 16
+/** Places in total: 128 x 128 KiB is 16 MiB for 30 seconds at worst. Takes eight links to fill. */
 const val MAX_PENDING_PEERS = 128
 /** A payload waiting for a handshake expires rather than surviving a lost exchange. */
 const val PENDING_PAYLOAD_MAX_AGE_MS = 30_000L

@@ -43,10 +43,13 @@ class SessionFailureTracker(
 
     private data class FailureRun(
         val count: Int,
-        val includesFallbackSuccess: Boolean
+        val includesFallbackSuccess: Boolean,
+        /** The links the most recent signals arrived on, oldest first; as many as the threshold. */
+        val links: List<String>
     )
 
-    private data class Recovery(val at: Long, val hasSession: Boolean)
+    /** [link] is null when no single link was behind most of the signals (see [linkToCharge]). */
+    private data class Recovery(val at: Long, val hasSession: Boolean, val link: String?)
 
     private val lock = ReentrantLock()
     private val failureRuns = LinkedHashMap<String, FailureRun>()
@@ -54,6 +57,9 @@ class SessionFailureTracker(
 
     internal val failureRunCount: Int get() = lock.withLock { failureRuns.size }
     internal val recoveryCount: Int get() = lock.withLock { lastRecovery.size }
+
+    /** Recoveries charged to [link] (null: to no single link), whatever their age; for tests. */
+    internal fun recoveriesChargedTo(link: String?): Int = lock.withLock { lastRecovery.values.count { it.link == link } }
 
     /** A message from [peerID] decrypted via the established session, so the run is over. */
     fun onDecryptSucceeded(peerID: String) {
@@ -70,33 +76,53 @@ class SessionFailureTracker(
         peerID: String,
         now: Long,
         evidence: FailureEvidence = FailureEvidence.UNDECRYPTABLE,
-        hasSession: Boolean = true
+        hasSession: Boolean = true,
+        link: String = ""
     ): RecoveryReason? = lock.withLock {
-        val includesFallbackSuccess = if (hasSession) {
+        val includesFallbackSuccess: Boolean
+        // The link a recovery is charged to. The signals behind one recovery may have arrived on
+        // different links, and the link of the last one is the wrong answer: two unreadable packets
+        // on one link followed by one on another would bill the second for what the first did.
+        val chargedLink: String?
+        if (hasSession) {
             val previous = failureRuns.remove(peerID)
             val failures = (previous?.count ?: 0) + 1
-            val includesFallback = previous?.includesFallbackSuccess == true || evidence == FailureEvidence.FALLBACK_SUCCESS
+            includesFallbackSuccess = previous?.includesFallbackSuccess == true || evidence == FailureEvidence.FALLBACK_SUCCESS
+            val links = ((previous?.links ?: emptyList()) + link).takeLast(failuresBeforeRecovery)
             if (failureRuns.size >= MAX_FAILURE_RUNS) failureRuns.entries.iterator().run { next(); remove() }
-            failureRuns[peerID] = FailureRun(failures, includesFallback)
+            failureRuns[peerID] = FailureRun(failures, includesFallbackSuccess, links)
             if (failures < failuresBeforeRecovery) return@withLock null
-            includesFallback
+            chargedLink = linkToCharge(links)
         } else {
             // A lost session must not leave a stale run that a forged packet could carry forward.
             failureRuns.remove(peerID)
-            false
+            includesFallbackSuccess = false
+            chargedLink = link
         }
 
         val since = lastRecovery[peerID]
-        val peerIsRateLimited = since != null && now - since.at < minRecoveryIntervalMs
         lastRecovery.entries.removeAll { now - it.value.at >= minRecoveryIntervalMs }
-        if (peerIsRateLimited) return@withLock null
+        if (since != null && now - since.at < minRecoveryIntervalMs) return@withLock null
+        val linkRecoveryCount = lastRecovery.values.count { it.hasSession == hasSession && it.link == chargedLink }
+        if (linkRecoveryCount >= MAX_RECOVERIES_PER_INTERVAL_PER_LINK) return@withLock null
         val ceiling = if (hasSession) MAX_RECOVERIES_PER_INTERVAL_WITH_SESSION else MAX_RECOVERIES_PER_INTERVAL_WITHOUT_SESSION
         val recoveryClassCount = lastRecovery.values.count { it.hasSession == hasSession }
         if (recoveryClassCount >= ceiling) return@withLock null
 
         failureRuns.remove(peerID)
-        lastRecovery[peerID] = Recovery(now, hasSession)
+        lastRecovery[peerID] = Recovery(now, hasSession, chargedLink)
         return if (includesFallbackSuccess) RecoveryReason.NOT_SHARED else RecoveryReason.UNUSABLE
+    }
+
+    /**
+     * The link behind MORE THAN HALF of [links], or null when there is none. With no such link the
+     * recovery is charged to a separate allowance shared by all such mixed runs, never to one of
+     * the links: with signals from three links, billing any one of them (the first, the last) would
+     * let two packets on two other links spend the allowance of a link that sent one.
+     */
+    private fun linkToCharge(links: List<String>): String? {
+        val lead = links.distinct().maxByOrNull { candidate -> links.count { it == candidate } } ?: return null
+        return lead.takeIf { links.count { it == lead } * 2 > links.size }
     }
 
     /** Forget [peerID] entirely during explicit teardown, such as when the peer goes away. */
@@ -126,16 +152,32 @@ class SessionFailureTracker(
         const val MAX_FAILURE_RUNS = 1024
 
         /**
-         * How many recoveries may be granted inside one interval, counted separately for peers a
-         * validated session is on file for and for peers with none. Every recovery makes this node
-         * start a handshake, and the packets that ask for one are not authenticated, so without a
-         * ceiling invented sender ids could make it transmit as often as they liked. For a peer
-         * without a session one forged packet is enough to ask, so the ceiling is the only thing
-         * between invented sender ids and this node starting handshakes. The trade is unchanged:
-         * a genuine recovery waits while its class is at the ceiling; a user sending a message
-         * still starts a handshake, and that path does not go through here.
+         * Every recovery makes this node start a handshake, and the packet that asks for one is
+         * not authenticated. So recoveries are limited, and the limit is kept per LINK (the address
+         * of the connection the signals arrived on), because a sender can invent ids and cannot
+         * invent links: unreadable packets arriving on one link cannot use up another link's
+         * recoveries.
+         *
+         * A link is charged for a recovery only when it is behind more than half of the signals
+         * that led to it. A run that no single link is behind is charged to one further allowance
+         * shared by all such runs. What this costs, stated plainly:
+         *  - a link behind the recoveries of more than eight peers inside one interval (a relay
+         *    with many peers behind it after this node restarted, or a link being flooded) has the
+         *    rest wait for a later signal after a slot frees;
+         *  - one forged packet can complete a run that already holds two genuine signals. If those
+         *    two came over one link, that link is charged, for a recovery its own traffic was two
+         *    thirds of. If they came over two links, the shared allowance is charged, and eight
+         *    such runs inside an interval make other runs spread over several links wait. A peer
+         *    whose signals all arrive over one link, which is the ordinary case, never needs the
+         *    shared allowance: it waits only when its own link's allowance is used up (which the
+         *    previous point lets a forger hasten, one packet per run that was already two thirds
+         *    genuine) or when the total is reached;
+         *  - the totals are 64 recoveries per class, which no single allowance can supply: at
+         *    least eight of them have to be at their ceilings.
+         * A user sending a message still starts a handshake; that path does not come through here.
          */
-        const val MAX_RECOVERIES_PER_INTERVAL_WITH_SESSION = 16
-        const val MAX_RECOVERIES_PER_INTERVAL_WITHOUT_SESSION = 16
+        const val MAX_RECOVERIES_PER_INTERVAL_PER_LINK = 8
+        const val MAX_RECOVERIES_PER_INTERVAL_WITH_SESSION = 64
+        const val MAX_RECOVERIES_PER_INTERVAL_WITHOUT_SESSION = 64
     }
 }
