@@ -3,6 +3,7 @@ package com.bitchat.bluetooth.service
 import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
+import com.bitchat.bluetooth.protocol.ChunkReassembler
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.usePinned
@@ -42,8 +43,7 @@ class IosGattClientService(
     private var delegate: GattClientDelegate? = null
     private var connectionDelegate: IosGattClientConnectionDelegate? = null
     private var readyCallback: ConnectionReadyCallback? = null
-    private data class ReassemblyBuffer(var expectedSize: Int = 0, val data: MutableList<Byte> = mutableListOf())
-    private val reassemblyBuffers = mutableMapOf<String, ReassemblyBuffer>()
+    private val reassembler = ChunkReassembler(log = { logError("GATT_CLIENT", it) })
 
     init {
         sharedCentralManager.registerGattDelegate(this)
@@ -209,6 +209,7 @@ class IosGattClientService(
     private fun handleDisconnected(peripheral: CBPeripheral, reason: String?) {
         val deviceAddress = peripheral.identifier.UUIDString
         connections.remove(deviceAddress)
+        reassembler.forget(deviceAddress)
         connectionDelegate?.onConnectionFailure(deviceAddress, reason ?: "Disconnected")
     }
 
@@ -308,49 +309,9 @@ class IosGattClientService(
     private fun handleIncomingData(deviceAddress: String, value: ByteArray) {
         if (value.isEmpty()) return
 
-        when (value[0]) {
-            CHUNK_START -> {
-                if (value.size < 6) {
-                    logError("GATT_CLIENT", "Invalid START chunk from ${deviceAddress.take(8)} - too short (${value.size} bytes)")
-                    return
-                }
-                val expected = ((value[1].toInt() and 0xFF) shl 24) or
-                    ((value[2].toInt() and 0xFF) shl 16) or
-                    ((value[3].toInt() and 0xFF) shl 8) or
-                    (value[4].toInt() and 0xFF)
-                val payload = value.copyOfRange(5, value.size)
-                reassemblyBuffers[deviceAddress] = ReassemblyBuffer(expectedSize = expected, data = payload.toMutableList())
-                logInfo("GATT_CLIENT", "Started receiving chunked data from ${deviceAddress.take(8)}, expecting $expected bytes")
-            }
-
-            CHUNK_CONTINUE, CHUNK_END -> {
-                val buffer = reassemblyBuffers[deviceAddress]
-                if (buffer == null) {
-                    logError("GATT_CLIENT", "Received chunk without START from ${deviceAddress.take(8)} (${value.size} bytes)")
-                    return
-                }
-                val payload = value.copyOfRange(1, value.size)
-                buffer.data.addAll(payload.toList())
-                if (value[0] == CHUNK_END) {
-                    val completeData = buffer.data.toByteArray()
-                    reassemblyBuffers.remove(deviceAddress)
-                    if (completeData.size != buffer.expectedSize) {
-                        logError(
-                            "GATT_CLIENT",
-                            "Completed chunked transfer from ${deviceAddress.take(8)} but size mismatch: expected ${buffer.expectedSize}, got ${completeData.size}"
-                        )
-                    } else {
-                        logInfo(
-                            "GATT_CLIENT",
-                            "Completed chunked transfer from ${deviceAddress.take(8)}: ${completeData.size} bytes"
-                        )
-                    }
-                    delegate?.onCharacteristicRead(deviceAddress, completeData)
-                }
-            }
-
-            else -> delegate?.onCharacteristicRead(deviceAddress, value)
-        }
+        val frame = reassembler.receive(deviceAddress, value) ?: return
+        if (frame !== value) logInfo("GATT_CLIENT", "Completed chunked transfer from ${deviceAddress.take(8)}: ${frame.size} bytes")
+        delegate?.onCharacteristicRead(deviceAddress, frame)
     }
 }
 

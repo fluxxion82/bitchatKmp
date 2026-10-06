@@ -24,6 +24,7 @@ import com.bitchat.nostr.NostrSubscriptionId
 import com.bitchat.nostr.NostrTransport
 import com.bitchat.nostr.model.NostrFilter
 import com.bitchat.nostr.participant.NostrParticipantTracker
+import com.bitchat.repo.utils.ReceivedFileBudget
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -41,6 +42,7 @@ internal fun chatRepo(
     mesh: BluetoothMeshService = mockk(relaxed = true),
     clock: Clock = Clock.System,
     blockedMeshIds: Set<String> = emptySet(),
+    receivedFileBudget: ReceivedFileBudget = ReceivedFileBudget(),
 ): ChatRepo {
     val contextFacade = object : CoroutinesContextFacade {
         override val io: CoroutineContext = dispatcher
@@ -89,8 +91,10 @@ internal fun chatRepo(
         nostrPreferences = mockk<NostrPreferences>(relaxed = true),
         nostrClient = nostrClient,
         nostrRelay = nostrRelay,
-        geohashAliasCache = mockk<Cache<String, String>>(relaxed = true),
-        geohashConversationCache = mockk<Cache<String, String>>(relaxed = true),
+        // Empty caches: a relaxed mock hands back an Object where a String is expected, which
+        // breaks any path that looks a peer up (the private send path does).
+        geohashAliasCache = mockk<Cache<String, String>>(relaxed = true).also { every { it.get(any()) } returns null },
+        geohashConversationCache = mockk<Cache<String, String>>(relaxed = true).also { every { it.get(any()) } returns null },
         channelPreferences = channelPreferences,
         userPreferences = userPreferences,
         blockListPreferences = mockk<BlockListPreferences>(relaxed = true).also {
@@ -112,6 +116,7 @@ internal fun chatRepo(
         connectEventBus = connectEventBus,
         lora = lora,
         clock = clock,
+        receivedFileBudget = receivedFileBudget,
     )
 }
 

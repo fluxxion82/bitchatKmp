@@ -81,6 +81,7 @@ fun ByteArray.toBitchatFilePacket(): BitchatFilePacket? {
     var fileSize: Long? = null
     var mimeType: String? = null
     val contentChunks = mutableListOf<ByteArray>()
+    var totalContentSize = 0
 
     var offset = 0
     while (offset < size) {
@@ -103,12 +104,15 @@ fun ByteArray.toBitchatFilePacket(): BitchatFilePacket? {
                 }
             }
             FilePacketTLVType.MIME_TYPE -> mimeType = value.decodeToString()
-            FilePacketTLVType.CONTENT -> contentChunks.add(value)
+            FilePacketTLVType.CONTENT -> {
+                if (value.size > BitchatFilePacket.MAX_CONTENT_BYTES - totalContentSize) return null
+                totalContentSize += value.size
+                contentChunks.add(value)
+            }
             null -> { /* skip unknown TLV types */ }
         }
     }
 
-    val totalContentSize = contentChunks.sumOf { it.size }
     val content = ByteArray(totalContentSize)
     var contentOffset = 0
     for (chunk in contentChunks) {

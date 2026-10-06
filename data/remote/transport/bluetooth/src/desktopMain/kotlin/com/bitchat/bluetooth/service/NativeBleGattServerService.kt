@@ -1,7 +1,7 @@
 package com.bitchat.bluetooth.service
 
 import com.bitchat.bluetooth.bridge.NativeBleBridge
-import java.io.ByteArrayOutputStream
+import com.bitchat.bluetooth.protocol.ChunkReassembler
 
 private const val BITCHAT_SERVICE_UUID = "F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C"
 
@@ -10,7 +10,7 @@ class NativeBleGattServerService(
     private val nativeAvailable: Boolean,
 ) : GattServerService {
     private var delegate: GattServerDelegate? = null
-    private val reassemblyBuffers = mutableMapOf<String, ReassemblyBuffer>()
+    private val reassembler = ChunkReassembler(log = ::println)
 
     override suspend fun startAdvertising() {
         if (nativeAvailable) {
@@ -61,51 +61,10 @@ class NativeBleGattServerService(
     private fun handleIncomingData(deviceAddress: String, value: ByteArray) {
         if (value.isEmpty()) return
 
-        when (value[0]) {
-            CHUNK_START -> {
-                if (value.size < 6) {
-                    println("NativeBleGattServerService: Invalid START chunk from $deviceAddress - too short (${value.size} bytes)")
-                    return
-                }
-                val expected = ((value[1].toInt() and 0xFF) shl 24) or
-                        ((value[2].toInt() and 0xFF) shl 16) or
-                        ((value[3].toInt() and 0xFF) shl 8) or
-                        (value[4].toInt() and 0xFF)
-                val payload = value.copyOfRange(5, value.size)
-                val buffer = ReassemblyBuffer(expectedSize = expected)
-                buffer.data.write(payload)
-                reassemblyBuffers[deviceAddress] = buffer
-                println("NativeBleGattServerService: Started receiving chunked data from $deviceAddress, expecting $expected bytes")
-            }
-
-            CHUNK_CONTINUE, CHUNK_END -> {
-                val buffer = reassemblyBuffers[deviceAddress]
-                if (buffer == null) {
-                    println("NativeBleGattServerService: Received chunk without START from $deviceAddress (${value.size} bytes)")
-                    return
-                }
-                val payload = value.copyOfRange(1, value.size)
-                buffer.data.write(payload)
-                if (value[0] == CHUNK_END) {
-                    val completeData = buffer.data.toByteArray()
-                    reassemblyBuffers.remove(deviceAddress)
-                    if (completeData.size != buffer.expectedSize) {
-                        println("NativeBleGattServerService: Completed chunked transfer from $deviceAddress but size mismatch: expected ${buffer.expectedSize}, got ${completeData.size}")
-                    } else {
-                        println("NativeBleGattServerService: Completed chunked transfer from $deviceAddress: ${completeData.size} bytes")
-                    }
-                    delegate?.onDataReceived(completeData, deviceAddress)
-                }
-            }
-
-            else -> delegate?.onDataReceived(value, deviceAddress)
-        }
+        val frame = reassembler.receive(deviceAddress, value) ?: return
+        if (frame !== value) println("NativeBleGattServerService: Completed chunked transfer from $deviceAddress: ${frame.size} bytes")
+        delegate?.onDataReceived(frame, deviceAddress)
     }
-
-    private data class ReassemblyBuffer(
-        var expectedSize: Int = 0,
-        val data: ByteArrayOutputStream = ByteArrayOutputStream()
-    )
 
     companion object {
         private val CHUNK_START: Byte = 0xFC.toByte()     // 252

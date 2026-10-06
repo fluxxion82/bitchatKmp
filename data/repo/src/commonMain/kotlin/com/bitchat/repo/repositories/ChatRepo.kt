@@ -72,6 +72,7 @@ import com.bitchat.local.prefs.LoRaPreferences
 import com.bitchat.repo.lora.loRaConfiguration
 import com.bitchat.repo.lora.toLoRaConfiguration
 import com.bitchat.repo.utils.CrossTransportTwins
+import com.bitchat.repo.utils.ReceivedFileBudget
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.LoRaProtocolManager
 import com.bitchat.lora.LoRaProtocolType
@@ -132,6 +133,7 @@ class ChatRepo(
     private val lora: LoRaProtocol? = null,
     private val loraPreferences: LoRaPreferences? = null,
     private val clock: Clock = Clock.System,
+    private val receivedFileBudget: ReceivedFileBudget = ReceivedFileBudget(),
 ) : ChatRepository, BluetoothMeshDelegate {
     private val outbox = mutableMapOf<String, MutableList<Triple<String, String, String>>>()
 
@@ -707,8 +709,12 @@ class ChatRepo(
                                 (byte.toInt() and 0xFF).toString(16).padStart(2, '0').uppercase()
                             }
                             println("📎 ChatRepo: Image first bytes: ${logBytes(10) { firstBytes }}")
-                            mesh.sendFileBroadcast(filePacket)
-                            println("📎 ChatRepo: Compressed image broadcast sent: ${logPath(preparedImage.fileName)} (${preparedImage.bytes.size} bytes, ${preparedImage.mimeType})")
+                            if (preparedImage.bytes.size > BitchatFilePacket.MAX_CONTENT_BYTES) {
+                                markMeshMessageFailed(messageID, fileTooLargeReason())
+                            } else {
+                                mesh.sendFileBroadcast(filePacket)
+                                println("📎 ChatRepo: Compressed image broadcast sent: ${logPath(preparedImage.fileName)} (${preparedImage.bytes.size} bytes, ${preparedImage.mimeType})")
+                            }
                         } else {
                             println("❌ ChatRepo: Failed to compress image for BLE transfer: ${logPath(content)}")
                         }
@@ -725,8 +731,12 @@ class ChatRepo(
                                 mimeType = mimeType,
                                 content = fileBytes
                             )
-                            mesh.sendFileBroadcast(filePacket)
-                            println("📎 ChatRepo: Audio file broadcast sent: ${logPath(fileName)} (${fileBytes.size} bytes)")
+                            if (fileBytes.size > BitchatFilePacket.MAX_CONTENT_BYTES) {
+                                markMeshMessageFailed(messageID, fileTooLargeReason())
+                            } else {
+                                mesh.sendFileBroadcast(filePacket)
+                                println("📎 ChatRepo: Audio file broadcast sent: ${logPath(fileName)} (${fileBytes.size} bytes)")
+                            }
                         } else {
                             println("❌ ChatRepo: Failed to read audio file: ${logPath(content)}")
                         }
@@ -1147,6 +1157,21 @@ class ChatRepo(
         }
     }
 
+    private suspend fun markMeshMessageFailed(messageId: String, reason: String) {
+        meshChannelMessagesMutex.withLock {
+            val index = meshChannelMessages.indexOfFirst { it.id == messageId }
+            if (index >= 0) {
+                meshChannelMessages[index] = meshChannelMessages[index].copy(
+                    deliveryStatus = DeliveryStatus.Failed(reason)
+                )
+            }
+        }
+        chatEventBus.update(ChatEvent.MeshMessagesUpdated)
+    }
+
+    private fun fileTooLargeReason(): String =
+        "file is larger than ${BitchatFilePacket.MAX_CONTENT_BYTES / 1024} KiB"
+
     private fun maybeSendDeliveryAck(messageId: String, peerID: String) {
         if (!sentDeliveryAckIds.add(messageId)) return
         coroutineScopeFacade.nostrScope.launch {
@@ -1279,8 +1304,12 @@ class ChatRepo(
                                     (byte.toInt() and 0xFF).toString(16).padStart(2, '0').uppercase()
                                 }
                                 println("📎 ChatRepo: Private image first bytes: ${logBytes(10) { firstBytes }}")
-                                mesh.sendFilePrivate(toPeerID, filePacket)
-                                println("📎 ChatRepo: Private compressed image sent to $toPeerID: ${logPath(preparedImage.fileName)} (${preparedImage.bytes.size} bytes, ${preparedImage.mimeType})")
+                                if (preparedImage.bytes.size > BitchatFilePacket.MAX_CONTENT_BYTES) {
+                                    updateDeliveryStatus(toPeerID, messageId, DeliveryStatus.Failed(fileTooLargeReason()))
+                                } else {
+                                    mesh.sendFilePrivate(toPeerID, filePacket)
+                                    println("📎 ChatRepo: Private compressed image sent to $toPeerID: ${logPath(preparedImage.fileName)} (${preparedImage.bytes.size} bytes, ${preparedImage.mimeType})")
+                                }
                             } else {
                                 println("❌ ChatRepo: Failed to compress image for BLE transfer: ${logPath(content)}")
                             }
@@ -1298,8 +1327,12 @@ class ChatRepo(
                                     mimeType = mimeType,
                                     content = fileBytes
                                 )
-                                mesh.sendFilePrivate(toPeerID, filePacket)
-                                println("📎 ChatRepo: Private audio file sent to $toPeerID: ${logPath(fileName)} (${fileBytes.size} bytes)")
+                                if (fileBytes.size > BitchatFilePacket.MAX_CONTENT_BYTES) {
+                                    updateDeliveryStatus(toPeerID, messageId, DeliveryStatus.Failed(fileTooLargeReason()))
+                                } else {
+                                    mesh.sendFilePrivate(toPeerID, filePacket)
+                                    println("📎 ChatRepo: Private audio file sent to $toPeerID: ${logPath(fileName)} (${fileBytes.size} bytes)")
+                                }
                             } else {
                                 println("❌ ChatRepo: Failed to read audio file: ${logPath(content)}")
                             }
@@ -2307,14 +2340,20 @@ class ChatRepo(
                     BitchatMessageType.Audio -> "audio/incoming"
                     else -> "files/incoming"
                 }
+                if (!receivedFileBudget.reserve(filePacket.content.size)) {
+                    println("⚠️ ChatRepo: Not saving a received file: the limit on received files for this run is reached (restart to receive files again)")
+                    return@launch
+                }
                 // Each received file gets a directory of its own, named here and never by the peer: a later
                 // file with the same name, from anyone, cannot replace one that a message already shows.
-                val subDir = "$incomingDir/${Uuid.random()}"
+                val token = Uuid.random()
+                val subDir = "$incomingDir/$token"
 
                 // A peer's name is never used as a path.
                 val fileName = safeReceivedFileName(filePacket.fileName)
                 val localPath = saveFileToLocal(filePacket.content, fileName, subDir)
                 if (localPath == null) {
+                    // The charge stays: a save that failed may have left a directory or part of a file.
                     println("❌ ChatRepo: Failed to save received file: ${logPath(filePacket.fileName)}")
                     return@launch
                 }
@@ -2324,7 +2363,7 @@ class ChatRepo(
                 val now = Clock.System.now()
 
                 val bitchatMessage = BitchatMessage(
-                    id = "file-${now.toEpochMilliseconds()}",
+                    id = "file-$token",
                     sender = senderName,
                     content = localPath,
                     type = messageType,

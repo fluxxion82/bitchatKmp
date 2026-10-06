@@ -2,6 +2,7 @@ package com.bitchat.bluetooth.service
 
 import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
+import com.bitchat.bluetooth.protocol.ChunkReassembler
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.usePinned
@@ -45,8 +46,7 @@ class IosGattServerService : GattServerService {
     private var isActive = false
     private var shouldResumeAdvertising = false
     private val subscribedCentrals = mutableSetOf<CBCentral>()
-    private data class ReassemblyBuffer(var expectedSize: Int = 0, val data: MutableList<Byte> = mutableListOf())
-    private val reassemblyBuffers = mutableMapOf<String, ReassemblyBuffer>()
+    private val reassembler = ChunkReassembler(log = { logError("IOS_GATT_SERVER", it) })
 
     private val readyToUpdateChannel = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
 
@@ -206,52 +206,9 @@ class IosGattServerService : GattServerService {
             return
         }
 
-        when (value[0]) {
-            CHUNK_START -> {
-                if (value.size < 6) {
-                    logError("IOS_GATT_SERVER", "Invalid START chunk from $deviceAddress - too short (${value.size} bytes)")
-                    return
-                }
-                val expected = ((value[1].toInt() and 0xFF) shl 24) or
-                    ((value[2].toInt() and 0xFF) shl 16) or
-                    ((value[3].toInt() and 0xFF) shl 8) or
-                    (value[4].toInt() and 0xFF)
-                val payload = value.copyOfRange(5, value.size)
-                val buffer = ReassemblyBuffer(expectedSize = expected, data = payload.toMutableList())
-                reassemblyBuffers[deviceAddress] = buffer
-                logInfo("IOS_GATT_SERVER", "Started receiving chunked data from $deviceAddress, expecting $expected bytes")
-            }
-
-            CHUNK_CONTINUE, CHUNK_END -> {
-                val buffer = reassemblyBuffers[deviceAddress]
-                if (buffer == null) {
-                    logError("IOS_GATT_SERVER", "Received chunk without START from $deviceAddress (${value.size} bytes)")
-                    return
-                }
-                val payload = value.copyOfRange(1, value.size)
-                buffer.data.addAll(payload.toList())
-                if (value[0] == CHUNK_END) {
-                    val completeData = buffer.data.toByteArray()
-                    reassemblyBuffers.remove(deviceAddress)
-                    if (completeData.size != buffer.expectedSize) {
-                        logError(
-                            "IOS_GATT_SERVER",
-                            "Completed chunked transfer from $deviceAddress but size mismatch: expected ${buffer.expectedSize}, got ${completeData.size}"
-                        )
-                    } else {
-                        logInfo(
-                            "IOS_GATT_SERVER",
-                            "Completed chunked transfer from $deviceAddress: ${completeData.size} bytes"
-                        )
-                    }
-                    delegate?.onDataReceived(completeData, deviceAddress)
-                }
-            }
-
-            else -> {
-                delegate?.onDataReceived(value, deviceAddress)
-            }
-        }
+        val frame = reassembler.receive(deviceAddress, value) ?: return
+        if (frame !== value) logInfo("IOS_GATT_SERVER", "Completed chunked transfer from $deviceAddress: ${frame.size} bytes")
+        delegate?.onDataReceived(frame, deviceAddress)
     }
 
     private fun setupServiceIfNeeded() {
@@ -353,6 +310,8 @@ class IosGattServerService : GattServerService {
             didUnsubscribeFromCharacteristic: CBCharacteristic
         ) {
             subscribedCentrals.remove(central)
+            // The frame this central may be sending is kept: it only turned notifications off and can
+            // still write. CoreBluetooth never says a central is gone; an abandoned frame ages out.
             delegate?.onClientDisconnected(central.identifier.UUIDString)
         }
 

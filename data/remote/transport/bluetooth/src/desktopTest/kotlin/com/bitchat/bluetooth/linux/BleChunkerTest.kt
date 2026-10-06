@@ -366,6 +366,34 @@ class BleChunkerTest {
     }
 
     @Test
+    fun aFirstChunkLongerThanItDeclaresIsNotKept() {
+        // What it declares is all a frame may ever hold; a START that already carries more starts nothing.
+        val chunker = BleChunker()
+
+        assertNull(chunker.receive(phone, startChunk(totalLength = 1, payload = payload(495))))
+        assertNull(chunker.receive(phone, endChunk(payload(1))), "nothing was in flight to finish")
+
+        assertEquals(1L, chunker.stats.droppedLengthMismatch)
+        assertEquals(1L, chunker.stats.droppedOrphanContinuation)
+        assertEquals(2L, chunker.stats.framesDropped)
+    }
+
+    @Test
+    fun continuationsPastTheDeclaredLengthDropTheFrameAtOnce() {
+        // A sender that never sends an END cannot make us hold more than its START declared.
+        val chunker = BleChunker()
+
+        assertNull(chunker.receive(phone, startChunk(totalLength = 1_000, payload = payload(300))))
+        assertNull(chunker.receive(phone, continueChunk(payload(300))))
+        assertNull(chunker.receive(phone, continueChunk(payload(300))))
+        assertNull(chunker.receive(phone, continueChunk(payload(300))), "1200 bytes is past the 1000 declared")
+        repeat(50) { assertNull(chunker.receive(phone, continueChunk(payload(300)))) }
+
+        assertEquals(1L, chunker.stats.droppedLengthMismatch)
+        assertEquals(50L, chunker.stats.droppedOrphanContinuation, "what follows finds nothing in flight")
+    }
+
+    @Test
     fun aDroppedFrameLeavesNothingBehindForTheNextOne() {
         val chunker = BleChunker()
         chunker.receive(phone, startChunk(totalLength = 1000, payload = payload(495)))

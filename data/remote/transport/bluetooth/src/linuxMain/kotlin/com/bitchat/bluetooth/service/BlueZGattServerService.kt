@@ -9,6 +9,7 @@ import com.bitchat.bluetooth.manager.GattClientRegistry
 import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
+import com.bitchat.bluetooth.protocol.ChunkReassembler
 import dbus.*
 import kotlinx.cinterop.*
 import kotlinx.coroutines.delay
@@ -185,12 +186,7 @@ class BlueZGattServerService(
     // is a no-op rather than a request the daemon has to reject.
     private var matchConnection: CPointer<DBusConnection>? = null
 
-    // Reassembly buffers for chunked incoming data
-    private data class ReassemblyBuffer(
-        var expectedSize: Int = 0,
-        val data: MutableList<Byte> = mutableListOf()
-    )
-    private val reassemblyBuffers = mutableMapOf<String, ReassemblyBuffer>()
+    private val reassembler = ChunkReassembler(log = { logError(TAG, it) })
 
     // Pending notifications (address -> data)
     private val pendingNotifications = mutableMapOf<String, ByteArray>()
@@ -233,7 +229,7 @@ class BlueZGattServerService(
 
         isActive = false
         connectedClients.clear()
-        reassemblyBuffers.clear()
+        reassembler.clear()
         logInfo(TAG, "GATT server stopped")
     }
 
@@ -438,47 +434,9 @@ class BlueZGattServerService(
     private fun handleIncomingData(value: ByteArray, deviceAddress: String) {
         if (value.isEmpty()) return
 
-        when (value[0]) {
-            CHUNK_START -> {
-                if (value.size < 6) {
-                    logError(TAG, "Invalid START chunk from $deviceAddress - too short")
-                    return
-                }
-                val expected = ((value[1].toInt() and 0xFF) shl 24) or
-                        ((value[2].toInt() and 0xFF) shl 16) or
-                        ((value[3].toInt() and 0xFF) shl 8) or
-                        (value[4].toInt() and 0xFF)
-                val payload = value.copyOfRange(5, value.size)
-                reassemblyBuffers[deviceAddress] = ReassemblyBuffer(
-                    expectedSize = expected,
-                    data = payload.toMutableList()
-                )
-                logInfo(TAG, "Started receiving chunked data from $deviceAddress, expecting $expected bytes")
-            }
-
-            CHUNK_CONTINUE, CHUNK_END -> {
-                val buffer = reassemblyBuffers[deviceAddress]
-                if (buffer == null) {
-                    logError(TAG, "Received chunk without START from $deviceAddress")
-                    return
-                }
-                val payload = value.copyOfRange(1, value.size)
-                buffer.data.addAll(payload.toList())
-
-                if (value[0] == CHUNK_END) {
-                    val completeData = buffer.data.toByteArray()
-                    reassemblyBuffers.remove(deviceAddress)
-                    if (completeData.size != buffer.expectedSize) {
-                        logError(TAG, "Size mismatch: expected ${buffer.expectedSize}, got ${completeData.size}")
-                    } else {
-                        logInfo(TAG, "Completed chunked transfer from $deviceAddress: ${completeData.size} bytes")
-                    }
-                    delegate?.onDataReceived(completeData, deviceAddress)
-                }
-            }
-
-            else -> delegate?.onDataReceived(value, deviceAddress)
-        }
+        val frame = reassembler.receive(deviceAddress, value) ?: return
+        if (frame !== value) logInfo(TAG, "Completed chunked transfer from $deviceAddress: ${frame.size} bytes")
+        delegate?.onDataReceived(frame, deviceAddress)
     }
 
     /**
@@ -1370,7 +1328,7 @@ class BlueZGattServerService(
     internal fun onClientDisconnected(deviceAddress: String) {
         if (connectedClients.onDisconnected(deviceAddress)) {
             logInfo(TAG, "Client disconnected: $deviceAddress")
-            reassemblyBuffers.remove(deviceAddress)
+            reassembler.forget(deviceAddress)
             delegate?.onClientDisconnected(deviceAddress)
         }
     }

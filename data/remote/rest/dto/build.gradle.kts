@@ -34,6 +34,13 @@ kotlin {
             }
         }
 
+        val jvmTest by getting {
+            dependencies {
+                implementation(libs.kotlin.test)
+                implementation(libs.kotlin.test.junit)
+            }
+        }
+
         // Apple-specific (uses platform.zlib)
         val appleMain by getting {
         }

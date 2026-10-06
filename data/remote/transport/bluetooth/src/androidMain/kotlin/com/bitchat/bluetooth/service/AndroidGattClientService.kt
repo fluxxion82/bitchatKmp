@@ -11,6 +11,7 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.util.Log
+import com.bitchat.bluetooth.protocol.ChunkReassembler
 import com.bitchat.domain.base.CoroutineScopeFacade
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -41,7 +42,7 @@ class AndroidGattClientService(
     private val CHUNK_CONTINUE: Byte = 0xFD.toByte() // 253
     private val CHUNK_END: Byte = 0xFE.toByte()       // 254
 
-    private val reassemblyBuffers = mutableMapOf<String, ReassemblyBuffer>()
+    private val reassembler = ChunkReassembler(log = { Log.w(TAG, it) })
 
     override fun setDelegate(delegate: GattClientDelegate) {
         this.delegate = delegate
@@ -227,59 +228,9 @@ class AndroidGattClientService(
             return
         }
 
-        val chunkType = value[0]
-
-        when (chunkType) {
-            CHUNK_START -> {
-                // Start of chunked transfer
-                if (value.size < 5) {
-                    Log.e(TAG, "Client: Invalid START chunk from $deviceAddress - too short")
-                    return
-                }
-                val totalSize = ((value[1].toInt() and 0xFF) shl 24) or
-                        ((value[2].toInt() and 0xFF) shl 16) or
-                        ((value[3].toInt() and 0xFF) shl 8) or
-                        (value[4].toInt() and 0xFF)
-
-                val buffer = ReassemblyBuffer(expectedSize = totalSize)
-                buffer.data.write(value, 5, value.size - 5)
-                reassemblyBuffers[deviceAddress] = buffer
-
-                Log.i(TAG, "Client: Started receiving chunked notification from $deviceAddress, expecting $totalSize bytes")
-            }
-
-            CHUNK_CONTINUE -> {
-                // Continuation chunk
-                val buffer = reassemblyBuffers[deviceAddress]
-                if (buffer == null) {
-                    Log.w(TAG, "Client: Received CONTINUE chunk without START from $deviceAddress")
-                    return
-                }
-                buffer.data.write(value, 1, value.size - 1)
-                Log.d(TAG, "Client: Received CONTINUE chunk from $deviceAddress, total so far: ${buffer.data.size()}")
-            }
-
-            CHUNK_END -> {
-                // End chunk
-                val buffer = reassemblyBuffers[deviceAddress]
-                if (buffer == null) {
-                    Log.w(TAG, "Client: Received END chunk without START from $deviceAddress")
-                    return
-                }
-                buffer.data.write(value, 1, value.size - 1)
-                val completeData = buffer.data.toByteArray()
-                reassemblyBuffers.remove(deviceAddress)
-
-                Log.i(TAG, "Client: Completed chunked notification from $deviceAddress: ${completeData.size} bytes")
-                delegate?.onCharacteristicRead(deviceAddress, completeData)
-            }
-
-            else -> {
-                // Non-chunked data (regular small packet)
-                Log.i(TAG, "Client: Received notification from $deviceAddress, ${value.size} bytes")
-                delegate?.onCharacteristicRead(deviceAddress, value)
-            }
-        }
+        val frame = reassembler.receive(deviceAddress, value) ?: return
+        Log.i(TAG, "Client: Received notification from $deviceAddress, ${frame.size} bytes")
+        delegate?.onCharacteristicRead(deviceAddress, frame)
     }
 
     override suspend fun disconnect(deviceAddress: String) {
@@ -329,6 +280,7 @@ class AndroidGattClientService(
                     }
 
                     newState == BluetoothProfile.STATE_DISCONNECTED -> {
+                        reassembler.forget(deviceAddress)
                         if (status != BluetoothGatt.GATT_SUCCESS) {
                             Log.w(TAG, "❌ Client: Disconnected from $deviceAddress with error status $status")
                             coroutineScopeFacade.applicationScope.launch {
@@ -470,11 +422,6 @@ class AndroidGattClientService(
             Log.e(TAG, "Error connecting to $deviceAddress: ${e.message}")
         }
     }
-
-    private data class ReassemblyBuffer(
-        var expectedSize: Int = 0,
-        val data: java.io.ByteArrayOutputStream = java.io.ByteArrayOutputStream()
-    )
 
     private enum class ConnectionState {
         DISCONNECTED,

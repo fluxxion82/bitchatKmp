@@ -1,6 +1,8 @@
 package com.bitchat.repo.repositories
 
 import com.bitchat.domain.chat.model.BitchatFilePacket
+import com.bitchat.domain.chat.model.BitchatMessage
+import com.bitchat.repo.utils.ReceivedFileBudget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -12,6 +14,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
@@ -20,6 +23,7 @@ import kotlin.io.path.readBytes
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -61,6 +65,19 @@ class ChatRepoReceivedFileNameTest {
         assertContentEquals(first, paths[0].readBytes())
         assertContentEquals(second, paths[1].readBytes())
         assertEquals(2, regularFiles(home).size)
+        assertEquals(2, chatRepo.getMeshMessages().map { it.id }.toSet().size)
+    }
+
+    @Test
+    fun receivedFilesStayRefusedAfterTheRunBudgetIsReached() = withChatRepo(
+        receivedFileBudget = ReceivedFileBudget(limitBytes = 40L * 1024),
+    ) { chatRepo, home ->
+        repeat(3) { chatRepo.didReceivePublicFile("peer", packet("$it.bin", byteArrayOf(it.toByte()))) }
+        awaitMeshMessages(chatRepo, 2)
+        assertNull(waitForMeshMessages(chatRepo, 3), "the third minimum-charge file must not be saved")
+        chatRepo.didReceivePublicFile("peer", packet("later.bin", byteArrayOf(9)))
+        assertNull(waitForMeshMessages(chatRepo, 3), "a full run budget remains full")
+        assertEquals(2, regularFiles(home).size)
     }
 
     @Test
@@ -94,14 +111,25 @@ class ChatRepoReceivedFileNameTest {
         }
     }
 
-    private fun withChatRepo(block: suspend TestScope.(ChatRepo, Path) -> Unit) = runTest {
+    private suspend fun waitForMeshMessages(chatRepo: ChatRepo, count: Int): List<BitchatMessage>? =
+        withContext(Dispatchers.Default) {
+            withTimeoutOrNull(200) {
+                while (chatRepo.getMeshMessages().size < count) delay(10)
+                chatRepo.getMeshMessages()
+            }
+        }
+
+    private fun withChatRepo(
+        receivedFileBudget: ReceivedFileBudget = ReceivedFileBudget(),
+        block: suspend TestScope.(ChatRepo, Path) -> Unit,
+    ) = runTest {
         val originalUserHome = System.getProperty("user.home")
         val temporaryHome = createTempDirectory("chat-repo-received-file-name-test")
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         try {
             System.setProperty("user.home", temporaryHome.toString())
-            block(chatRepo(scope, dispatcher, mutableListOf()), temporaryHome)
+            block(chatRepo(scope, dispatcher, mutableListOf(), receivedFileBudget = receivedFileBudget), temporaryHome)
         } finally {
             scope.cancel()
             System.setProperty("user.home", originalUserHome)

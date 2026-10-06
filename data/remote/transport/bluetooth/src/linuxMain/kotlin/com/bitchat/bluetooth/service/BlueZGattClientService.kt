@@ -3,6 +3,7 @@ package com.bitchat.bluetooth.service
 import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
+import com.bitchat.bluetooth.protocol.ChunkReassembler
 import gattlib.*
 import kotlinx.cinterop.*
 import kotlinx.coroutines.delay
@@ -105,12 +106,7 @@ class BlueZGattClientService(
     /** Invoked from a gattlib thread when a peer is dropped, for any reason. */
     var onConnectionLost: ((String) -> Unit)? = null
 
-    // Reassembly buffers for incoming chunked data
-    private data class ReassemblyBuffer(
-        var expectedSize: Int = 0,
-        val data: MutableList<Byte> = mutableListOf()
-    )
-    private val reassemblyBuffers = mutableMapOf<String, ReassemblyBuffer>()
+    private val reassembler = ChunkReassembler(log = { logError(TAG, it) })
 
     init {
         manager.registerGattDelegate(this)
@@ -307,7 +303,7 @@ class BlueZGattClientService(
     override suspend fun disconnect(deviceAddress: String) {
         val entry = removeConnection(deviceAddress) ?: return
         logInfo(TAG, "Disconnecting from $deviceAddress")
-        reassemblyBuffers.remove(deviceAddress)
+        reassembler.forget(deviceAddress)
         if (entry.markDead()) {
             gattlib_disconnect(entry.connection, true)
         }
@@ -323,7 +319,7 @@ class BlueZGattClientService(
                 gattlib_disconnect(entry.connection, false)
             }
         }
-        reassemblyBuffers.clear()
+        reassembler.clear()
     }
 
     /**
@@ -401,7 +397,7 @@ class BlueZGattClientService(
         topologyEpoch.incrementAndGet()
         val entry = removeConnection(address)
         entry?.markDead()
-        reassemblyBuffers.remove(address)
+        reassembler.forget(address)
         logInfo(TAG, "Disconnected from $address${error?.let { ": $it" } ?: ""}")
         onConnectionLost?.invoke(address)
     }
@@ -429,7 +425,7 @@ class BlueZGattClientService(
      */
     private fun abandon(entry: DeviceConnection, reason: String) {
         removeConnection(entry.address)
-        reassemblyBuffers.remove(entry.address)
+        reassembler.forget(entry.address)
         val wasAlive = entry.markDead()
         logInfo(TAG, "Abandoning ${entry.address}: $reason")
         if (wasAlive) {
@@ -604,47 +600,9 @@ class BlueZGattClientService(
     private fun handleIncomingData(deviceAddress: String, value: ByteArray) {
         if (value.isEmpty()) return
 
-        when (value[0]) {
-            CHUNK_START -> {
-                if (value.size < 6) {
-                    logError(TAG, "Invalid START chunk from ${deviceAddress.take(8)} - too short (${value.size} bytes)")
-                    return
-                }
-                val expected = ((value[1].toInt() and 0xFF) shl 24) or
-                        ((value[2].toInt() and 0xFF) shl 16) or
-                        ((value[3].toInt() and 0xFF) shl 8) or
-                        (value[4].toInt() and 0xFF)
-                val payload = value.copyOfRange(5, value.size)
-                reassemblyBuffers[deviceAddress] = ReassemblyBuffer(
-                    expectedSize = expected,
-                    data = payload.toMutableList()
-                )
-                logDebug(TAG, "Started receiving chunked data from ${deviceAddress.take(8)}, expecting $expected bytes")
-            }
-
-            CHUNK_CONTINUE, CHUNK_END -> {
-                val buffer = reassemblyBuffers[deviceAddress]
-                if (buffer == null) {
-                    logError(TAG, "Received chunk without START from ${deviceAddress.take(8)}")
-                    return
-                }
-                val payload = value.copyOfRange(1, value.size)
-                buffer.data.addAll(payload.toList())
-
-                if (value[0] == CHUNK_END) {
-                    val completeData = buffer.data.toByteArray()
-                    reassemblyBuffers.remove(deviceAddress)
-                    if (completeData.size != buffer.expectedSize) {
-                        logError(TAG, "Chunked transfer size mismatch: expected ${buffer.expectedSize}, got ${completeData.size}")
-                    } else {
-                        logInfo(TAG, "Completed chunked transfer from ${deviceAddress.take(8)}: ${completeData.size} bytes")
-                    }
-                    delegate?.onCharacteristicRead(deviceAddress, completeData)
-                }
-            }
-
-            else -> delegate?.onCharacteristicRead(deviceAddress, value)
-        }
+        val frame = reassembler.receive(deviceAddress, value) ?: return
+        if (frame !== value) logInfo(TAG, "Completed chunked transfer from ${deviceAddress.take(8)}: ${frame.size} bytes")
+        delegate?.onCharacteristicRead(deviceAddress, frame)
     }
 
     // Copy-on-write registry helpers
