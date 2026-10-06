@@ -1,5 +1,7 @@
 package com.bitchat.repo.repositories
 
+import com.bitchat.bluetooth.service.BluetoothMeshService
+import com.bitchat.bluetooth.model.PeerInfo
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.user.eventbus.UserEventBus
 import com.bitchat.domain.user.model.FavoriteRelationship
@@ -275,7 +277,13 @@ class ChatRepoLearnedNamesTest {
         val mine = "f00d000000000001"
         val saved = StatefulFavoritePreferences(mapOf(mine to favorite(mine, isFavorite = true)))
         try {
-            val repo = chatRepo(scope, dispatcher, mutableListOf(), userPreferences = saved.preferences, clock = SteppingClock())
+            // A record is named after what the peer announces; the sender field of a message names nothing.
+            val mesh = mockk<BluetoothMeshService>(relaxed = true)
+            every { mesh.getPeerInfo(any()) } answers {
+                val id = firstArg<String>()
+                PeerInfo(id, "announced-${id.toInt(16)}", true, true, null, null, false, Clock.System.now())
+            }
+            val repo = chatRepo(scope, dispatcher, mutableListOf(), mesh = mesh, userPreferences = saved.preferences, clock = SteppingClock())
 
             repeat(205) { index ->
                 // Each says which Nostr key is its own; the key is well formed, so it is kept.
@@ -285,7 +293,7 @@ class ChatRepoLearnedNamesTest {
             val theirs = saved.favorites.values.filter { !it.isFavorite }
             assertEquals(200, theirs.size)
             assertTrue(theirs.all { it.theyFavoritedUs })
-            assertEquals("peer-204", saved.favorites.getValue(meshPeer(204)).peerNickname)
+            assertEquals("announced-204", saved.favorites.getValue(meshPeer(204)).peerNickname)
             assertEquals(npubOf(nostrKey(204)), saved.favorites.getValue(meshPeer(204)).peerNostrPublicKey)
             assertFalse(meshPeer(4) in saved.favorites, "the five recorded first made room")
             assertTrue(meshPeer(5) in saved.favorites)

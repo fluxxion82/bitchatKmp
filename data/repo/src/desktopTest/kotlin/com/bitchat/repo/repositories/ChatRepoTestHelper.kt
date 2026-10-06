@@ -62,6 +62,7 @@ internal fun chatRepo(
     configureNostrClient: (NostrClient) -> Unit = {},
     userEventBus: UserEventBus = mockk<UserEventBus>(relaxed = true).also { every { it.events() } returns emptyFlow() },
     nostr: NostrTransport = mockk(relaxed = true),
+    chatEventBus: ChatEventBus = mockk<ChatEventBus>(relaxed = true),
 ): ChatRepo {
     val contextFacade = object : CoroutinesContextFacade {
         override val io: CoroutineContext = dispatcher
@@ -124,7 +125,7 @@ internal fun chatRepo(
         },
         participantTracker = participantTracker,
         locationEventBus = mockk<LocationEventBus>(relaxed = true),
-        chatEventBus = mockk<ChatEventBus>(relaxed = true),
+        chatEventBus = chatEventBus,
         userRepository = userRepository,
         appRepository = mockk<AppRepository>(relaxed = true).also {
             coEvery { it.hasRequiredPermissions() } returns false

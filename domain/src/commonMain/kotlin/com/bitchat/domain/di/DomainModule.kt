@@ -22,6 +22,7 @@ import com.bitchat.domain.chat.GetChannelMembers
 import com.bitchat.domain.chat.GetGeohashParticipants
 import com.bitchat.domain.chat.GetJoinedChannels
 import com.bitchat.domain.chat.GetJoinedNamedChannels
+import com.bitchat.domain.chat.FindMeshPeerByName
 import com.bitchat.domain.chat.GetMeshPeers
 import com.bitchat.domain.chat.JoinChannel
 import com.bitchat.domain.chat.LeaveChannel
@@ -177,6 +178,7 @@ val domainModule = module {
     single { GetJoinedNamedChannels(chatRepository = get(), chatEventBus = get()) }
     single { GetGeohashParticipants(chatRepository = get()) }
     single { GetMeshPeers(chatRepository = get()) }
+    single { FindMeshPeerByName(chatRepository = get()) }
     single { ObserveMeshChannelPeople(chatRepository = get(), chatEventBus = get(), blockListRepository = get()) }
     single { GetChannelKeyCommitment(chatRepository = get()) }
     single { GetAvailableNamedChannels(chatRepository = get()) }

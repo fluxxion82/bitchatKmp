@@ -81,6 +81,7 @@ val viewModelModule = module {
             getJoinedNamedChannels = get(),
             getGeohashParticipants = get(),
             getMeshPeers = get(),
+            findMeshPeerByName = get(),
             getChannelKeyCommitment = get(),
             getAvailableNamedChannels = get(),
             getChannelMembers = get(),

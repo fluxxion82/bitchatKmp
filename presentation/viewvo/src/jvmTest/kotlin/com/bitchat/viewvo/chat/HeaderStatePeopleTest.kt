@@ -61,6 +61,57 @@ class HeaderStatePeopleTest {
         )
     }
 
+    @Test fun aFixedNameOfAnOfflineChatWinsOverTheDirectory() {
+        val header = HeaderState(
+            selectedLocationChannel = Channel.Mesh,
+            nicknameDirectory = mapOf("offline" to "announced before it left"),
+            meshPeople = listOf(
+                MeshChannelPerson("offline", "alice#1a2b", emptySet(), true, null, nameIsFixed = true),
+            ),
+        )
+
+        assertEquals(mapOf("offline" to "alice#1a2b"), header.peerNicknames)
+    }
+
+    @Test fun fixedPrivateNamesWinOverTheDirectoryAndLiveConnectedNames() {
+        val header = HeaderState(
+            selectedLocationChannel = Channel.Mesh,
+            nicknameDirectory = mapOf("fixed" to "directory", "offline" to "directory offline"),
+            meshPeople = listOf(
+                MeshChannelPerson("fixed", "alice#1a2b", setOf(MeshChannelTransport.MESH), true, null, nameIsFixed = true),
+                MeshChannelPerson("live", "announced now", setOf(MeshChannelTransport.MESH), false, null),
+                MeshChannelPerson("offline", "old live", emptySet(), true, null),
+            ),
+        )
+
+        assertEquals(
+            mapOf("offline" to "directory offline", "fixed" to "alice#1a2b", "live" to "announced now"),
+            header.peerNicknames,
+        )
+    }
+
+    @Test fun claimedNamesOnlyListCurrentMeshAnnouncements() {
+        val header = HeaderState(
+            selectedLocationChannel = Channel.Mesh,
+            meshPeople = listOf(
+                MeshChannelPerson("fixed", "alice#1a2b", setOf(MeshChannelTransport.MESH), true, null, nameIsFixed = true, claimedName = "bob"),
+                MeshChannelPerson("unchanged", "carol", setOf(MeshChannelTransport.MESH), true, null, nameIsFixed = true),
+                MeshChannelPerson("live", "dave", setOf(MeshChannelTransport.MESH), false, null),
+            ),
+        )
+
+        assertEquals(mapOf("fixed" to "bob"), header.claimedNames)
+        assertEquals(setOf("fixed", "unchanged"), header.fixedNamePeers)
+        assertEquals(
+            emptySet(),
+            header.copy(selectedLocationChannel = Channel.Location(com.bitchat.domain.location.model.GeohashChannelLevel.CITY, "9q8yy")).fixedNamePeers,
+        )
+        assertEquals(
+            emptyMap(),
+            header.copy(selectedLocationChannel = Channel.Location(com.bitchat.domain.location.model.GeohashChannelLevel.CITY, "9q8yy")).claimedNames,
+        )
+    }
+
     @Test fun locationChannelPropertiesKeepTheirExistingFormulas() {
         val people = listOf(GeoPerson("npub", "dora", seen))
         val header = HeaderState(

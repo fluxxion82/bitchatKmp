@@ -44,6 +44,21 @@ class ChatRepoLoRaPeersTest {
         }
     }
 
+    @Test fun aRadioPeersNameIsCleanedLikeAMeshNickname() = runTest {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+
+        try {
+            // A number sign is the app's own in this list; a heartbeat with no usable name is listed under its id.
+            val lora = FakeLoRaProtocol(peerIdsAreMeshIds = true, names = listOf("alice#1a2b\n", "#"))
+            val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), lora = lora)
+
+            assertEquals(listOf("alice1a2b", "Y"), chatRepo.getLoRaPeers().map { it.displayName })
+        } finally {
+            scope.cancel()
+        }
+    }
+
     @Test fun foreignLoRaPeersDoNotExposeMeshIdentity() = runTest {
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -77,26 +92,31 @@ class ChatRepoLoRaPeersTest {
         }
     }
 
-    @Test fun privateChatNamesComeFromTheOtherSidesLatestMessageWithoutItsHistory() = runTest {
+    @Test fun aMeshPrivateChatKeepsTheNameItWasOpenedUnderWhateverLaterMessagesSay() = runTest {
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        val mesh = mockk<BluetoothMeshService>(relaxed = true)
+        fun announces(name: String) {
+            every { mesh.getPeerInfo("X") } returns PeerInfo("X", name, true, true, null, null, false, Instant.fromEpochSeconds(0))
+        }
 
         try {
-            val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), lora = FakeLoRaProtocol(peerIdsAreMeshIds = true))
+            val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), mesh = mesh, lora = FakeLoRaProtocol(peerIdsAreMeshIds = true))
             runCurrent()
 
+            announces("first name")
             chatRepo.didReceiveAuthenticatedPrivateMessage(privateMessage("dm-1", "first name", sentAt = 1))
+            announces("third name")
             chatRepo.didReceiveAuthenticatedPrivateMessage(privateMessage("dm-3", "third name", sentAt = 3))
-            // The message sent in between is handled last: the newest message still names the chat.
             chatRepo.didReceiveAuthenticatedPrivateMessage(privateMessage("dm-2", "second name", sentAt = 2))
             runCurrent()
 
-            assertEquals(mapOf("X" to "third name"), chatRepo.getPrivateChatNames())
+            assertEquals(mapOf("X" to "first name#x"), chatRepo.getPrivateChatNames())
             assertEquals(Unit, chatRepo.observeLoRaPeerChanges().first())
 
-            // Cleared, the conversation is still there, with nobody's name on it; wiped, it is gone.
+            // Cleared, the conversation is still there and still called what it was; wiped, it is gone.
             chatRepo.clearMessages(Channel.MeshDM("X", "third name"))
-            assertEquals(mapOf<String, String?>("X" to null), chatRepo.getPrivateChatNames())
+            assertEquals(mapOf<String, String?>("X" to "first name#x"), chatRepo.getPrivateChatNames())
             chatRepo.clearData()
             assertEquals(emptyMap(), chatRepo.getPrivateChatNames())
         } finally {
@@ -151,11 +171,12 @@ class ChatRepoLoRaPeersTest {
 
     private class FakeLoRaProtocol(
         override val peerIdsAreMeshIds: Boolean,
+        names: List<String> = listOf("X", "Y"),
     ) : LoRaProtocol {
         override val peers: StateFlow<List<LoRaPeer>> = MutableStateFlow(
             listOf(
-                LoRaPeer("x", "X", Instant.fromEpochSeconds(0), -80, 6f),
-                LoRaPeer("Y", "Y", Instant.fromEpochSeconds(0), -80, 6f),
+                LoRaPeer("x", names[0], Instant.fromEpochSeconds(0), -80, 6f),
+                LoRaPeer("Y", names[1], Instant.fromEpochSeconds(0), -80, 6f),
             ),
         )
         override val incomingMessages: Flow<ByteArray> = emptyFlow()

@@ -232,4 +232,21 @@ class BindingTest {
         assertEquals("m4llory", dmPeerFor(HeaderState(nicknameDirectory = mapOf("id-m" to "m4llory")), "id-m").name)
         assertEquals("0011223344556677".take(12), dmPeerFor(HeaderState(), "0011223344556677").name)
     }
+
+    @Test fun aFixedMeshPrivateNameWinsOverTheChannelsFirstLiveName() {
+        val channel = Channel.MeshDM("id-alice", "alice")
+        val fixed = MeshChannelPerson(
+            "id-alice", "alice#1a2b", setOf(MeshChannelTransport.MESH), true, null,
+            nameIsFixed = true,
+        )
+        val live = fixed.copy(nameIsFixed = false)
+
+        assertEquals("alice#1a2b", dmPeerFor(HeaderState(selectedChannel = channel, meshPeople = listOf(fixed)), channel.peerID).name)
+        // What the peer announces now comes along: `/msg bob` must still recognise the DM it opened.
+        assertEquals(
+            "bob",
+            dmPeerFor(HeaderState(selectedChannel = channel, meshPeople = listOf(fixed.copy(claimedName = "bob"))), channel.peerID).claims,
+        )
+        assertEquals("alice", dmPeerFor(HeaderState(selectedChannel = channel, meshPeople = listOf(live)), channel.peerID).name)
+    }
 }

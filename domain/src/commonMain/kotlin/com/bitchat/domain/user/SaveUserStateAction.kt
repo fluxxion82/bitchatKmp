@@ -83,12 +83,13 @@ class SaveUserStateAction(
                     }
                 }
 
-                chatRepository.setSelectedChannel(param.channel)
+                val channel = (param.channel as? Channel.MeshDM)?.let { underItsOwnName(it) } ?: param.channel
+                chatRepository.setSelectedChannel(channel)
 
                 UserState.Active(
                     ActiveState.Chat(
-                        channel = param.channel,
-                        previousChannel = previousFor(param.channel, currentChat)
+                        channel = channel,
+                        previousChannel = previousFor(channel, currentChat)
                     )
                 )
             }
@@ -96,9 +97,11 @@ class SaveUserStateAction(
             is UserStateAction.MeshDM -> {
                 val currentChat = currentChat()
 
-                val dmChannel = Channel.MeshDM(
-                    peerID = param.peerID,
-                    displayName = param.displayName
+                val dmChannel = underItsOwnName(
+                    Channel.MeshDM(
+                        peerID = param.peerID,
+                        displayName = param.displayName
+                    )
                 )
                 chatRepository.setSelectedChannel(dmChannel)
 
@@ -157,6 +160,15 @@ class SaveUserStateAction(
             chatEventBus.update(ChatEvent.ChannelChanged)
         }
     }
+
+    /**
+     * A mesh private chat that has a name of its own is opened under that name, whatever name the
+     * request carries. The request's is what the peer is announced as right now (`/msg bob` finds a peer
+     * by it), and anyone in range can announce for any peer: it must not become the title of a
+     * conversation that is already known under another name.
+     */
+    private suspend fun underItsOwnName(channel: Channel.MeshDM): Channel.MeshDM =
+        chatRepository.getPrivateChatNames()[channel.peerID]?.let { channel.copy(displayName = it) } ?: channel
 
     private suspend fun currentChat(): ActiveState.Chat? =
         (repository.getUserState() as? UserState.Active)?.activeState as? ActiveState.Chat

@@ -18,6 +18,7 @@ import com.bitchat.domain.chat.GetChannelKeyCommitment
 import com.bitchat.domain.chat.GetChannelMembers
 import com.bitchat.domain.chat.GetGeohashParticipants
 import com.bitchat.domain.chat.GetJoinedNamedChannels
+import com.bitchat.domain.chat.FindMeshPeerByName
 import com.bitchat.domain.chat.GetMeshPeers
 import com.bitchat.domain.chat.JoinChannel
 import com.bitchat.domain.chat.LeaveChannel
@@ -75,6 +76,7 @@ class ChatViewModel(
     private val getJoinedNamedChannels: GetJoinedNamedChannels,
     private val getGeohashParticipants: GetGeohashParticipants,
     private val getMeshPeers: GetMeshPeers,
+    private val findMeshPeerByName: FindMeshPeerByName,
     private val getChannelKeyCommitment: GetChannelKeyCommitment,
     private val getAvailableNamedChannels: GetAvailableNamedChannels,
     private val getChannelMembers: GetChannelMembers,
@@ -387,8 +389,7 @@ class ChatViewModel(
             }
 
             is Channel.Mesh -> {
-                val peers = getMeshPeers()
-                val peer = peers.find { it.displayName.equals(target, ignoreCase = true) }
+                val peer = findMeshPeerByName(target)
 
                 if (peer != null) {
                     blockUser(BlockUser.Request(peer.id, target, BlockType.MESH))
@@ -618,11 +619,7 @@ class ChatViewModel(
     }
 
     private suspend fun handleMeshMessageCommand(target: String, message: String?, typedIn: Channel) {
-        val peers = getMeshPeers(Unit)
-        val peer = peers.find { p ->
-            p.displayName.equals(target, ignoreCase = true) ||
-                    p.displayName.startsWith("$target#", ignoreCase = true)
-        }
+        val peer = findMeshPeerByName(target)
 
         if (peer == null) {
             addSystemMessage("user $target not found", channel = typedIn)
@@ -772,8 +769,11 @@ class ChatViewModel(
     private suspend fun resolveChannel(peer: String?, channelName: String?): Channel? {
         // if peer is specified, this is a direct message
         if (peer != null) {
-            val peers = getMeshPeers(Unit)
-            val matchedPeer = peers.find { it.id == peer || it.displayName == peer }
+            // What is handed in here is the key of the private chat that is open. It means the connected
+            // peer with exactly that id and is never read as a name: a peer can announce any text, another
+            // peer's id included, and a file must not follow it there. The key of a peer that is not
+            // connected falls through to the chat that is open.
+            val matchedPeer = getMeshPeers(Unit).firstOrNull { it.id == peer }
             if (matchedPeer != null) {
                 return Channel.MeshDM(matchedPeer.id, matchedPeer.displayName)
             }

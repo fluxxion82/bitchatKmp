@@ -17,6 +17,8 @@ import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
 import kotlin.time.Clock
 import com.bitchat.domain.chat.model.BitchatFilePacket
+import com.bitchat.domain.user.UNKNOWN_PEER_NICKNAME
+import com.bitchat.domain.user.sanitizedMeshNickname
 import com.bitchat.noise.model.NoisePayload
 import com.bitchat.noise.model.NoisePayloadType
 import com.bitchat.noise.model.PrivateMessagePacket
@@ -66,19 +68,20 @@ class MessageHandler(
             return
         }
 
-        println("🔍 ANNOUNCE: Nickname: '${announcement.nickname}', Has NoiseKey: ${announcement.noisePublicKey != null}, Has SigningKey: ${announcement.signingPublicKey != null}")
+        val nickname = sanitizedMeshNickname(announcement.nickname) ?: UNKNOWN_PEER_NICKNAME
+        println("🔍 ANNOUNCE: Nickname: '$nickname', Has NoiseKey: ${announcement.noisePublicKey != null}, Has SigningKey: ${announcement.signingPublicKey != null}")
 
         peerManager.addOrUpdatePeer(
             peerID = peerID,
-            nickname = announcement.nickname,
+            nickname = nickname,
             noisePublicKey = announcement.noisePublicKey,
             signingPublicKey = announcement.signingPublicKey,
             isConnected = true,
             isDirectConnection = true
         )
 
-        println("✅ ANNOUNCE: Peer $peerID added/updated as '${announcement.nickname}'")
-        delegate?.onPeerAnnounced(peerID, announcement.nickname)
+        println("✅ ANNOUNCE: Peer $peerID added/updated as '$nickname'")
+        delegate?.onPeerAnnounced(peerID, nickname)
     }
 
     private fun handleMessage(packet: BitchatPacket, peerID: String) {

@@ -18,6 +18,7 @@
     <string name="show_commands">Show commands</string>
     <string name="back">Back</string>
     <string name="people">People</string>
+    <string name="now_announces">now: %1$s</string>
     <string name="channels">Channels</string>
     <string name="online_users">Online Users</string>
     <string name="no_one_connected">No one connected</string>

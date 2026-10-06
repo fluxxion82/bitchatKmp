@@ -6,9 +6,12 @@ import com.bitchat.bluetooth.facade.NoiseEncryptionFacade
 import com.bitchat.bluetooth.manager.PeerManager
 import com.bitchat.bluetooth.manager.SecurityManager
 import com.bitchat.bluetooth.protocol.BitchatPacket
+import com.bitchat.bluetooth.protocol.IdentityAnnouncement
 import com.bitchat.bluetooth.protocol.MessageType
 import com.bitchat.bluetooth.protocol.SpecialRecipients
 import com.bitchat.domain.chat.model.BitchatFilePacket
+import com.bitchat.domain.user.UNKNOWN_PEER_NICKNAME
+import com.bitchat.domain.user.sanitizedMeshNickname
 import com.bitchat.noise.model.NoisePayload
 import com.bitchat.noise.model.NoisePayloadType
 import com.bitchat.noise.model.PrivateMessagePacket
@@ -21,6 +24,67 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class MessageHandlerPrivateIngressTest {
+
+    @Test
+    fun announceNicknamesReachThePeerManagerSanitised() = runTest {
+        val fixture = Fixture()
+        val raw = "alice\u202E\n" + "x".repeat(200)
+        try {
+            fixture.handler.handlePacket(
+                packet(
+                    MessageType.ANNOUNCE,
+                    fixture,
+                    requireNotNull(IdentityAnnouncement(raw, ByteArray(32), ByteArray(32)).encode()),
+                ),
+                fixture.sender.peerID,
+            )
+
+            assertEquals(sanitizedMeshNickname(raw), fixture.peerManager.getPeer(fixture.sender.peerID)?.nickname)
+            assertEquals(sanitizedMeshNickname(raw), fixture.delegate.announcements.single().second)
+        } finally {
+            fixture.securityManager.shutdown()
+        }
+    }
+
+    @Test
+    fun announceNicknamesReachThePeerManagerWithoutANumberSign() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.handler.handlePacket(
+                packet(
+                    MessageType.ANNOUNCE,
+                    fixture,
+                    requireNotNull(IdentityAnnouncement("alice#1a2b", ByteArray(32), ByteArray(32)).encode()),
+                ),
+                fixture.sender.peerID,
+            )
+
+            assertEquals("alice1a2b", fixture.peerManager.getPeer(fixture.sender.peerID)?.nickname)
+            assertEquals("alice1a2b", fixture.delegate.announcements.single().second)
+        } finally {
+            fixture.securityManager.shutdown()
+        }
+    }
+
+    @Test
+    fun announceNicknamesThatSanitiseToNothingReachThePeerManagerAsUnknown() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.handler.handlePacket(
+                packet(
+                    MessageType.ANNOUNCE,
+                    fixture,
+                    requireNotNull(IdentityAnnouncement("\u202E\n", ByteArray(32), ByteArray(32)).encode()),
+                ),
+                fixture.sender.peerID,
+            )
+
+            assertEquals(UNKNOWN_PEER_NICKNAME, fixture.peerManager.getPeer(fixture.sender.peerID)?.nickname)
+            assertEquals(UNKNOWN_PEER_NICKNAME, fixture.delegate.announcements.single().second)
+        } finally {
+            fixture.securityManager.shutdown()
+        }
+    }
 
     @Test
     fun addressedPlaintextPacketsDoNotReachAnyPrivateIngressCallback() = runTest {
@@ -535,7 +599,8 @@ class MessageHandlerPrivateIngressTest {
         val sender = Party("1".repeat(64))
         val receiver = Party("2".repeat(64))
         val securityManager = SecurityManager(receiver.noise, receiver.crypto, receiver.peerID)
-        val handler = MessageHandler(receiver.peerID, securityManager, PeerManager(), receiver.crypto)
+        val peerManager = PeerManager()
+        val handler = MessageHandler(receiver.peerID, securityManager, peerManager, receiver.crypto)
         val delegate = RecordingDelegate()
 
         init {
@@ -600,6 +665,7 @@ class MessageHandlerPrivateIngressTest {
     }
 
     private class RecordingDelegate : MessageHandlerDelegate {
+        val announcements = mutableListOf<Pair<String, String>>()
         val publicMessages = mutableListOf<Pair<String, String>>()
         val authenticatedMessages = mutableListOf<AuthenticatedMessage>()
         val authenticatedFiles = mutableListOf<Pair<String, BitchatFilePacket>>()
@@ -614,7 +680,9 @@ class MessageHandlerPrivateIngressTest {
         var onSessionUnusable: ((String) -> Unit)? = null
         var onSessionNotShared: ((String) -> Unit)? = null
 
-        override fun onPeerAnnounced(peerID: String, nickname: String) = Unit
+        override fun onPeerAnnounced(peerID: String, nickname: String) {
+            announcements += peerID to nickname
+        }
 
         override fun onMessageReceived(peerID: String, message: String) {
             publicMessages += peerID to message

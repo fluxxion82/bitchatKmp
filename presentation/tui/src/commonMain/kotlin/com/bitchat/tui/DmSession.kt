@@ -238,7 +238,11 @@ class DmSession(
             (current is DmPhase.Open && current.generation == null && current.key != peer)
         if (!adoptable) return
         val who = describe(peer)
-        val target = commandTargets.lastOrNull { addressedTo(who.name, it.nickname) }
+        // `/msg bob` finds a peer by what it announces now, and its DM may be shown under the name its
+        // chat was opened under: either is who the command meant.
+        val target = commandTargets.lastOrNull { command ->
+            addressedTo(who.name, command.nickname) || who.claims?.let { addressedTo(it, command.nickname) } == true
+        }
         when {
             target != null -> {
                 commandTargets.remove(target)

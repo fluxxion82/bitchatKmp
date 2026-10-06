@@ -27,6 +27,109 @@ import kotlin.time.Instant
 class ObserveMeshChannelPeopleTest {
     private val seen = Instant.fromEpochSeconds(0)
 
+    @Test fun aConnectedPeerKeepsItsFixedChatNameAndRecordsANewClaim() = runTest {
+        val fixture = Fixture(
+            meshPeople = listOf(person("1a2b", "bob")),
+            chats = linkedMapOf("1a2b" to listOf(message("1a2b", "alice#1a2b"))),
+        )
+
+        fixture.observe().test {
+            val person = awaitItem().single()
+            assertEquals("alice#1a2b", person.displayName)
+            assertEquals(true, person.nameIsFixed)
+            assertEquals("bob", person.claimedName)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun aConnectedPeerDoesNotRecordTheClaimThatOpenedItsChat() = runTest {
+        val fixture = Fixture(
+            meshPeople = listOf(person("1a2b", "alice")),
+            chats = linkedMapOf("1a2b" to listOf(message("1a2b", "alice#1a2b"))),
+        )
+
+        fixture.observe().test {
+            val person = awaitItem().single()
+            assertEquals(true, person.nameIsFixed)
+            assertEquals(null, person.claimedName)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun aConnectedChatWithoutANameAndAConnectedPeerWithoutAChatStayLive() = runTest {
+        val fixture = Fixture(
+            meshPeople = listOf(person("chat", "chat live"), person("plain", "plain live")),
+            chats = linkedMapOf("chat" to emptyList()),
+        )
+
+        fixture.observe().test {
+            val people = awaitItem().associateBy { it.id }
+            assertEquals("chat live", people.getValue("chat").displayName)
+            assertEquals(false, people.getValue("chat").nameIsFixed)
+            assertEquals("plain live", people.getValue("plain").displayName)
+            assertEquals(false, people.getValue("plain").nameIsFixed)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun aPeerAnnouncingExactlyItsChatsNameIsNotRecordedAsClaimingAnother() = runTest {
+        val fixture = Fixture(
+            meshPeople = listOf(person("1a2b", "alice#1a2b")),
+            chats = linkedMapOf("1a2b" to listOf(message("1a2b", "alice#1a2b"))),
+        )
+
+        fixture.observe().test {
+            val person = awaitItem().single()
+            assertEquals(true, person.nameIsFixed)
+            assertEquals(null, person.claimedName)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun aPeerThatAnnouncesNoNameIsNotRecordedAsClaimingThePlaceholder() = runTest {
+        val id = "1a2b3c4d5e6f7890"
+        val fixture = Fixture(
+            meshPeople = listOf(person(id, "Unknown")),
+            chats = linkedMapOf(id to listOf(message(id, "alice#1a2b"))),
+        )
+
+        fixture.observe().test {
+            val person = awaitItem().single()
+            assertEquals("alice#1a2b", person.displayName)
+            assertEquals(null, person.claimedName)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun anOfflineMeshChatIsFixedOnlyWhenItHasAName() = runTest {
+        val fixture = Fixture(
+            chats = linkedMapOf("named" to listOf(message("named", "alice#name")), "bare" to emptyList()),
+        )
+
+        fixture.observe().test {
+            val people = awaitItem().associateBy { it.id }
+            assertEquals(true, people.getValue("named").nameIsFixed)
+            assertEquals(false, people.getValue("bare").nameIsFixed)
+            assertEquals("bare", people.getValue("bare").displayName)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun aNostrChatNameDoesNotBecomeFixed() = runTest {
+        val key = "nostr_1234"
+        val fixture = Fixture(
+            meshPeople = listOf(person(key, "live")),
+            chats = linkedMapOf(key to listOf(message(key, "nostr sender"))),
+        )
+
+        fixture.observe().test {
+            val person = awaitItem().single()
+            assertEquals("live", person.displayName)
+            assertEquals(false, person.nameIsFixed)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
     @Test fun mergesMeshAndBitchatLoRaPeopleOnce() = runTest {
         val fixture = Fixture(
             meshPeople = listOf(person("X", "mesh name")),
@@ -55,7 +158,15 @@ class ObserveMeshChannelPeopleTest {
             // Connected: one entry, the mesh peer's, also heard over the radio.
             assertEquals(
                 listOf(
-                    MeshChannelPerson("X", "mesh name", setOf(MeshChannelTransport.MESH, MeshChannelTransport.LORA), true, null),
+                    MeshChannelPerson(
+                        "X",
+                        "radio name",
+                        setOf(MeshChannelTransport.MESH, MeshChannelTransport.LORA),
+                        true,
+                        null,
+                        nameIsFixed = true,
+                        claimedName = "mesh name",
+                    ),
                 ),
                 awaitItem(),
             )
@@ -64,7 +175,7 @@ class ObserveMeshChannelPeopleTest {
             // Disconnected: the chat and the radio peer are two entries again.
             assertEquals(
                 listOf(
-                    MeshChannelPerson("X", "radio name", emptySet(), true, null),
+                    MeshChannelPerson("X", "radio name", emptySet(), true, null, nameIsFixed = true),
                     MeshChannelPerson("lora-x", "radio name", setOf(MeshChannelTransport.LORA), false, seen),
                 ),
                 awaitItem(),
@@ -175,7 +286,7 @@ class ObserveMeshChannelPeopleTest {
             fixture.events.update(ChatEvent.MeshPeersUpdated)
             assertEquals(
                 listOf(
-                    MeshChannelPerson("X", "spoofed name", emptySet(), true, null),
+                    MeshChannelPerson("X", "spoofed name", emptySet(), true, null, nameIsFixed = true),
                     MeshChannelPerson("lora-X", "radio name", setOf(MeshChannelTransport.LORA), false, seen),
                 ),
                 awaitItem(),

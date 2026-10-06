@@ -78,7 +78,12 @@ fun dmPeerFor(header: HeaderState, key: String): PeerEntry {
         channel is Channel.NostrDM && channel.peerID == key ->
             PeerEntry(channel.fullPubkey, channel.displayName ?: key, PeerTransport.Nostr)
         channel is Channel.MeshDM && channel.peerID == key ->
-            PeerEntry(key, channel.displayName ?: person?.displayName ?: header.peerNicknames[key] ?: key.take(12), route)
+            PeerEntry(
+                key,
+                person?.takeIf { it.nameIsFixed }?.displayName ?: channel.displayName ?: person?.displayName ?: header.peerNicknames[key] ?: key.take(12),
+                route,
+                claims = person?.claimedName,
+            )
         else -> PeerEntry(key, person?.displayName ?: header.peerNicknames[key] ?: key.take(12), if (key.startsWith("nostr_")) PeerTransport.Nostr else route)
     }
 }

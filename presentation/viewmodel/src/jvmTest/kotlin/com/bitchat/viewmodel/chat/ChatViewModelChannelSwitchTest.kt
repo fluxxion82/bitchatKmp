@@ -78,11 +78,14 @@ class ChatViewModelChannelSwitchTest : BaseViewModelTest() {
         Channel.Mesh to listOf(message("mesh 1"), message("mesh 2")),
     )
 
+    /** The use case every line and file is sent through. */
+    private val sendMessage = mockk<com.bitchat.domain.chat.SendMessage>(relaxed = true)
+
     private fun buildViewModel() = ChatViewModel(
         observeChannelMessages = mockk<ObserveChannelMessages> {
             coEvery { this@mockk.invoke(any()) } answers { flowOf(lists[firstArg<Channel>()].orEmpty()) }
         },
-        sendMessage = mockk(relaxed = true),
+        sendMessage = sendMessage,
         processChatCommand = com.bitchat.domain.chat.ProcessChatCommand(),
         getUserState = mockk<GetUserState> {
             coEvery { this@mockk.invoke(Unit) } coAnswers {
@@ -105,6 +108,12 @@ class ChatViewModelChannelSwitchTest : BaseViewModelTest() {
         getMeshPeers = mockk<com.bitchat.domain.chat.GetMeshPeers> {
             coEvery { this@mockk.invoke(Unit) } coAnswers { slowPeers.await() }
         },
+        findMeshPeerByName = com.bitchat.domain.chat.FindMeshPeerByName(
+            mockk {
+                coEvery { getMeshPeers() } coAnswers { slowPeers.await() }
+                coEvery { getPrivateChatNames() } returns emptyMap()
+            },
+        ),
         getChannelKeyCommitment = mockk(relaxed = true),
         getAvailableNamedChannels = mockk(relaxed = true),
         getChannelMembers = mockk(relaxed = true),
@@ -210,6 +219,70 @@ class ChatViewModelChannelSwitchTest : BaseViewModelTest() {
 
         assertEquals(listOf("hello #test"), viewModel.state.value.messages.map { it.content }, "#test is untouched")
         assertEquals(listOf("no peers connected"), notices.of(Channel.Mesh).map { it.message.content })
+    }
+
+    @Test
+    fun `msg finds a mesh peer by the name its private chat is listed under`() = runTest(dispatcher) {
+        // Once a private chat exists the peer is listed, and completed, as its name with the start of its
+        // id; a peer is found by that as well as by the bare name it announces, and by no other suffix.
+        active = Channel.Mesh
+        val alice = com.bitchat.domain.location.model.GeoPerson("1a2b3c4d5e6f7890", "alice", Instant.fromEpochSeconds(1))
+        slowPeers.complete(listOf(alice))
+        val viewModel = buildViewModel()
+        instantExecutorRule.scheduler.advanceUntilIdle()
+
+        for (typed in listOf("/msg alice#1a2b", "/msg ALICE#1A2B", "/msg alice")) {
+            switched.clear()
+            viewModel.updateMessageInput(typed)
+            viewModel.sendMessage()
+            instantExecutorRule.scheduler.advanceUntilIdle()
+            assertEquals(listOf<UserStateAction>(UserStateAction.Chat(Channel.MeshDM(alice.id, "alice"))), switched.toList(), typed)
+        }
+
+        switched.clear()
+        viewModel.updateMessageInput("/msg alice#ffff")
+        viewModel.sendMessage()
+        instantExecutorRule.scheduler.advanceUntilIdle()
+        assertEquals(emptyList(), switched.toList())
+        assertEquals("user alice#ffff not found", notices.of(Channel.Mesh).last().message.content)
+    }
+
+    @Test
+    fun `a file for a peer id goes to the peer with that id, whatever another peer calls itself`() = runTest(dispatcher) {
+        // The first peer in the list announces the other one's id as its name.
+        active = Channel.Mesh
+        val bob = com.bitchat.domain.location.model.GeoPerson("abcdef0123456789", "bob", Instant.fromEpochSeconds(1))
+        val impostor = com.bitchat.domain.location.model.GeoPerson("1111111111111111", "ABCDEF0123456789", Instant.fromEpochSeconds(1))
+        slowPeers.complete(listOf(impostor, bob))
+        val viewModel = buildViewModel()
+        instantExecutorRule.scheduler.advanceUntilIdle()
+
+        viewModel.sendVoiceNote(peer = bob.id, channelName = null, filePath = "note.m4a")
+        instantExecutorRule.scheduler.advanceUntilIdle()
+
+        io.mockk.coVerify {
+            sendMessage(match<com.bitchat.domain.chat.SendMessage.Params> { it.channel == Channel.MeshDM(bob.id, "bob") })
+        }
+    }
+
+    @Test
+    fun `a file for a peer that is not connected stays in its chat, whatever a connected peer calls itself`() = runTest(dispatcher) {
+        // The open chat is bob's; bob is out of range, and connected peers announce bob's id as their name.
+        val bobId = "abcdef0123456789"
+        active = Channel.MeshDM(bobId, "bob")
+        // One impostor announces bob's id letter for letter, another in capitals.
+        val impostor = com.bitchat.domain.location.model.GeoPerson("1111111111111111", bobId, Instant.fromEpochSeconds(1))
+        val shouting = com.bitchat.domain.location.model.GeoPerson("2222222222222222", "ABCDEF0123456789", Instant.fromEpochSeconds(1))
+        slowPeers.complete(listOf(impostor, shouting))
+        val viewModel = buildViewModel()
+        instantExecutorRule.scheduler.advanceUntilIdle()
+
+        viewModel.sendVoiceNote(peer = bobId, channelName = null, filePath = "note.m4a")
+        instantExecutorRule.scheduler.advanceUntilIdle()
+
+        io.mockk.coVerify {
+            sendMessage(match<com.bitchat.domain.chat.SendMessage.Params> { it.channel == Channel.MeshDM(bobId, "bob") })
+        }
     }
 
     @Test

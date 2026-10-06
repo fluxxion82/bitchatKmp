@@ -41,12 +41,15 @@ enum class PeerTransport(val label: String) {
 
 /**
  * One row of [PeersScreen]. [id] is what a DM is opened with (a mesh peer ID, a Nostr key, a LoRa
- * node ID); [name] comes from the peer and is sanitized when drawn.
+ * node ID); [name] comes from the peer and is sanitized when drawn. [claims] is what the peer
+ * announces now when its row shows the fixed name of its private chat; it comes from the peer and
+ * is sanitized when drawn, like [name].
  */
 data class PeerEntry(
     val id: String,
     val name: String,
     val transport: PeerTransport,
+    val claims: String? = null,
     val favorite: Boolean = false,
     val unread: Boolean = false,
 )
@@ -79,6 +82,7 @@ fun meshChannelPeerEntries(
         // known only from the radio is not in that directory and has the name it broadcasts.
         name = peerNicknames[person.id]?.takeUnless { person.isLoRaOnly } ?: person.displayName,
         transport = person.transport(),
+        claims = person.claimedName,
         favorite = person.id in favoritePeers,
         unread = person.id in unreadPeers,
     )
@@ -234,11 +238,25 @@ private class PeerSelection {
  * A peer row, at most [width] cells: marks and name on the left, the transport tag on the right.
  * The name is sanitized (and made console-safe) before it is measured; a long name is ellipsized,
  * and when even six cells of it no longer fit, the tag goes.
+ *
+ * What the peer announces now ([PeerEntry.claims]) follows the name as `(now: ...)`, in the room the
+ * row has left once the marks, the name and the tag are in, and not at all when that is too little
+ * to say anything. It is the peer's own text: it never shortens the name the chat is fixed to.
  */
 internal fun peerRow(peer: PeerEntry, width: Int, consoleSafe: Boolean): String {
-    val left = " ${if (peer.unread) "!" else " "}${if (peer.favorite) "*" else " "} ${displayText(peer.name, consoleSafe)}"
-    return twoColumnRow(left, "${peer.transport.label} ", width)
+    val right = "${peer.transport.label} "
+    val fixed = " ${if (peer.unread) "!" else " "}${if (peer.favorite) "*" else " "} ${displayText(peer.name, consoleSafe)}"
+    val spare = width - right.cellWidth() - 1 - fixed.cellWidth()
+    // With that much room to spare the row is cut, if at all, inside the claim: it is cut from its end.
+    val claim = peer.claims
+        ?.takeIf { spare >= MIN_CLAIM_CELLS }
+        ?.let { " (now: ${displayText(it, consoleSafe)})" }
+        .orEmpty()
+    return twoColumnRow(fixed + claim, right, width)
 }
+
+/** The least room worth giving to `(now: ...)`: the words, one character of the name and an ellipsis. */
+private const val MIN_CLAIM_CELLS = 12
 
 /**
  * A private chat: [ChatScreen] titled "DM with [peerName]". `Esc` (handled by the shell) goes back

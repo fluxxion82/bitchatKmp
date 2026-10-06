@@ -256,6 +256,8 @@ fun BitchatGraph(mainViewModel: MainViewModel) {
                         currentChannel = headerState.currentChannel,
                         selectedPrivatePeer = headerState.selectedPrivatePeer,
                         peerNicknames = headerState.peerNicknames,
+                        claimedNames = headerState.claimedNames,
+                        fixedNamePeers = headerState.fixedNamePeers,
                         peerDirect = headerState.peerDirect,
                         peerSessionStates = headerState.peerSessionStates,
                         favoritePeers = headerState.favoritePeers,

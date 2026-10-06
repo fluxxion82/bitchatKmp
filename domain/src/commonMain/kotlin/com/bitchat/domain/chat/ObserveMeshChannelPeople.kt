@@ -8,6 +8,8 @@ import com.bitchat.domain.chat.model.MeshChannelTransport
 import com.bitchat.domain.chat.model.loRaOnlyPersonId
 import com.bitchat.domain.chat.repository.ChatRepository
 import com.bitchat.domain.location.model.GeoPerson
+import com.bitchat.domain.user.UNKNOWN_PEER_NICKNAME
+import com.bitchat.domain.user.meshChatName
 import com.bitchat.domain.user.repository.BlockListRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -32,6 +34,12 @@ import kotlinx.coroutines.flow.withIndex
  *   are whatever their senders chose: their being equal proves nothing. The chat and the radio peer
  *   are two entries, a duplicate rather than a device shown under a name someone else supplied.
  * - A peer of a LoRa stack whose ids are not mesh ids is always its own entry.
+ *
+ * A mesh private chat has a name of its own, given when the chat was opened and never changed by what
+ * is announced afterwards (an announcement is not authenticated; the chat is). A connected peer that
+ * has such a chat is listed under the chat's name, with what it announces now beside it when that
+ * differs ([MeshChannelPerson.claimedName]). A connected peer without one is listed under what it
+ * announces now.
  *
  * Mesh peers and private chats keep the keys the repository gives them and are compared exactly. A
  * blocked mesh user is in none of the three sources: the repository leaves it out of the mesh peers
@@ -121,13 +129,32 @@ class ObserveMeshChannelPeople(
 
         for ((key, name) in chatNames) {
             val connected = listed[key]
-            listed[key] = connected?.copy(hasPrivateChat = true) ?: MeshChannelPerson(
-                id = key,
-                displayName = name ?: key.take(12),
-                transports = emptySet(),
-                hasPrivateChat = true,
-                lastSeen = null,
-            )
+            // Only a mesh chat has a name of its own. A Nostr chat is still called after the sender of its
+            // newest message, and the header lets what it already knows overrule that.
+            val fixedName = name.takeIf { !key.startsWith("nostr_") }
+            listed[key] = when {
+                connected == null -> MeshChannelPerson(
+                    id = key,
+                    displayName = name ?: key.take(12),
+                    transports = emptySet(),
+                    hasPrivateChat = true,
+                    lastSeen = null,
+                    nameIsFixed = fixedName != null,
+                )
+
+                fixedName == null -> connected.copy(hasPrivateChat = true)
+
+                else -> connected.copy(
+                    displayName = fixedName,
+                    hasPrivateChat = true,
+                    nameIsFixed = true,
+                    // The chat's name is the name it was opened under with the id's suffix, and a peer
+                    // that announces no name is listed under the placeholder: neither is another name.
+                    claimedName = connected.displayName.takeUnless { announced ->
+                        announced == fixedName || meshChatName(announced, key) == fixedName || announced == UNKNOWN_PEER_NICKNAME
+                    },
+                )
+            }
         }
 
         val takenIds = HashSet(listed.keys)

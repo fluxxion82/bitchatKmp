@@ -49,6 +49,7 @@ import bitchatkmp.presentation.design.generated.resources.cd_routed
 import bitchatkmp.presentation.design.generated.resources.cd_unread_message
 import bitchatkmp.presentation.design.generated.resources.channels
 import bitchatkmp.presentation.design.generated.resources.no_one_connected
+import bitchatkmp.presentation.design.generated.resources.now_announces
 import bitchatkmp.presentation.design.generated.resources.offline_favorites
 import bitchatkmp.presentation.design.generated.resources.people
 import bitchatkmp.presentation.design.generated.resources.your_network
@@ -82,6 +83,8 @@ fun SidebarOverlay(
     selectedPrivatePeer: String?,
 
     peerNicknames: Map<String, String>,
+    claimedNames: Map<String, String> = emptyMap(),
+    fixedNamePeers: Set<String> = emptySet(),
     peerDirect: Map<String, Boolean>,
     peerSessionStates: Map<String, String> = emptyMap(),
     favoritePeers: Set<String>,
@@ -208,6 +211,8 @@ fun SidebarOverlay(
                                     connectedPeers = visibleConnectedPeers,
                                     loraPeers = loraPeers,
                                     peerNicknames = peerNicknames,
+                                    claimedNames = claimedNames,
+                                    fixedNamePeers = fixedNamePeers,
                                     peerDirect = peerDirect,
                                     nickname = nickname,
                                     selectedPrivatePeer = selectedPrivatePeer,
@@ -437,6 +442,8 @@ fun PeopleSection(
     connectedPeers: List<String>,
     loraPeers: List<GeoPerson> = emptyList(),
     peerNicknames: Map<String, String>,
+    claimedNames: Map<String, String> = emptyMap(),
+    fixedNamePeers: Set<String> = emptySet(),
     peerDirect: Map<String, Boolean>,
     nickname: String,
     selectedPrivatePeer: String?,
@@ -503,13 +510,17 @@ fun PeopleSection(
 
             val displayName = if (peerID == nickname) "You" else (peerNicknames[peerID] ?: peerID.take(12))
             val (baseName, _) = splitSuffix(displayName)
-            val showHashSuffix = (baseNameCounts[baseName] ?: 0) > 1
+            // A suffix tells two people of one name apart, and is otherwise left out. The name of a private
+            // chat is the exception: the start of the id is part of what the chat is known by, and it is
+            // always shown, so nothing its peer announces later changes the room the name has.
+            val showHashSuffix = (baseNameCounts[baseName] ?: 0) > 1 || peerID in fixedNamePeers
 
             val isDirect = peerDirect[peerID] ?: false
 
             PeerItem(
                 peerID = peerID,
                 displayName = displayName,
+                claimedName = claimedNames[peerID],
                 isDirect = isDirect,
                 isSelected = peerID == selectedPrivatePeer,
                 isFavorite = isFavorite,
@@ -535,6 +546,7 @@ internal fun peopleSectionIsEmpty(connectedPeers: List<String>, loraPeers: List<
 private fun PeerItem(
     peerID: String,
     displayName: String,
+    claimedName: String? = null,
     isDirect: Boolean,
     isSelected: Boolean,
     isFavorite: Boolean,
@@ -612,30 +624,45 @@ private fun PeerItem(
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = baseName,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = BASE_FONT_SIZE.sp,
-                    fontWeight = if (isMe) FontWeight.Bold else FontWeight.Normal
-                ),
-                color = baseColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            if (suffix.isNotEmpty()) {
+        // The name and its suffix keep their line to themselves. What the peer announces now is that
+        // peer's own text: on a line of its own it cannot take room from the name the chat is fixed to.
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = suffix,
+                    text = baseName,
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontFamily = FontFamily.Monospace,
-                        fontSize = BASE_FONT_SIZE.sp
+                        fontSize = BASE_FONT_SIZE.sp,
+                        fontWeight = if (isMe) FontWeight.Bold else FontWeight.Normal
                     ),
-                    color = baseColor.copy(alpha = 0.6f)
+                    color = baseColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+
+                if (suffix.isNotEmpty()) {
+                    Text(
+                        text = suffix,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = BASE_FONT_SIZE.sp
+                        ),
+                        color = baseColor.copy(alpha = 0.6f)
+                    )
+                }
+            }
+
+            claimedName?.let { claim ->
+                Text(
+                    text = stringResource(Res.string.now_announces, truncateNickname(claim)),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = (BASE_FONT_SIZE - 2).sp,
+                    ),
+                    color = colorScheme.onSurface.copy(alpha = 0.6f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

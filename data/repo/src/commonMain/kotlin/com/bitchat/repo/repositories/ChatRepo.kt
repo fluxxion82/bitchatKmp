@@ -40,6 +40,10 @@ import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.domain.user.model.AppUser
 import com.bitchat.domain.user.model.UserEvent
+import com.bitchat.domain.user.UNKNOWN_PEER_NICKNAME
+import com.bitchat.domain.user.meshChatName
+import com.bitchat.domain.user.sanitizedMeshNickname
+import com.bitchat.domain.user.sanitizedNickname
 import com.bitchat.local.prefs.BlockListPreferences
 import com.bitchat.local.prefs.ChannelPreferences
 import com.bitchat.local.prefs.UserPreferences
@@ -67,7 +71,6 @@ import com.bitchat.nostr.model.NostrKind
 import com.bitchat.nostr.participant.NostrParticipantTracker
 import com.bitchat.nostr.util.HandledGiftWraps
 import com.bitchat.nostr.util.hexStringToByteArray
-import com.bitchat.nostr.util.sanitizedNickname
 import com.bitchat.nostr.util.toHexString
 import com.bitchat.lora.LoRaPeer
 import com.bitchat.local.prefs.FavoritesUpdate
@@ -80,6 +83,8 @@ import kotlinx.atomicfu.locks.synchronized
 import com.bitchat.repo.utils.BoundedIdSet
 import com.bitchat.repo.utils.FavoriteNotification
 import com.bitchat.repo.utils.LearnedNames
+import com.bitchat.repo.utils.announcedMeshName
+import com.bitchat.repo.utils.meshNameHandedBack
 import com.bitchat.repo.utils.MessageLimits
 import com.bitchat.repo.utils.MAX_NOT_FAVOURITED_RELATIONSHIPS
 import com.bitchat.repo.utils.ReceivedFileBudget
@@ -166,7 +171,8 @@ class ChatRepo(
 
     /**
      * Guards the private chats and what is kept beside them: [privateChats], [writtenPrivateChats],
-     * [unreadPrivatePeers], [unreadPrivateMessageIds], [latestUnreadPrivatePeer], [knownPrivatePeers].
+     * [unreadPrivatePeers], [unreadPrivateMessageIds], [latestUnreadPrivatePeer], [knownPrivatePeers] and
+     * [meshChatNames].
      * Handlers for several relays and for the mesh add private messages at the same time, and keeping
      * the strangers' chats within their shared budget reads every chat, and removes what was kept about
      * an emptied one, from whichever of them is adding. Held only around plain reads and writes:
@@ -177,6 +183,11 @@ class ChatRepo(
     // Each chat's messages in the order they ARRIVED; getPrivateChats sorts a copy for display. The
     // oldest arrival is what a full chat drops, whatever timestamp its sender wrote on it.
     private val privateChats = mutableMapOf<String, MutableList<BitchatMessage>>()
+    // What each mesh private chat is called: the name it was opened under, given once and then kept for as
+    // long as the chat is. Nothing on the mesh authenticates a nickname, so a later announcement, by the
+    // peer or by anyone using its id, must not rename a conversation that a Noise session authenticates.
+    // Its keys are always a subset of [privateChats]' keys.
+    private val meshChatNames = mutableMapOf<String, String>()
     // The chats the user has sent a message in during this run. Deliberately not inferred from the
     // messages: the user's own can age out of a chat, and the chat stays theirs.
     private val writtenPrivateChats = mutableSetOf<String>()
@@ -211,6 +222,25 @@ class ChatRepo(
         val withHash = if (name.startsWith("#")) name else "#$name"
         return withHash.lowercase()
     }
+
+    private fun isMeshChatKey(peerID: String): Boolean = !peerID.startsWith("nostr_")
+
+    /**
+     * Gives the mesh private chat with [peerID] the name [claim] if it has none yet, and says whether it
+     * did. A name that is there is never replaced, and a conversation that is not a mesh chat gets none
+     * (callers hand in whatever they know without asking which kind it is). Called with
+     * [privateChatsLock] held, for a chat that exists; whoever calls it publishes
+     * [ChatEvent.PrivateChatsUpdated] once the lock is released when it answers true, because the people
+     * list reads the chats' names again only on that event.
+     */
+    private fun nameMeshChatIfUnnamed(peerID: String, claim: String?): Boolean {
+        if (!isMeshChatKey(peerID) || claim == null || peerID in meshChatNames) return false
+        meshChatNames[peerID] = meshChatName(claim, peerID)
+        return true
+    }
+
+    /** What the mesh peer announces as its name right now. Unauthenticated: anyone in range can announce for any id. */
+    private fun claimedMeshName(peerID: String): String? = announcedMeshName(mesh.getPeerInfo(peerID)?.nickname)
 
     init {
         mesh.delegate = this
@@ -348,7 +378,8 @@ class ChatRepo(
             } else {
                 LoRaPerson(
                     id = peer.deviceId,
-                    displayName = peer.nickname,
+                    // A heartbeat's name is its sender's choice like a mesh nickname, and is shown in the same list.
+                    displayName = sanitizedMeshNickname(peer.nickname) ?: peer.deviceId.take(12),
                     lastSeen = peer.lastSeen,
                     meshDeviceId = meshDeviceId,
                 )
@@ -361,10 +392,9 @@ class ChatRepo(
 
     override suspend fun getPrivateChatNames(): Map<String, String?> = withContext(coroutinesContextFacade.io) {
         synchronized(privateChatsLock) {
-            // Lists are in arrival order: the name comes from the other side's newest message by timestamp,
-            // and from the later arrival when two carry the same one.
             privateChats.mapValues { (key, messages) ->
-                messages.asReversed().filter { it.senderPeerID == key }.maxByOrNull { it.timestamp }?.sender
+                if (isMeshChatKey(key)) meshChatNames[key]
+                else messages.asReversed().filter { it.senderPeerID == key }.maxByOrNull { it.timestamp }?.sender
             }
         }
     }
@@ -1201,6 +1231,8 @@ class ChatRepo(
         markUnread: Boolean,
         sendReadReceipt: Boolean,
         route: PrivateRoute? = null,
+        meshNameClaim: String? = null,
+        stampMeshSender: Boolean = false,
     ) {
         if (!messageLimits.accepts(message)) {
             println("ChatRepo: Dropped private message with content length ${message.content.length}")
@@ -1209,9 +1241,16 @@ class ChatRepo(
         val limitedMessage = messageLimits.notLaterThan(message, clock.now())
         var unreadChanged = false
         var readReceiptDue = false
+        var named = false
 
         val added = synchronized(privateChatsLock) {
             val messages = privateChats.getOrPut(peerID) { mutableListOf() }
+            named = nameMeshChatIfUnnamed(peerID, meshNameClaim)
+            val storedMessage = if (stampMeshSender && isMeshChatKey(peerID)) {
+                limitedMessage.copy(sender = meshChatNames[peerID] ?: peerID.take(12))
+            } else {
+                limitedMessage
+            }
             if (route != null) {
                 knownPrivatePeers[peerID] = route.pubkeyHex
                 if (route.sourceGeohash != null) {
@@ -1219,17 +1258,17 @@ class ChatRepo(
                     geohashConversationCache[peerID] = route.sourceGeohash
                 }
             }
-            if (messages.any { it.id == limitedMessage.id }) return@synchronized false
-            messages.add(limitedMessage)
+            if (messages.any { it.id == storedMessage.id }) return@synchronized false
+            messages.add(storedMessage)
 
             val isCurrentlyViewing = selectedPrivatePeer == peerID
             val lastReadTimestamp = lastReadTimestamps[peerID.lowercase()]
-            val messageTimestampMillis = limitedMessage.timestamp.toEpochMilliseconds()
+            val messageTimestampMillis = storedMessage.timestamp.toEpochMilliseconds()
             val wasAlreadyRead = lastReadTimestamp != null && messageTimestampMillis <= lastReadTimestamp
 
             if (markUnread && !isCurrentlyViewing && !wasAlreadyRead) {
                 unreadPrivatePeers.add(peerID)
-                unreadPrivateMessageIds.getOrPut(peerID) { mutableSetOf() }.add(limitedMessage.id)
+                unreadPrivateMessageIds.getOrPut(peerID) { mutableSetOf() }.add(storedMessage.id)
                 latestUnreadPrivatePeer = peerID
                 unreadChanged = true
             } else if (sendReadReceipt || isCurrentlyViewing) {
@@ -1238,11 +1277,15 @@ class ChatRepo(
 
             unreadChanged = removeDroppedPrivateMessages(peerID, messageLimits.trim(messages)) || unreadChanged
             if (peerID !in writtenPrivateChats) {
-                unreadChanged = enforceStrangerMessageBudget(justAdded = limitedMessage) || unreadChanged
+                unreadChanged = enforceStrangerMessageBudget(justAdded = storedMessage) || unreadChanged
             }
             true
         }
-        if (!added) return
+        if (!added) {
+            // The message was there already, but the chat may have got its name just now.
+            if (named) coroutineScopeFacade.nostrScope.launch { chatEventBus.update(ChatEvent.PrivateChatsUpdated) }
+            return
+        }
 
         coroutineScopeFacade.nostrScope.launch {
             if (readReceiptDue) sendReadReceipt(limitedMessage.id, readerPeerID = null, toPeerID = peerID)
@@ -1325,6 +1368,7 @@ class ChatRepo(
             unreadChanged = removeDroppedPrivateMessages(entry.key, listOf(dropped)) || unreadChanged
             if (entry.value.isEmpty() && entry.key != selectedPrivatePeer) {
                 privateChats.remove(entry.key)
+                meshChatNames.remove(entry.key)
                 val wasUnreadPeer = unreadPrivatePeers.remove(entry.key)
                 val hadUnreadIds = unreadPrivateMessageIds.remove(entry.key) != null
                 if (wasUnreadPeer || hadUnreadIds) {
@@ -1493,8 +1537,11 @@ class ChatRepo(
             senderPeerID = mesh.myPeerID,
             deliveryStatus = DeliveryStatus.Sent
         )
+        // A chat opened by the first line sent is called what its sender knew the peer as, when that was
+        // handed in, and otherwise what the peer announces now.
+        val meshNameClaim = meshNameHandedBack(recipientNickname, toPeerID) ?: claimedMeshName(toPeerID)
         synchronized(privateChatsLock) { writtenPrivateChats.add(toPeerID) }
-        addPrivateMessage(toPeerID, localMessage, markUnread = false, sendReadReceipt = false)
+        addPrivateMessage(toPeerID, localMessage, markUnread = false, sendReadReceipt = false, meshNameClaim = meshNameClaim)
 
         val currentChannel = route ?: userPreferences.getUserState()
             ?.let { it as? UserState.Active }
@@ -1571,15 +1618,9 @@ class ChatRepo(
                     val q = outbox.getOrPut(toPeerID) { mutableListOf() }
                     q.add(Triple(content, recipientNickname, messageId))
                     println("📦 Outbox size for $toPeerID: ${q.size}")
-                    // Gate on the handshake actually being in flight, not on this being the first
-                    // queued message. A handshake whose packet was lost used to leave the outbox
-                    // non-empty forever, so every later message took the "already in progress"
-                    // branch against a session that had already been abandoned.
-                    if (mesh.isHandshakeInFlight(toPeerID)) {
-                        println("📦 Handshake already in progress, message queued")
-                    } else {
-                        mesh.initiateNoiseHandshake(toPeerID)
-                    }
+                    // This call is safe while a handshake is in flight (the service sends nothing new then), and
+                    // marks the peer as chosen by the user by taking the in-flight handshake over as theirs.
+                    mesh.initiateNoiseHandshake(toPeerID)
                 }
             }
 
@@ -2000,7 +2041,7 @@ class ChatRepo(
 
             is Channel.MeshDM -> {
                 requireSendablePrivately(content, messageType)
-                initializePrivateDMIfNeeded(channel.peerID)
+                initializePrivateDMIfNeeded(channel.peerID, openedAs = channel.displayName)
                 sendPrivate(
                     content = content,
                     toPeerID = channel.peerID,
@@ -2038,13 +2079,20 @@ class ChatRepo(
         PrivateMessageText.refusal(content)?.let { throw IllegalArgumentException(it) }
     }
 
-    private fun initializePrivateDMIfNeeded(peerID: String) {
-        synchronized(privateChatsLock) {
+    /**
+     * [openedAs] is the name the user opened a mesh chat under (its channel's), when there is one: a chat
+     * the user started is called what the user saw, not what is announced by the time the first line is sent.
+     */
+    private fun initializePrivateDMIfNeeded(peerID: String, openedAs: String? = null) {
+        val meshNameClaim = meshNameHandedBack(openedAs, peerID) ?: claimedMeshName(peerID)
+        val named = synchronized(privateChatsLock) {
             if (!privateChats.containsKey(peerID)) {
                 println("🆕 Initializing new DM: $peerID")
                 privateChats[peerID] = mutableListOf()
             }
+            nameMeshChatIfUnnamed(peerID, meshNameClaim)
         }
+        if (named) coroutineScopeFacade.nostrScope.launch { chatEventBus.update(ChatEvent.PrivateChatsUpdated) }
 
         val person = findPersonByPeerID(peerID)
 
@@ -2291,6 +2339,11 @@ class ChatRepo(
             }
 
             val nickname = packetString.substring(0, colonIndex)
+            // The name is the sender's own choice and nothing checks it. What is SHOWN is cleaned like a
+            // mesh nickname, so it cannot carry the number sign the app writes after the name of a private
+            // chat. What devices are told apart by stays the name as it was sent: two names that only
+            // look the same once cleaned are still two senders.
+            val shownName = sanitizedMeshNickname(nickname) ?: UNKNOWN_PEER_NICKNAME
             val content = packetString.substring(colonIndex + 1)
 
             println("📻 ChatRepo: LoRa message from '$nickname': ${logBody(content)}")
@@ -2323,7 +2376,7 @@ class ChatRepo(
                 (foreignPeers.isEmpty() || meshIdentityPeers.isEmpty())
             val message = BitchatMessage(
                 id = messageID,
-                sender = nickname,
+                sender = shownName,
                 content = content,
                 type = BitchatMessageType.Message,
                 timestamp = now,
@@ -2421,14 +2474,23 @@ class ChatRepo(
                 return@launch
             }
 
+            val meshNameClaim = claimedMeshName(peerID)
+
             val handled = handleFavoriteNotificationIfNeeded(
                 content = message.content,
                 convKey = peerID,
-                senderDisplayName = message.sender
+                senderDisplayName = meshNameClaim ?: peerID.take(12)
             )
             if (handled) return@launch
 
-            addPrivateMessage(peerID, message, markUnread = true, sendReadReceipt = false)
+            addPrivateMessage(
+                peerID,
+                message,
+                markUnread = true,
+                sendReadReceipt = false,
+                meshNameClaim = meshNameClaim,
+                stampMeshSender = true,
+            )
             chatEventBus.update(ChatEvent.MessageReceived)
         }
     }
@@ -2438,7 +2500,7 @@ class ChatRepo(
 
         meshChannelMessagesMutex.withLock {
             val updatedMeshMessages = meshChannelMessages.map { message ->
-                if (message.senderPeerID == peerID && message.sender == "Unknown") {
+                if (message.senderPeerID == peerID && message.sender == UNKNOWN_PEER_NICKNAME) {
                     updatedCount++
                     message.copy(sender = newNickname)
                 } else {
@@ -2449,26 +2511,9 @@ class ChatRepo(
             meshChannelMessages.addAll(updatedMeshMessages)
         }
 
-        synchronized(privateChatsLock) {
-            privateChats[peerID]?.let { chatMessages ->
-                val updatedPrivateMessages = chatMessages.map { message ->
-                    if (message.sender == "Unknown") {
-                        updatedCount++
-                        message.copy(sender = newNickname)
-                    } else {
-                        message
-                    }
-                }
-                chatMessages.clear()
-                chatMessages.addAll(updatedPrivateMessages)
-            }
-        }
-
         if (updatedCount > 0) {
             println("🔄 Updated $updatedCount messages from 'Unknown' to '$newNickname' for peer $peerID")
-            // Trigger UI refresh
             chatEventBus.update(ChatEvent.MeshMessagesUpdated)
-            chatEventBus.update(ChatEvent.PrivateChatsUpdated)
         }
     }
 
@@ -2514,23 +2559,36 @@ class ChatRepo(
 
             // Retroactive nickname updates for all peers (improvement over legacy app)
             peers.forEach { peerID ->
-                val peerInfo = mesh.getPeerInfo(peerID)
-                if (peerInfo?.nickname != null && peerInfo.nickname != "Unknown") {
-                    updateMessagesFromUnknownPeer(peerID, peerInfo.nickname)
-                }
+                claimedMeshName(peerID)?.let { updateMessagesFromUnknownPeer(peerID, it) }
             }
 
-            // Convert to GeoPerson for consistency with LocationRepository
+            // A private chat that was opened before its peer announced a name gets the first one announced.
+            val meshNameClaims = peers.associateWith(::claimedMeshName)
+            val namedChat = synchronized(privateChatsLock) {
+                var named = false
+                meshNameClaims.forEach { (peerID, claim) ->
+                    if (peerID in privateChats && nameMeshChatIfUnnamed(peerID, claim)) named = true
+                }
+                named
+            }
+
+            // Each peer is listed under what it is announced as right now, read here and published at
+            // once, with nothing in between that could let an older update put its names over a newer
+            // one's. A peer that announced no name is listed under the placeholder, as it always was:
+            // the start of its id here would be taken for a name wherever a name is looked up. (The
+            // nickname is clean when it is kept; cleaning it again changes nothing and costs nothing.)
             val connected = activePeers.map { peerID ->
                 val peerInfo = mesh.getPeerInfo(peerID)
                 GeoPerson(
                     id = peerID,
-                    displayName = peerInfo?.nickname ?: peerID.take(12),
+                    displayName = peerInfo?.nickname?.let { sanitizedMeshNickname(it) ?: UNKNOWN_PEER_NICKNAME }
+                        ?: peerID.take(12),
                     lastSeen = Clock.System.now(),
                 )
             }
             meshPeers.value = connected
 
+            if (namedChat) chatEventBus.update(ChatEvent.PrivateChatsUpdated)
             println("📊 ChatRepo: meshPeers list now contains ${connected.size} peers")
             chatEventBus.update(ChatEvent.MeshPeersUpdated)
         }
@@ -2608,8 +2666,10 @@ class ChatRepo(
                     return@launch
                 }
 
-                val peer = mesh.getPeerInfo(peerID)
-                val senderName = peer?.nickname ?: "Unknown"
+                val meshNameClaim = claimedMeshName(peerID)
+                // A private file is stamped with its chat's name when it is stored; a public one from a peer
+                // that has announced nothing keeps the placeholder that its first announcement replaces.
+                val senderName = meshNameClaim ?: UNKNOWN_PEER_NICKNAME
                 val now = Clock.System.now()
 
                 val bitchatMessage = BitchatMessage(
@@ -2639,7 +2699,14 @@ class ChatRepo(
                     chatEventBus.update(ChatEvent.MeshMessagesUpdated)
                     println("ChatRepo: Added file message to mesh channel")
                 } else {
-                    addPrivateMessage(peerID, bitchatMessage, markUnread = true, sendReadReceipt = false)
+                    addPrivateMessage(
+                        peerID,
+                        bitchatMessage,
+                        markUnread = true,
+                        sendReadReceipt = false,
+                        meshNameClaim = meshNameClaim,
+                        stampMeshSender = true,
+                    )
                     println("ChatRepo: Added file message to private DM with $peerID")
                 }
             } catch (e: Exception) {
@@ -3102,6 +3169,7 @@ class ChatRepo(
 
         synchronized(privateChatsLock) {
             privateChats.clear()
+            meshChatNames.clear()
             writtenPrivateChats.clear()
             unreadPrivatePeers.clear()
             unreadPrivateMessageIds.clear()

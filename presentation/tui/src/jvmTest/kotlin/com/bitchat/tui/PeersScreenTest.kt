@@ -217,6 +217,33 @@ class PeersScreenTest {
         assertEquals(pad("    ??", "routed ", 20), peerRow(alice.copy(name = "\u4E2D\u6587"), 20, consoleSafe = true))
     }
 
+    @Test fun claimedNamesAreShownSafelyWithoutHidingTheTransport() {
+        val claimed = PeerEntry("alice", "alice#1a2b", PeerTransport.Direct, claims = "bob")
+        assertEquals("alice#1a2b (now: bob)", peerRow(claimed, 40, consoleSafe = false).trimStart().substringBeforeLast("direct").trimEnd())
+        assertTrue(peerRow(claimed, 28, consoleSafe = false).endsWith("direct "))
+        assertTrue(peerRow(claimed.copy(claims = "bo\u0007b"), 40, consoleSafe = false).contains("now: bo?b"))
+    }
+
+    @Test fun aClaimNeverShortensTheNameTheChatIsFixedTo() {
+        val fixed = PeerEntry("alice", "alice#1a2b", PeerTransport.Direct)
+        val claimed = fixed.copy(claims = "b".repeat(50))
+        // From the width the name alone just fits at, up to one with room to spare: the row with the claim
+        // always shows the whole name and the tag, and is never wider than asked.
+        for (width in 22..60) {
+            val row = peerRow(claimed, width, consoleSafe = false)
+            assertTrue(row.startsWith("    alice#1a2b"), "width $width: $row")
+            assertTrue(row.endsWith("direct "), "width $width: $row")
+            assertEquals(width, row.length, "width $width: $row")
+        }
+        // Too little room to say anything: the row is the one without a claim.
+        assertEquals(peerRow(fixed, 22, consoleSafe = false), peerRow(claimed, 22, consoleSafe = false))
+        assertEquals(peerRow(fixed, 33, consoleSafe = false), peerRow(claimed, 33, consoleSafe = false))
+        // Room for a little: the start of the claim and an ellipsis.
+        assertEquals("    alice#1a2b (now: bb... direct ", peerRow(claimed, 34, consoleSafe = false))
+        // A name that does not fit itself is cut as it always was, and no claim is added.
+        assertEquals(peerRow(fixed, 18, consoleSafe = false), peerRow(claimed, 18, consoleSafe = false))
+    }
+
     @Test fun meshPeopleSortUnreadThenFavouritesThenNameBeforeLoRaOnlyPeople() {
         val entries = meshChannelPeerEntries(
             people = listOf(
@@ -239,6 +266,18 @@ class PeersScreenTest {
                 PeerEntry("lora", "radio", PeerTransport.LoRa),
             ),
             entries,
+        )
+    }
+
+    @Test fun meshPeopleKeepTheirCurrentClaimAlongsideTheFixedName() {
+        val person = MeshChannelPerson(
+            "id-alice", "alice#1a2b", setOf(MeshChannelTransport.MESH), true, null,
+            nameIsFixed = true, claimedName = "bob",
+        )
+
+        assertEquals(
+            listOf(PeerEntry("id-alice", "alice#1a2b", PeerTransport.Direct, claims = "bob")),
+            meshChannelPeerEntries(listOf(person), emptyMap(), emptySet(), emptySet()),
         )
     }
 

@@ -30,6 +30,7 @@ import com.bitchat.domain.chat.model.BitchatFilePacket
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.BitchatMessageType
 import com.bitchat.domain.chat.model.DeliveryStatus
+import com.bitchat.domain.user.UNKNOWN_PEER_NICKNAME
 import com.bitchat.noise.model.NoisePayload
 import com.bitchat.noise.model.NoisePayloadType
 import com.bitchat.noise.model.PrivateMessagePacket
@@ -234,7 +235,7 @@ class BluetoothMeshService(
 
             override fun onMessageReceived(peerID: String, message: String) {
                 val peer = peerManager.getPeer(peerID)
-                val senderName = peer?.nickname ?: "Unknown"
+                val senderName = peer?.nickname ?: UNKNOWN_PEER_NICKNAME
                 val now = Clock.System.now()
 
                 val bitchatMessage = BitchatMessage(
@@ -254,7 +255,7 @@ class BluetoothMeshService(
 
             override fun onAuthenticatedPrivateMessage(peerID: String, messageId: String, content: String) {
                 val peer = peerManager.getPeer(peerID)
-                val senderName = peer?.nickname ?: "Unknown"
+                val senderName = peer?.nickname ?: UNKNOWN_PEER_NICKNAME
                 val now = Clock.System.now()
 
                 val bitchatMessage = BitchatMessage(

@@ -21,6 +21,13 @@ data class MeshChannelPerson(
     val transports: Set<MeshChannelTransport>,
     val hasPrivateChat: Boolean,
     val lastSeen: Instant?,
+    /**
+     * Whether [displayName] is a mesh private chat's own name (the one the chat was opened under), which
+     * nothing announced later changes, rather than what the peer announces now.
+     */
+    val nameIsFixed: Boolean = false,
+    /** What the peer announces now, when [nameIsFixed] and that is another name than [displayName]. */
+    val claimedName: String? = null,
 ) {
     /** Known only from the LoRa radio: not connected over the mesh and not the other side of a private chat. */
     val isLoRaOnly: Boolean

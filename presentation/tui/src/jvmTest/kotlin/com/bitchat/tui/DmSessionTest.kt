@@ -45,7 +45,7 @@ class DmSessionTest {
             navigation, ui,
             start = start,
             leave = leave,
-            describe = { key -> PeerEntry(key, names[key] ?: "who-$key", PeerTransport.Direct) },
+            describe = { key -> PeerEntry(key, names[key] ?: "who-$key", PeerTransport.Direct, claims = claims[key]) },
             openTimeout = 10.seconds,
             requestTimeout = 10.seconds,
             commandWindow = 10.seconds,
@@ -53,7 +53,10 @@ class DmSessionTest {
         return session to ui
     }
 
-    private val names = mapOf("b0b" to "bob", "a11ce" to "alice#1f2e", "m4llory" to "mallory")
+    private val names = mapOf("b0b" to "bob", "a11ce" to "alice#1f2e", "m4llory" to "mallory", "c4rol" to "carol#c4r0")
+
+    /** What a peer whose DM is shown under its chat's own name announces now, when that is another name. */
+    private val claims = mapOf("c4rol" to "caroline")
 
     private suspend fun request(): Boolean {
         if (finishAtOnce) return true
@@ -346,6 +349,20 @@ class DmSessionTest {
         navigation.mode = Mode.Peers
         runCurrent()
         assertEquals(listOf("leave"), calls)
+        ui.cancel()
+    }
+
+    @Test fun aDmFoundByWhatItsPeerAnnouncesNowIsAdopted() = runTest {
+        // `/msg caroline` finds the peer by its announcement; its DM is shown under the chat's own name.
+        val (session, ui) = session()
+        navigation.mode = Mode.Chat
+        session.onChatLine("/msg caroline hi")
+        session.onSelectedPeer("c4rol")
+        assertEquals(
+            DmPhase.Open(PeerEntry("c4rol", "carol#c4r0", PeerTransport.Direct, claims = "caroline"), "c4rol", null),
+            session.phase,
+        )
+        assertEquals(Mode.Dm, navigation.mode)
         ui.cancel()
     }
 

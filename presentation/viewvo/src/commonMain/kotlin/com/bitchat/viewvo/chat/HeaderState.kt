@@ -52,20 +52,36 @@ data class HeaderState(
     // channel) or [geohashPeople], so they cannot disagree with each other or with the list.
 
     /**
-     * What a peer id or conversation key is called. On a mesh channel a connected peer is called what
-     * it announces now, whatever [nicknameDirectory] still holds. A saved private chat keeps the name
-     * the directory knows, and the chat's own name (the sender of its latest message) only fills a
-     * gap: a later message cannot rename a conversation.
+     * What a peer id or conversation key is called. On a mesh channel a private chat's own name wins
+     * over everything announced later and over [nicknameDirectory]. The directory still wins over an
+     * offline name that is not fixed, and a connected peer's current announcement wins after that.
      */
     val peerNicknames: Map<String, String>
         get() = if (isMeshChannel) {
             val listed = meshPeople.filterNot { it.isLoRaOnly }
-            val (connected, savedOnly) = listed.partition { MeshChannelTransport.MESH in it.transports }
+            val (fixed, notFixed) = listed.partition { it.nameIsFixed }
+            val (connected, savedOnly) = notFixed.partition { MeshChannelTransport.MESH in it.transports }
             savedOnly.associate { it.id to it.displayName } +
                 nicknameDirectory +
-                connected.associate { it.id to it.displayName }
+                connected.associate { it.id to it.displayName } +
+                fixed.associate { it.id to it.displayName }
         } else {
             nicknameDirectory
+        }
+
+    /**
+     * The listed people whose name is a mesh private chat's own, fixed when the chat was opened. Such a
+     * name carries the start of the peer's id (`alice#1a2b`), and a list shows it in full.
+     */
+    val fixedNamePeers: Set<String>
+        get() = if (isMeshChannel) meshPeople.filter { it.nameIsFixed }.mapTo(mutableSetOf()) { it.id } else emptySet()
+
+    /** What a peer with a private chat announces now, when that is another name than the chat's. */
+    val claimedNames: Map<String, String>
+        get() = if (isMeshChannel) {
+            meshPeople.mapNotNull { person -> person.claimedName?.let { person.id to it } }.toMap()
+        } else {
+            emptyMap()
         }
 
     /** The listed people's ids: on a mesh channel every mesh person that is not LoRa-only. */

@@ -69,4 +69,85 @@ class PeopleSectionTest {
         onNodeWithText("LoRa").assertExists()
         onNodeWithText("No one connected").assertDoesNotExist()
     }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun `the drawer shows a fixed chats current announcement`() = runComposeUiTest {
+        setContent {
+            MaterialTheme {
+                PeopleSection(
+                    connectedPeers = listOf("id-alice"),
+                    peerNicknames = mapOf("id-alice" to "alice#1a2b"),
+                    claimedNames = mapOf("id-alice" to "bob"),
+                    fixedNamePeers = setOf("id-alice"),
+                    peerDirect = mapOf("id-alice" to true),
+                    nickname = "me",
+                    selectedPrivatePeer = null,
+                    favoritePeers = emptySet(),
+                    hasUnreadPrivateMessages = emptySet(),
+                    privateChats = emptyMap(),
+                    onMeshPersonTap = {},
+                    onToggleFavorite = {},
+                    onDismiss = {},
+                )
+            }
+        }
+
+        onNodeWithText("alice").assertExists()
+        onNodeWithText("now: bob").assertExists()
+        // Which device this is matters exactly then: the start of its id is shown with the name.
+        onNodeWithText("#1a2b").assertExists()
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun `the drawer shows a private chat's own name in full whether or not its peer announces another`() = runComposeUiTest {
+        // The start of the id is there from the first: an announcement that comes later adds its own line
+        // and takes no room from the name.
+        setContent {
+            MaterialTheme {
+                PeopleSection(
+                    connectedPeers = listOf("id-alice"),
+                    peerNicknames = mapOf("id-alice" to "alice#1a2b"),
+                    fixedNamePeers = setOf("id-alice"),
+                    peerDirect = mapOf("id-alice" to true),
+                    nickname = "me",
+                    selectedPrivatePeer = null,
+                    favoritePeers = emptySet(),
+                    hasUnreadPrivateMessages = emptySet(),
+                    privateChats = emptyMap(),
+                    onMeshPersonTap = {},
+                    onToggleFavorite = {},
+                    onDismiss = {},
+                )
+            }
+        }
+
+        onNodeWithText("alice").assertExists()
+        onNodeWithText("#1a2b").assertExists()
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun `the drawer leaves out the suffix of a lone name that is no private chat's own`() = runComposeUiTest {
+        setContent {
+            MaterialTheme {
+                PeopleSection(
+                    connectedPeers = listOf("dora#9f3c"),
+                    peerNicknames = emptyMap(),
+                    peerDirect = emptyMap(),
+                    nickname = "me",
+                    selectedPrivatePeer = null,
+                    favoritePeers = emptySet(),
+                    hasUnreadPrivateMessages = emptySet(),
+                    privateChats = emptyMap(),
+                    onMeshPersonTap = {},
+                    onToggleFavorite = {},
+                    onDismiss = {},
+                )
+            }
+        }
+
+        onNodeWithText("#9f3c").assertDoesNotExist()
+    }
 }

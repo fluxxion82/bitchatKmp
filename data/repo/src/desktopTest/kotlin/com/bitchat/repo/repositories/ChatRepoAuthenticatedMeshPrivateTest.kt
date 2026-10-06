@@ -47,7 +47,10 @@ class ChatRepoAuthenticatedMeshPrivateTest {
             chatRepo.didReceiveAuthenticatedPrivateMessage(privateMessage())
             runCurrent()
 
-            assertEquals(listOf(privateMessage()), chatRepo.getPrivateChats().getValue(PEER_ID))
+            assertEquals(
+                listOf(privateMessage().copy(sender = PEER_ID.take(12))),
+                chatRepo.getPrivateChats().getValue(PEER_ID),
+            )
         } finally {
             scope.cancel()
         }
