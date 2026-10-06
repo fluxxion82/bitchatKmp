@@ -1,3 +1,4 @@
+import org.jetbrains.kotlin.gradle.plugin.mpp.TestExecutable
 import org.jetbrains.kotlin.konan.target.KonanTarget
 
 plugins {
@@ -86,6 +87,15 @@ kotlin {
                     "-lnoiseprotocol",
                     "-lnoisekeys",
                     "-lnoiseprotobufs"
+                )
+            }
+
+            // The Linux noise-c archives call into libsodium. The apps get it through
+            // :data:crypto; this module's own test binary has to name it.
+            binaries.withType<TestExecutable>().configureEach {
+                linkerOpts(
+                    "-L${rootProject.projectDir}/data/crypto/native/libsodium/build/linux-arm64/lib",
+                    "-lsodium"
                 )
             }
         }
