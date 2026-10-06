@@ -296,12 +296,11 @@ class BluetoothMeshService(
                 // forge a packet cannot use it to demand handshakes.
                 //
                 // The session is changed here, on the coroutine that reached the verdict, not on a
-                // launched one. A peer's packets normally go through one actor, one at a time, so
+                // launched one. A peer's packets go through one lane, one at a time, so
                 // a handshake from that peer cannot complete between the verdict and this line;
                 // deferred, the same call could land after one had, and take down the session that
-                // had just replaced the bad one. (Two actors for one peer can still be created by
-                // a race in PacketProcessor; that is older than this and narrows, not closes, the
-                // gap.) Only the handshake itself is started asynchronously.
+                // had just replaced the bad one. Only the handshake itself is started
+                // asynchronously.
                 logInfo("BluetoothMeshService", "Replacing the unusable Noise session with $peerID")
                 noiseEncryption.demote(peerID)
                 initiateNoiseHandshake(peerID)

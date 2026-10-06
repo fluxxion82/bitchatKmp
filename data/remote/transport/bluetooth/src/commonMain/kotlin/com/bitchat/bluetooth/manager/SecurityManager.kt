@@ -4,13 +4,8 @@ import com.bitchat.bluetooth.facade.CryptoSigningFacade
 import com.bitchat.bluetooth.facade.NoiseEncryptionFacade
 import com.bitchat.bluetooth.protocol.BitchatPacket
 import com.bitchat.bluetooth.protocol.MessageType
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
+import com.bitchat.bluetooth.protocol.MAX_PROCESSED_MESSAGE_IDS
+import com.bitchat.bluetooth.protocol.MAX_RECENT_ANNOUNCEMENTS
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
 
@@ -22,13 +17,12 @@ import kotlin.time.Duration.Companion.minutes
 class SecurityManager(
     private val noiseEncryption: NoiseEncryptionFacade,
     private val cryptoSigning: CryptoSigningFacade,
-    private val myPeerID: String
+    private val myPeerID: String,
+    private val clock: Clock = Clock.System
 ) {
     companion object {
         private const val TAG = "SecurityManager"
         private val MESSAGE_TIMEOUT = 5.minutes // 5 minutes (same as iOS)
-        private const val CLEANUP_INTERVAL_MS = 300_000L // 5 minutes
-        private const val MAX_PROCESSED_MESSAGES = 5000
         private const val ANNOUNCEMENT_DEDUP_WINDOW_MS = 60_000L  // 1 minute window for announcement dedup
     }
 
@@ -36,22 +30,16 @@ class SecurityManager(
     private val myPeerIDBytes: ByteArray = hexToBytes(myPeerID)
 
     // Security tracking
-    private val processedMessages = mutableSetOf<String>()
-    private val messageTimestamps = mutableMapOf<String, Long>()
+    private val processedMessages = RecentKeys(MAX_PROCESSED_MESSAGE_IDS, MESSAGE_TIMEOUT.inWholeMilliseconds)
 
     // Announcement deduplication tracking
-    private val recentAnnouncements = mutableSetOf<String>()
-    private val announcementTimestamps = mutableMapOf<String, Long>()
+    private val recentAnnouncements = RecentKeys(MAX_RECENT_ANNOUNCEMENTS, ANNOUNCEMENT_DEDUP_WINDOW_MS)
 
     // Delegate for callbacks
     var delegate: SecurityManagerDelegate? = null
 
-    // Coroutines
-    private val managerScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-
-    init {
-        startPeriodicCleanup()
-    }
+    internal val processedMessageCount: Int get() = processedMessages.size
+    internal val recentAnnouncementCount: Int get() = recentAnnouncements.size
 
     /**
      * Validate packet security (timestamp, replay attacks, duplicates, signatures)
@@ -70,35 +58,15 @@ class SecurityManager(
 
         if (messageType == MessageType.ANNOUNCE) {
             // Deduplicate ANNOUNCE packets within time window
-            val now = Clock.System.now().toEpochMilliseconds()
-            val lastAnnouncementTime = announcementTimestamps[messageID]
-
-            if (lastAnnouncementTime != null && (now - lastAnnouncementTime) < ANNOUNCEMENT_DEDUP_WINDOW_MS) {
+            if (!recentAnnouncements.firstSighting(messageID, clock.now().toEpochMilliseconds())) {
                 // Duplicate within window - ignore silently
                 return false
             }
 
-            // Update announcement tracking
-            recentAnnouncements.add(messageID)
-            announcementTimestamps[messageID] = now
-
-            // Cleanup if too many announcements tracked
-            if (recentAnnouncements.size > 1000) {
-                cleanupOldAnnouncements()
-            }
-
         } else {
             // Non-ANNOUNCE: strict deduplication (existing logic)
-            if (processedMessages.contains(messageID)) {
+            if (!processedMessages.firstSighting(messageID, clock.now().toEpochMilliseconds())) {
                 return false // Duplicate
-            }
-            // Add to processed messages
-            processedMessages.add(messageID)
-            messageTimestamps[messageID] = Clock.System.now().toEpochMilliseconds()
-
-            // Enforce size limit
-            if (processedMessages.size > MAX_PROCESSED_MESSAGES) {
-                cleanupOldMessages()
             }
         }
 
@@ -115,6 +83,16 @@ class SecurityManager(
      */
     private fun generateMessageID(packet: BitchatPacket, peerID: String): String {
         return "${peerID}_${packet.timestamp}_${packet.type}"
+    }
+
+    /** Releases a duplicate record when a refused early payload could later become readable. */
+    fun forgetPacket(packet: BitchatPacket, peerID: String) {
+        val messageID = generateMessageID(packet, peerID)
+        if (MessageType.fromValue(packet.type) == MessageType.ANNOUNCE) {
+            recentAnnouncements.forget(messageID)
+        } else {
+            processedMessages.forget(messageID)
+        }
     }
 
     /**
@@ -154,6 +132,10 @@ class SecurityManager(
     fun isHandshaking(peerID: String): Boolean {
         return noiseEncryption.isHandshaking(peerID)
     }
+
+    fun hasCandidate(peerID: String): Boolean = noiseEncryption.hasCandidate(peerID)
+
+    fun hasValidatedSession(peerID: String): Boolean = noiseEncryption.hasValidatedSession(peerID)
 
     /**
      * Handle Noise handshake packet
@@ -203,56 +185,11 @@ class SecurityManager(
     }
 
     /**
-     * Periodic cleanup of old message IDs
-     */
-    private fun startPeriodicCleanup() {
-        managerScope.launch {
-            while (isActive) {
-                delay(CLEANUP_INTERVAL_MS)
-                cleanupOldMessages()
-            }
-        }
-    }
-
-    /**
-     * Clean up old message timestamps
-     */
-    private fun cleanupOldMessages() {
-        val now = Clock.System.now().toEpochMilliseconds()
-        val timeoutMs = MESSAGE_TIMEOUT.inWholeMilliseconds
-
-        val staleMessages = messageTimestamps.filter { (_, timestamp) ->
-            (now - timestamp) > timeoutMs
-        }.keys.toList()
-
-        staleMessages.forEach { messageID ->
-            processedMessages.remove(messageID)
-            messageTimestamps.remove(messageID)
-        }
-    }
-
-    /**
-     * Clean up old announcements beyond timeout window
-     */
-    private fun cleanupOldAnnouncements() {
-        val now = Clock.System.now().toEpochMilliseconds()
-        val cutoffTime = now - MESSAGE_TIMEOUT.inWholeMilliseconds
-
-        val oldAnnouncements = announcementTimestamps.filter { it.value < cutoffTime }.keys
-        oldAnnouncements.forEach { announcementID ->
-            recentAnnouncements.remove(announcementID)
-            announcementTimestamps.remove(announcementID)
-        }
-    }
-
-    /**
      * Clear all security data
      */
     fun clearAll() {
         processedMessages.clear()
-        messageTimestamps.clear()
         recentAnnouncements.clear()
-        announcementTimestamps.clear()
         noiseEncryption.clearAllSessions()
     }
 
@@ -260,7 +197,6 @@ class SecurityManager(
      * Shutdown manager
      */
     fun shutdown() {
-        managerScope.cancel()
         clearAll()
     }
 }

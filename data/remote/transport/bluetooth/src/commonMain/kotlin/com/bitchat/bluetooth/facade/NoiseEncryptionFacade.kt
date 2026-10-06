@@ -102,6 +102,18 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
         }
     }
 
+    /** Unlike [isHandshaking], this also reports a renegotiation beside a live session. */
+    fun hasCandidate(peerID: String): Boolean = withPeerLock(peerID) { state ->
+        retireExpiredFallback(state, currentTimeMillis())
+        state.candidate != null
+    }
+
+    /** A validated established or fallback session can authenticate a peer's traffic. */
+    fun hasValidatedSession(peerID: String): Boolean = withPeerLock(peerID) { state ->
+        retireExpiredFallback(state, currentTimeMillis())
+        state.established?.isEstablished() == true || state.fallback?.isEstablished() == true
+    }
+
     /**
      * Every peer whose session is mid-handshake, mapped to the epoch-millis instant the session
      * was created. That instant is when the handshake started, so it is the deadline's origin.

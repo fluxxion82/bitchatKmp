@@ -1,5 +1,8 @@
 package com.bitchat.bluetooth.manager
 
+import kotlinx.atomicfu.locks.ReentrantLock
+import kotlinx.atomicfu.locks.withLock
+
 /**
  * When a Noise session that claims to be established should be demoted and replaced.
  *
@@ -14,6 +17,9 @@ package com.bitchat.bluetooth.manager
  * confirm that the newer session is shared. The fallback never sends; outgoing traffic waits for
  * the new established session. The count is per peer and resets only on a decrypt via the
  * established session.
+ *
+ * A peer without a validated session has no run worth protecting from a stray unreadable packet.
+ * Its first unreadable packet asks for recovery; the recovery ceiling limits invented sender ids.
  *
  * A re-handshake is not free and a peer that can forge a packet could otherwise ask for one as often
  * as it liked, so recovery is rate limited: [MIN_RECOVERY_INTERVAL_MS] must pass before the same peer
@@ -40,12 +46,20 @@ class SessionFailureTracker(
         val includesFallbackSuccess: Boolean
     )
 
-    private val consecutiveFailures = mutableMapOf<String, FailureRun>()
-    private val lastRecovery = mutableMapOf<String, Long>()
+    private data class Recovery(val at: Long, val hasSession: Boolean)
+
+    private val lock = ReentrantLock()
+    private val failureRuns = LinkedHashMap<String, FailureRun>()
+    private val lastRecovery = mutableMapOf<String, Recovery>()
+
+    internal val failureRunCount: Int get() = lock.withLock { failureRuns.size }
+    internal val recoveryCount: Int get() = lock.withLock { lastRecovery.size }
 
     /** A message from [peerID] decrypted via the established session, so the run is over. */
     fun onDecryptSucceeded(peerID: String) {
-        consecutiveFailures.remove(peerID)
+        lock.withLock {
+            failureRuns.remove(peerID)
+        }
     }
 
     /**
@@ -55,30 +69,47 @@ class SessionFailureTracker(
     fun onDecryptFailed(
         peerID: String,
         now: Long,
-        evidence: FailureEvidence = FailureEvidence.UNDECRYPTABLE
-    ): RecoveryReason? {
-        val previous = consecutiveFailures[peerID]
-        val failures = (previous?.count ?: 0) + 1
-        val includesFallbackSuccess = previous?.includesFallbackSuccess == true || evidence == FailureEvidence.FALLBACK_SUCCESS
-        consecutiveFailures[peerID] = FailureRun(failures, includesFallbackSuccess)
-
-        if (failures < failuresBeforeRecovery) return null
+        evidence: FailureEvidence = FailureEvidence.UNDECRYPTABLE,
+        hasSession: Boolean = true
+    ): RecoveryReason? = lock.withLock {
+        val includesFallbackSuccess = if (hasSession) {
+            val previous = failureRuns.remove(peerID)
+            val failures = (previous?.count ?: 0) + 1
+            val includesFallback = previous?.includesFallbackSuccess == true || evidence == FailureEvidence.FALLBACK_SUCCESS
+            if (failureRuns.size >= MAX_FAILURE_RUNS) failureRuns.entries.iterator().run { next(); remove() }
+            failureRuns[peerID] = FailureRun(failures, includesFallback)
+            if (failures < failuresBeforeRecovery) return@withLock null
+            includesFallback
+        } else {
+            // A lost session must not leave a stale run that a forged packet could carry forward.
+            failureRuns.remove(peerID)
+            false
+        }
 
         val since = lastRecovery[peerID]
-        if (since != null && now - since < minRecoveryIntervalMs) return null
+        val peerIsRateLimited = since != null && now - since.at < minRecoveryIntervalMs
+        lastRecovery.entries.removeAll { now - it.value.at >= minRecoveryIntervalMs }
+        if (peerIsRateLimited) return@withLock null
+        val ceiling = if (hasSession) MAX_RECOVERIES_PER_INTERVAL_WITH_SESSION else MAX_RECOVERIES_PER_INTERVAL_WITHOUT_SESSION
+        val recoveryClassCount = lastRecovery.values.count { it.hasSession == hasSession }
+        if (recoveryClassCount >= ceiling) return@withLock null
 
-        consecutiveFailures.remove(peerID)
-        lastRecovery[peerID] = now
+        failureRuns.remove(peerID)
+        lastRecovery[peerID] = Recovery(now, hasSession)
         return if (includesFallbackSuccess) RecoveryReason.NOT_SHARED else RecoveryReason.UNUSABLE
     }
 
     /** Forget [peerID] entirely during explicit teardown, such as when the peer goes away. */
     fun forget(peerID: String) {
-        consecutiveFailures.remove(peerID)
-        lastRecovery.remove(peerID)
+        lock.withLock {
+            failureRuns.remove(peerID)
+            lastRecovery.remove(peerID)
+        }
     }
 
-    fun consecutiveFailures(peerID: String): Int = consecutiveFailures[peerID]?.count ?: 0
+    fun consecutiveFailures(peerID: String): Int = lock.withLock {
+        failureRuns[peerID]?.count ?: 0
+    }
 
     companion object {
         /** Matches the upstream Android client, which rebuilds a session after three failures. */
@@ -86,5 +117,25 @@ class SessionFailureTracker(
 
         /** A peer cannot force handshakes faster than this, however many bad packets it sends. */
         const val MIN_RECOVERY_INTERVAL_MS = 30_000L
+
+        /**
+         * Each run is a few words. This limit exists so the table is bounded at all; it is above
+         * any number of sessions this app can sensibly hold, and when full its least recently
+         * updated run goes.
+         */
+        const val MAX_FAILURE_RUNS = 1024
+
+        /**
+         * How many recoveries may be granted inside one interval, counted separately for peers a
+         * validated session is on file for and for peers with none. Every recovery makes this node
+         * start a handshake, and the packets that ask for one are not authenticated, so without a
+         * ceiling invented sender ids could make it transmit as often as they liked. For a peer
+         * without a session one forged packet is enough to ask, so the ceiling is the only thing
+         * between invented sender ids and this node starting handshakes. The trade is unchanged:
+         * a genuine recovery waits while its class is at the ceiling; a user sending a message
+         * still starts a handshake, and that path does not go through here.
+         */
+        const val MAX_RECOVERIES_PER_INTERVAL_WITH_SESSION = 16
+        const val MAX_RECOVERIES_PER_INTERVAL_WITHOUT_SESSION = 16
     }
 }

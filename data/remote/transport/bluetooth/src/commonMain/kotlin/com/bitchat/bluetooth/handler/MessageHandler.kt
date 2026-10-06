@@ -27,11 +27,12 @@ class MessageHandler(
     private val peerManager: PeerManager,
     private val cryptoSigning: CryptoSigningFacade,
     // The failure tracker's cooldown is measured on this clock, so a test can let it pass.
-    private val clock: Clock = Clock.System
+    private val clock: Clock = Clock.System,
+    internal val pendingEncryptedPayloads: PendingEncryptedPayloads = PendingEncryptedPayloads()
 ) {
     var delegate: MessageHandlerDelegate? = null
 
-    private val pendingEncryptedMessages = mutableMapOf<String, MutableList<ByteArray>>()
+    internal val pendingEncryptedPayloadCount: Int get() = pendingEncryptedPayloads.count
 
     // A session can report itself established and be unusable; this is what notices.
     private val sessionFailures = SessionFailureTracker()
@@ -153,7 +154,12 @@ class MessageHandler(
             return
         }
 
-        handleEncryptedPayload(peerID, packet.payload, requeueOnFailure = true)
+        // validatePacket has already recorded this packet as seen. If the payload is one a
+        // handshake in flight could still make readable but there is no room to keep it, that
+        // record would make every later copy (the mesh relays, so copies do arrive) look like a
+        // duplicate, and the message would be lost for good.
+        val result = handleEncryptedPayload(peerID, packet.payload, requeueOnFailure = true)
+        if (result == EncryptedPayloadResult.REFUSED) securityManager.forgetPacket(packet, peerID)
     }
 
     private fun handleLeave(packet: BitchatPacket, peerID: String) {
@@ -196,14 +202,18 @@ class MessageHandler(
         delegate?.onPublicFileReceived(peerID, filePacket)
     }
 
-    private fun handleEncryptedPayload(peerID: String, payload: ByteArray, requeueOnFailure: Boolean) {
+    private fun handleEncryptedPayload(
+        peerID: String,
+        payload: ByteArray,
+        requeueOnFailure: Boolean
+    ): EncryptedPayloadResult {
         val decrypted = securityManager.decryptFromPeer(peerID, payload)
         if (decrypted != null) {
             val noisePayload = NoisePayload.decode(decrypted.plaintext)
             if (noisePayload == null) {
                 println("❌ Failed to parse NoisePayload from $peerID")
                 recordDecryptOutcome(peerID, decrypted.via)
-                return
+                return EncryptedPayloadResult.READ
             }
 
             when (noisePayload.type) {
@@ -242,13 +252,22 @@ class MessageHandler(
                 }
             }
             recordDecryptOutcome(peerID, decrypted.via)
+            return EncryptedPayloadResult.READ
         } else if (requeueOnFailure) {
-            println("⏳ Failed to decrypt from $peerID, queueing for retry")
-            queueEncryptedMessage(peerID, payload)
+            val hasCandidate = securityManager.hasCandidate(peerID)
+            val outcome = if (hasCandidate && queueEncryptedMessage(peerID, payload)) {
+                EncryptedPayloadResult.KEPT
+            } else if (hasCandidate) {
+                EncryptedPayloadResult.REFUSED
+            } else {
+                EncryptedPayloadResult.UNREADABLE
+            }
             condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.UNDECRYPTABLE)
+            return outcome
         } else {
             println("❌ Failed to decrypt from $peerID, not requeueing")
             condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.UNDECRYPTABLE)
+            return EncryptedPayloadResult.UNREADABLE
         }
     }
 
@@ -274,26 +293,37 @@ class MessageHandler(
      * recovery. The latter is delivered, but cannot certify that the newer session is shared.
      */
     private fun condemnSessionIfHopeless(peerID: String, evidence: SessionFailureTracker.FailureEvidence) {
-        val recovery = sessionFailures.onDecryptFailed(peerID, clock.now().toEpochMilliseconds(), evidence) ?: return
+        val hasSession = securityManager.hasValidatedSession(peerID)
+        if (!hasSession && securityManager.hasCandidate(peerID)) {
+            // There is no session to condemn and a handshake is already in flight; its outcome
+            // decides, and the sweeper deals with one that stalls.
+            return
+        }
+        val recovery = sessionFailures.onDecryptFailed(
+            peerID, clock.now().toEpochMilliseconds(), evidence, hasSession
+        ) ?: return
 
         println("🔁 ${SessionFailureTracker.FAILURES_BEFORE_RECOVERY} consecutive session-recovery " +
             "signals from $peerID; the session needs replacement")
         // Drop this failed run before asking the service to demote and replace the session.
-        pendingEncryptedMessages.remove(peerID)
+        pendingEncryptedPayloads.drop(peerID)
         when (recovery) {
             SessionFailureTracker.RecoveryReason.UNUSABLE -> delegate?.onSessionUnusable(peerID)
             SessionFailureTracker.RecoveryReason.NOT_SHARED -> delegate?.onSessionNotShared(peerID)
         }
     }
 
-    private fun queueEncryptedMessage(peerID: String, payload: ByteArray) {
-        val queue = pendingEncryptedMessages.getOrPut(peerID) { mutableListOf() }
-        queue.add(payload)
-        println("📦 Queued encrypted message from $peerID (queue size: ${queue.size})")
+    private fun queueEncryptedMessage(peerID: String, payload: ByteArray): Boolean {
+        if (pendingEncryptedPayloads.offer(peerID, payload, clock.now().toEpochMilliseconds())) {
+            println("📦 Queued encrypted message from $peerID")
+            return true
+        }
+        return false
     }
 
     private fun processPendingEncryptedMessages(peerID: String) {
-        val queue = pendingEncryptedMessages.remove(peerID) ?: run {
+        val queue = pendingEncryptedPayloads.take(peerID, clock.now().toEpochMilliseconds())
+        if (queue.isEmpty()) {
             println("📭 No pending messages for $peerID")
             return
         }
@@ -302,6 +332,13 @@ class MessageHandler(
             handleEncryptedPayload(peerID, payload, requeueOnFailure = false)
         }
         println("✅ Finished processing pending messages for $peerID")
+    }
+
+    private enum class EncryptedPayloadResult {
+        READ,
+        KEPT,
+        REFUSED,
+        UNREADABLE
     }
 
     private fun dropAddressedPlaintext(
