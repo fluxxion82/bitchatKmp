@@ -22,9 +22,12 @@ import com.bitchat.nostr.NostrPreferences
 import com.bitchat.nostr.NostrRelay
 import com.bitchat.nostr.NostrSubscriptionId
 import com.bitchat.nostr.NostrTransport
+import com.bitchat.nostr.model.NostrEvent
 import com.bitchat.nostr.model.NostrFilter
+import com.bitchat.nostr.model.NostrIdentity
 import com.bitchat.nostr.participant.NostrParticipantTracker
 import com.bitchat.repo.utils.ReceivedFileBudget
+import com.bitchat.repo.utils.MessageLimits
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -43,6 +46,13 @@ internal fun chatRepo(
     clock: Clock = Clock.System,
     blockedMeshIds: Set<String> = emptySet(),
     receivedFileBudget: ReceivedFileBudget = ReceivedFileBudget(),
+    messageLimits: MessageLimits = MessageLimits(),
+    nostrIdentity: NostrIdentity? = null,
+    geohashIdentity: NostrIdentity? = null,
+    // Empty caches by default: a relaxed mock hands back an Object where a String is expected, which
+    // breaks any path that looks a peer up (the private send path does). These discard what is written.
+    geohashAliasCache: Cache<String, String> = mockk<Cache<String, String>>(relaxed = true).also { every { it.get(any()) } returns null },
+    geohashConversationCache: Cache<String, String> = mockk<Cache<String, String>>(relaxed = true).also { every { it.get(any()) } returns null },
 ): ChatRepo {
     val contextFacade = object : CoroutinesContextFacade {
         override val io: CoroutineContext = dispatcher
@@ -65,13 +75,21 @@ internal fun chatRepo(
         every { it.getJoinedChannelsList() } returns emptySet()
     }
     val nostrClient = mockk<NostrClient>(relaxed = true).also {
-        every { it.getCurrentNostrIdentity() } returns null
-        every { it.deriveIdentity(any()) } throws IllegalStateException()
+        every { it.getCurrentNostrIdentity() } returns nostrIdentity
+        if (geohashIdentity != null) {
+            every { it.deriveIdentity(any()) } returns geohashIdentity
+        } else {
+            every { it.deriveIdentity(any()) } throws IllegalStateException()
+        }
+        // A test gift wrap carries its own "decryption": content, sender key and timestamp as they are.
+        every { it.decryptPrivateMessage(any(), any()) } answers {
+            firstArg<NostrEvent>().let { Triple(it.content, it.pubkey, it.createdAt) }
+        }
     }
     val nostrRelay = mockk<NostrRelay>(relaxed = true).also {
         every { it.getRelaysForGeohash(any()) } returns emptyList()
         every { it.subscribe(any(), any(), any(), any(), any()) } answers {
-            val subscription = Subscription(firstArg(), secondArg())
+            val subscription = Subscription(firstArg(), secondArg(), thirdArg())
             subscriptions += subscription
             subscription.id
         }
@@ -91,10 +109,8 @@ internal fun chatRepo(
         nostrPreferences = mockk<NostrPreferences>(relaxed = true),
         nostrClient = nostrClient,
         nostrRelay = nostrRelay,
-        // Empty caches: a relaxed mock hands back an Object where a String is expected, which
-        // breaks any path that looks a peer up (the private send path does).
-        geohashAliasCache = mockk<Cache<String, String>>(relaxed = true).also { every { it.get(any()) } returns null },
-        geohashConversationCache = mockk<Cache<String, String>>(relaxed = true).also { every { it.get(any()) } returns null },
+        geohashAliasCache = geohashAliasCache,
+        geohashConversationCache = geohashConversationCache,
         channelPreferences = channelPreferences,
         userPreferences = userPreferences,
         blockListPreferences = mockk<BlockListPreferences>(relaxed = true).also {
@@ -117,7 +133,8 @@ internal fun chatRepo(
         lora = lora,
         clock = clock,
         receivedFileBudget = receivedFileBudget,
+        messageLimits = messageLimits,
     )
 }
 
-internal data class Subscription(val id: String, val filter: NostrFilter)
+internal data class Subscription(val id: String, val filter: NostrFilter, val handler: (NostrEvent) -> Unit = {})

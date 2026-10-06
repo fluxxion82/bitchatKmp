@@ -196,6 +196,36 @@ class ChatRepoCrossTransportTest {
         }
     }
 
+    @Test fun aBleCopyTheChannelAlreadyDroppedDoesNotHideItsLoRaTwin() = runTest {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+
+        try {
+            val lora = FakeLoRaProtocol()
+            val chatRepo = chatRepo(
+                scope, dispatcher, mutableListOf(), lora,
+                messageLimits = com.bitchat.repo.utils.MessageLimits(maxMessagesPerChat = 2),
+            )
+            runCurrent()
+
+            // The BLE copy arrives and is pushed out of the channel by two more messages, all inside
+            // the pairing window.
+            chatRepo.didReceiveMessage(meshMessage())
+            chatRepo.didReceiveMessage(meshMessage().copy(id = "mesh-2", content = "second"))
+            chatRepo.didReceiveMessage(meshMessage().copy(id = "mesh-3", content = "third"))
+            runCurrent()
+            assertEquals(listOf("mesh-2", "mesh-3"), chatRepo.getMeshMessages().map { it.id })
+
+            lora.receive("alice:hello")
+            runCurrent()
+
+            // No copy of "hello" was on screen any more, so the LoRa one is shown.
+            assertEquals(listOf("third", "hello"), chatRepo.getMeshMessages().map { it.content })
+        } finally {
+            scope.cancel()
+        }
+    }
+
     private class SteppedClock : Clock {
         private var current = Instant.fromEpochSeconds(1_000)
 

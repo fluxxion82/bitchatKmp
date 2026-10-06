@@ -72,6 +72,10 @@ import com.bitchat.local.prefs.LoRaPreferences
 import com.bitchat.repo.lora.loRaConfiguration
 import com.bitchat.repo.lora.toLoRaConfiguration
 import com.bitchat.repo.utils.CrossTransportTwins
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
+import com.bitchat.repo.utils.BoundedIdSet
+import com.bitchat.repo.utils.MessageLimits
 import com.bitchat.repo.utils.ReceivedFileBudget
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.LoRaProtocolManager
@@ -134,6 +138,7 @@ class ChatRepo(
     private val loraPreferences: LoRaPreferences? = null,
     private val clock: Clock = Clock.System,
     private val receivedFileBudget: ReceivedFileBudget = ReceivedFileBudget(),
+    private val messageLimits: MessageLimits = MessageLimits(),
 ) : ChatRepository, BluetoothMeshDelegate {
     private val outbox = mutableMapOf<String, MutableList<Triple<String, String, String>>>()
 
@@ -151,7 +156,22 @@ class ChatRepo(
     // Guards every read and write of [meshChannelMessages], and [crossTransportTwins] with it.
     private val meshChannelMessagesMutex = Mutex()
 
+    /**
+     * Guards the private chats and what is kept beside them: [privateChats], [writtenPrivateChats],
+     * [unreadPrivatePeers], [unreadPrivateMessageIds], [latestUnreadPrivatePeer], [knownPrivatePeers].
+     * Handlers for several relays and for the mesh add private messages at the same time, and keeping
+     * the strangers' chats within their shared budget reads every chat, and removes what was kept about
+     * an emptied one, from whichever of them is adding. Held only around plain reads and writes:
+     * nothing suspends, sends or publishes inside it.
+     */
+    private val privateChatsLock = SynchronizedObject()
+
+    // Each chat's messages in the order they ARRIVED; getPrivateChats sorts a copy for display. The
+    // oldest arrival is what a full chat drops, whatever timestamp its sender wrote on it.
     private val privateChats = mutableMapOf<String, MutableList<BitchatMessage>>()
+    // The chats the user has sent a message in during this run. Deliberately not inferred from the
+    // messages: the user's own can age out of a chat, and the chat stays theirs.
+    private val writtenPrivateChats = mutableSetOf<String>()
 
     private val unreadPrivatePeers = mutableSetOf<String>()
     private val unreadPrivateMessageIds = mutableMapOf<String, MutableSet<String>>()
@@ -168,9 +188,9 @@ class ChatRepo(
     private val handledGiftWraps = HandledGiftWraps()
     private val activeDmSubscriptions = mutableSetOf<String>()
     private val activeGeohashDmSubscriptions = mutableSetOf<String>()
-    private val deliveredMessageIds = mutableSetOf<String>()
-    private val readMessageIds = mutableSetOf<String>()
-    private val sentDeliveryAckIds = mutableSetOf<String>()
+    private val deliveredMessageIds = BoundedIdSet(messageLimits.maxTrackedReceiptIds)
+    private val readMessageIds = BoundedIdSet(messageLimits.maxTrackedReceiptIds)
+    private val sentDeliveryAckIds = BoundedIdSet(messageLimits.maxTrackedReceiptIds)
 
     private val namedChannelMessages = mutableMapOf<String, MutableList<BitchatMessage>>()
     private val namedChannelMembers = mutableMapOf<String, MutableSet<ChannelMember>>()
@@ -275,7 +295,8 @@ class ChatRepo(
             MutableStateFlow(emptyList())
         }
 
-        flow.value
+        // Kept in arrival order (the oldest arrival is what a full chat drops), shown by timestamp.
+        flow.value.sortedBy { it.timestamp }
     }
 
     override suspend fun getMeshMessages(): List<BitchatMessage> = withContext(coroutinesContextFacade.io) {
@@ -312,10 +333,14 @@ class ChatRepo(
     override fun observeLoRaPeerChanges(): Flow<Unit> =
         lora?.peers?.map { } ?: kotlinx.coroutines.flow.flowOf(Unit)
 
-    // Like getPrivateChats this reads lists that other coroutines write without a lock; it copies
-    // none of them, and a caller that reads often has to expect a read to collide with a write.
     override suspend fun getPrivateChatNames(): Map<String, String?> = withContext(coroutinesContextFacade.io) {
-        privateChats.mapValues { (key, messages) -> messages.lastOrNull { it.senderPeerID == key }?.sender }
+        synchronized(privateChatsLock) {
+            // Lists are in arrival order: the name comes from the other side's newest message by timestamp,
+            // and from the later arrival when two carry the same one.
+            privateChats.mapValues { (key, messages) ->
+                messages.asReversed().filter { it.senderPeerID == key }.maxByOrNull { it.timestamp }?.sender
+            }
+        }
     }
 
     override suspend fun switchLoRaProtocol(protocol: String): Boolean = withContext(coroutinesContextFacade.io) {
@@ -375,7 +400,9 @@ class ChatRepo(
     }
 
     override suspend fun getPrivateChats(): Map<String, List<BitchatMessage>> = withContext(coroutinesContextFacade.io) {
-        privateChats.mapValues { it.value.toList() }
+        val chats = synchronized(privateChatsLock) { privateChats.mapValues { it.value.toList() } }
+        // Kept in arrival order, shown in the order of their timestamps (equal ones as they arrived).
+        chats.mapValues { (_, messages) -> messages.sortedBy { it.timestamp } }
     }
 
     override fun observeMiningStatus(): Flow<String?> {
@@ -383,7 +410,7 @@ class ChatRepo(
     }
 
     override suspend fun getUnreadPrivatePeers(): Set<String> = withContext(coroutinesContextFacade.io) {
-        unreadPrivatePeers.toSet()
+        synchronized(privateChatsLock) { unreadPrivatePeers.toSet() }
     }
 
     override suspend fun getPeerSessionStates(): Map<String, String> = withContext(coroutinesContextFacade.io) {
@@ -396,7 +423,7 @@ class ChatRepo(
     }
 
     override suspend fun getLatestUnreadPrivatePeer(): String? = withContext(coroutinesContextFacade.io) {
-        latestUnreadPrivatePeer
+        synchronized(privateChatsLock) { latestUnreadPrivatePeer }
     }
 
     override suspend fun getSelectedPrivatePeer(): String? = withContext(coroutinesContextFacade.io) {
@@ -409,14 +436,21 @@ class ChatRepo(
     }
 
     override suspend fun markPrivateChatRead(peerID: String) = withContext(coroutinesContextFacade.io) {
-        val unreadIds = unreadPrivateMessageIds.remove(peerID).orEmpty()
+        var wasUnread = false
+        var latestChanged = false
+        val unreadIds = synchronized(privateChatsLock) {
+            val ids = unreadPrivateMessageIds.remove(peerID).orEmpty()
+            wasUnread = unreadPrivatePeers.remove(peerID)
+            if (latestUnreadPrivatePeer == peerID) {
+                latestUnreadPrivatePeer = resolveLatestUnreadPeer()
+                latestChanged = true
+            }
+            ids
+        }
         unreadIds.forEach { messageId ->
             sendReadReceipt(messageId, readerPeerID = null, toPeerID = peerID)
         }
-
-        val wasUnread = unreadPrivatePeers.remove(peerID)
-        if (latestUnreadPrivatePeer == peerID) {
-            latestUnreadPrivatePeer = resolveLatestUnreadPeer()
+        if (latestChanged) {
             chatEventBus.update(ChatEvent.LatestUnreadPrivatePeerChanged)
         }
 
@@ -500,8 +534,10 @@ class ChatRepo(
         }
     }
 
-    override suspend fun sendGeohashMessage(content: String, geohash: String, nickname: String): Unit =
+    override suspend fun sendGeohashMessage(content: String, geohash: String, nickname: String): Unit {
+        requireSendable(content)
         sendGeohashMessage(content, geohash, nickname, BitchatMessageType.Message)
+    }
 
     private suspend fun sendGeohashMessage(
         content: String,
@@ -542,7 +578,7 @@ class ChatRepo(
                 println("🎬 ChatRepo: Generated temp ID: $tempId")
 
                 // ✨ STEP 1: Add local echo BEFORE mining starts (with tempId)
-                val localMessage = BitchatMessage(
+                val localMessage = messageLimits.notLaterThan(BitchatMessage(
                     id = tempId,  // Use tempId for animation tracking
                     sender = nickname,
                     content = content,
@@ -552,22 +588,21 @@ class ChatRepo(
                     senderPeerID = identity.publicKeyHex,
                     channel = geohash,
                     powDifficulty = null  // Will be set after mining
-                )
+                ), clock.now())
 
                 val flow = geohashMessagesFlows.getOrPut(geohash) {
                     MutableStateFlow(emptyList())
                 }
                 val currentMessages = flow.value.toMutableList()
                 currentMessages.add(localMessage)
-                currentMessages.sortBy { it.timestamp }
-                flow.value = currentMessages
+                flow.value = messageLimits.trimmed(currentMessages)
 
                 // Emit event to notify observers
                 coroutineScopeFacade.nostrScope.launch {
                     chatEventBus.update(ChatEvent.GeohashMessagesUpdated(geohash))
                 }
 
-                println("✅ ChatRepo: Added local echo with tempId to UI, total messages: ${currentMessages.size}")
+                println("✅ ChatRepo: Added local echo with tempId to UI, total messages: ${flow.value.size}")
 
                 // ✨ STEP 2: NOW mine the event (this will trigger animation via tempId tracking)
                 println("🔨 ChatRepo: Creating ephemeral geohash event...")
@@ -631,8 +666,10 @@ class ChatRepo(
             }
         }
 
-    override suspend fun sendMeshMessage(content: String, nickname: String): Unit =
+    override suspend fun sendMeshMessage(content: String, nickname: String): Unit {
+        requireSendable(content)
         sendMeshMessage(content, nickname, BitchatMessageType.Message)
+    }
 
     private suspend fun sendMeshMessage(
         content: String,
@@ -663,6 +700,7 @@ class ChatRepo(
 
             val total = meshChannelMessagesMutex.withLock {
                 meshChannelMessages.add(localMessage)
+                trimMeshMessages()
                 meshChannelMessages.size
             }
             chatEventBus.update(ChatEvent.MeshMessagesUpdated)
@@ -801,6 +839,7 @@ class ChatRepo(
             // Store in meshChannelMessages (shared with BLE mesh for UI simplicity)
             val total = meshChannelMessagesMutex.withLock {
                 meshChannelMessages.add(localMessage)
+                trimMeshMessages()
                 meshChannelMessages.size
             }
             chatEventBus.update(ChatEvent.MeshMessagesUpdated)
@@ -848,6 +887,10 @@ class ChatRepo(
         try {
             println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             println("📬 ChatRepo.handleGeohashEvent STARTED")
+            if (event.content.length > BitchatMessage.MAX_CONTENT_CHARS) {
+                println("ChatRepo: Dropped geohash message with content length ${event.content.length}")
+                return
+            }
             println("   Geohash: $geohash")
             println("   Event ID: ${event.id.take(16)}...")
             println("   Event kind: ${event.kind}")
@@ -898,7 +941,7 @@ class ChatRepo(
                 savePeerDisplayName(peerID, senderNickname)
             }
 
-            val message = BitchatMessage(
+            val message = messageLimits.notLaterThan(BitchatMessage(
                 id = event.id,
                 sender = senderNickname ?: senderPubkey.take(16),
                 content = event.content,
@@ -908,7 +951,7 @@ class ChatRepo(
                 senderPeerID = senderPubkey,
                 channel = geohash,
                 powDifficulty = event.tags.find { it.firstOrNull() == "nonce" }?.getOrNull(2)?.toIntOrNull()
-            )
+            ), clock.now())
 
             val flow = geohashMessagesFlows[geohash]
             if (flow != null) {
@@ -938,8 +981,7 @@ class ChatRepo(
                 }
 
                 currentMessages.add(message)
-                currentMessages.sortBy { it.timestamp }
-                flow.value = currentMessages
+                flow.value = messageLimits.trimmed(currentMessages)
 
                 // Emit event to notify observers
                 coroutineScopeFacade.nostrScope.launch {
@@ -1023,13 +1065,11 @@ class ChatRepo(
         }
 
         val packet = PrivateMessagePacket.decode(payload) ?: return
-        val convKey = conversationKeyFor(senderPubkey)
-        knownPrivatePeers[convKey] = senderPubkey
-
-        if (sourceGeohash != null) {
-            geohashAliasCache[convKey] = senderPubkey
-            geohashConversationCache[convKey] = sourceGeohash
+        if (packet.content.length > BitchatMessage.MAX_CONTENT_CHARS) {
+            println("ChatRepo: Dropped private message with content length ${packet.content.length}")
+            return
         }
+        val convKey = conversationKeyFor(senderPubkey)
 
         // Try to resolve display name from multiple sources:
         // 1. Cached display names from previous interactions
@@ -1060,7 +1100,13 @@ class ChatRepo(
             )
         )
 
-        addPrivateMessage(convKey, message, markUnread = selectedPrivatePeer != convKey, sendReadReceipt = true)
+        addPrivateMessage(
+            convKey,
+            message,
+            markUnread = selectedPrivatePeer != convKey,
+            sendReadReceipt = true,
+            route = PrivateRoute(senderPubkey, sourceGeohash),
+        )
         maybeSendDeliveryAck(packet.messageID, convKey)
     }
 
@@ -1100,61 +1146,187 @@ class ChatRepo(
         )
     }
 
+    /**
+     * Adds a private message to its chat and keeps the chats within their limits ([MessageLimits]).
+     *
+     * A message longer than the limit is not kept, and nothing else happens for it. The message that
+     * was just added is never the one dropped: a full chat drops its oldest ARRIVAL, and the strangers'
+     * budget ([enforceStrangerMessageBudget]) passes over it. So a receipt is only ever sent for a
+     * message that is there.
+     *
+     * [route] is where a Nostr chat is answered. It is recorded here, under the lock that also removes
+     * it with an emptied chat, and nowhere before: recorded ahead of the message, another handler
+     * could remove the chat and its key in between and leave a chat that cannot be answered. A message
+     * that opens no chat (a favourite notification, an over-long one) so records nothing.
+     */
     private fun addPrivateMessage(
         peerID: String,
         message: BitchatMessage,
         markUnread: Boolean,
-        sendReadReceipt: Boolean
+        sendReadReceipt: Boolean,
+        route: PrivateRoute? = null,
     ) {
-        val messages = privateChats.getOrPut(peerID) { mutableListOf() }
-        if (messages.any { it.id == message.id }) return
+        if (!messageLimits.accepts(message)) {
+            println("ChatRepo: Dropped private message with content length ${message.content.length}")
+            return
+        }
+        val limitedMessage = messageLimits.notLaterThan(message, clock.now())
+        var unreadChanged = false
+        var readReceiptDue = false
 
-        messages.add(message)
-        messages.sortBy { it.timestamp }
+        val added = synchronized(privateChatsLock) {
+            val messages = privateChats.getOrPut(peerID) { mutableListOf() }
+            if (route != null) {
+                knownPrivatePeers[peerID] = route.pubkeyHex
+                if (route.sourceGeohash != null) {
+                    geohashAliasCache[peerID] = route.pubkeyHex
+                    geohashConversationCache[peerID] = route.sourceGeohash
+                }
+            }
+            if (messages.any { it.id == limitedMessage.id }) return@synchronized false
+            messages.add(limitedMessage)
+
+            val isCurrentlyViewing = selectedPrivatePeer == peerID
+            val lastReadTimestamp = lastReadTimestamps[peerID.lowercase()]
+            val messageTimestampMillis = limitedMessage.timestamp.toEpochMilliseconds()
+            val wasAlreadyRead = lastReadTimestamp != null && messageTimestampMillis <= lastReadTimestamp
+
+            if (markUnread && !isCurrentlyViewing && !wasAlreadyRead) {
+                unreadPrivatePeers.add(peerID)
+                unreadPrivateMessageIds.getOrPut(peerID) { mutableSetOf() }.add(limitedMessage.id)
+                latestUnreadPrivatePeer = peerID
+                unreadChanged = true
+            } else if (sendReadReceipt || isCurrentlyViewing) {
+                readReceiptDue = true
+            }
+
+            unreadChanged = removeDroppedPrivateMessages(peerID, messageLimits.trim(messages)) || unreadChanged
+            if (peerID !in writtenPrivateChats) {
+                unreadChanged = enforceStrangerMessageBudget(justAdded = limitedMessage) || unreadChanged
+            }
+            true
+        }
+        if (!added) return
 
         coroutineScopeFacade.nostrScope.launch {
-            chatEventBus.update(ChatEvent.PrivateChatsUpdated)
+            if (readReceiptDue) sendReadReceipt(limitedMessage.id, readerPeerID = null, toPeerID = peerID)
         }
-
-        val isCurrentlyViewing = selectedPrivatePeer == peerID
-
-        val lastReadTimestamp = lastReadTimestamps[peerID.lowercase()]
-        val messageTimestampMillis = message.timestamp.toEpochMilliseconds()
-        val wasAlreadyRead = lastReadTimestamp != null && messageTimestampMillis <= lastReadTimestamp
-
-        if (markUnread && !isCurrentlyViewing && !wasAlreadyRead) {
-            unreadPrivatePeers.add(peerID)
-            unreadPrivateMessageIds.getOrPut(peerID) { mutableSetOf() }.add(message.id)
-            latestUnreadPrivatePeer = peerID
-            coroutineScopeFacade.nostrScope.launch {
+        coroutineScopeFacade.nostrScope.launch {
+            chatEventBus.update(ChatEvent.PrivateChatsUpdated)
+            if (unreadChanged) {
                 chatEventBus.update(ChatEvent.UnreadPrivatePeersUpdated)
                 chatEventBus.update(ChatEvent.LatestUnreadPrivatePeerChanged)
-            }
-        } else if (sendReadReceipt || isCurrentlyViewing) {
-            coroutineScopeFacade.nostrScope.launch {
-                sendReadReceipt(message.id, readerPeerID = null, toPeerID = peerID)
             }
         }
     }
 
-    private fun updateDeliveryStatus(convKey: String, messageId: String, status: DeliveryStatus) {
-        val messages = privateChats[convKey] ?: return
-        var updated = false
-        val newMessages = messages.map { msg ->
-            if (msg.id == messageId) {
-                updated = true
-                msg.copy(deliveryStatus = status)
-            } else {
-                msg
+    /** The Nostr key a private chat is answered with, and the geohash it was opened from, if any. */
+    private class PrivateRoute(val pubkeyHex: String, val sourceGeohash: String?)
+
+    /**
+     * Forgets that [dropped] were unread, and the peer with them when none of its unread messages is
+     * left. Returns whether the unread peers changed. Called with [privateChatsLock] held.
+     */
+    private fun removeDroppedPrivateMessages(peerID: String, dropped: List<BitchatMessage>): Boolean {
+        if (dropped.isEmpty()) return false
+        val unreadIds = unreadPrivateMessageIds[peerID] ?: return false
+        unreadIds.removeAll(dropped.mapTo(mutableSetOf()) { it.id })
+        if (unreadIds.isNotEmpty()) return false
+        unreadPrivateMessageIds.remove(peerID)
+        unreadPrivatePeers.remove(peerID)
+        latestUnreadPrivatePeer = resolveLatestUnreadPeer()
+        return true
+    }
+
+    /**
+     * Keeps the private chats the user has not written in within the budget they share: a number of
+     * messages and a number of characters ([MessageLimits]). Any Nostr key can open a private chat by
+     * sending one message, so how many of these chats there are is not the user's choice.
+     *
+     * While either number is passed, the largest of those chats (by characters when it is characters
+     * that are over, else by messages; among equals the chat that was opened first) loses its oldest
+     * arrival, and a chat left empty is removed with what was kept about it. A flood from one key so
+     * costs that key's own messages first, and many keys can only push out one another. [justAdded],
+     * the message that brought this about, is passed over: a new message is never the one to go. A chat
+     * the user has written in is not looked at, whatever is sent into it. The chat in
+     * [selectedPrivatePeer] (the one open as a mesh private chat) can lose messages like any other,
+     * but it stays, with the key kept for it: the first message written in it must still have
+     * somewhere to go. A chat open as a Nostr DM is not tracked there and can be removed while open:
+     * its channel carries the key it is answered with, and every message that arrives in it records
+     * that key again together with the message ([addPrivateMessage]).
+     *
+     * Returns whether the unread peers changed. Called with [privateChatsLock] held.
+     */
+    private fun enforceStrangerMessageBudget(justAdded: BitchatMessage): Boolean {
+        var messages = 0
+        var chars = 0L
+        for ((peerID, chat) in privateChats) {
+            if (peerID in writtenPrivateChats) continue
+            messages += chat.size
+            for (message in chat) chars += message.content.length
+        }
+        var unreadChanged = false
+
+        while (messages > messageLimits.maxStrangerMessages || chars > messageLimits.maxStrangerChars) {
+            val byChars = chars > messageLimits.maxStrangerChars
+            var largest: Map.Entry<String, MutableList<BitchatMessage>>? = null
+            var largestSize = -1L
+            // In the order the chats were opened, and only a strictly larger one takes over: among
+            // equals the chat opened first is the one that gives way.
+            for (entry in privateChats.entries) {
+                if (entry.key in writtenPrivateChats || entry.value.isEmpty()) continue
+                if (entry.value.first() === justAdded) continue
+                val size = if (byChars) entry.value.sumOf { it.content.length.toLong() } else entry.value.size.toLong()
+                if (size > largestSize) {
+                    largest = entry
+                    largestSize = size
+                }
             }
+            val entry = largest ?: break
+            val dropped = entry.value.removeAt(0)
+            messages--
+            chars -= dropped.content.length
+            unreadChanged = removeDroppedPrivateMessages(entry.key, listOf(dropped)) || unreadChanged
+            if (entry.value.isEmpty() && entry.key != selectedPrivatePeer) {
+                privateChats.remove(entry.key)
+                val wasUnreadPeer = unreadPrivatePeers.remove(entry.key)
+                val hadUnreadIds = unreadPrivateMessageIds.remove(entry.key) != null
+                if (wasUnreadPeer || hadUnreadIds) {
+                    latestUnreadPrivatePeer = resolveLatestUnreadPeer()
+                    unreadChanged = true
+                }
+                knownPrivatePeers.remove(entry.key)
+                geohashAliasCache.remove(entry.key)
+                geohashConversationCache.remove(entry.key)
+            }
+        }
+        return unreadChanged
+    }
+
+    private fun updateDeliveryStatus(convKey: String, messageId: String, status: DeliveryStatus) {
+        val updated = synchronized(privateChatsLock) {
+            val messages = privateChats[convKey] ?: return
+            val index = messages.indexOfFirst { it.id == messageId }
+            if (index >= 0) messages[index] = messages[index].copy(deliveryStatus = status)
+            index >= 0
         }
 
         if (updated) {
-            privateChats[convKey] = newMessages.toMutableList()
             coroutineScopeFacade.nostrScope.launch {
                 chatEventBus.update(ChatEvent.PrivateChatsUpdated)
             }
         }
+    }
+
+    /**
+     * Drops the oldest mesh messages past the limits. A row that goes takes its cross-transport record
+     * with it, so the other transport's copy of it, should it still come, is shown rather than hidden
+     * behind a row that is no longer there. A dropped file row leaves its received file on disk.
+     * Called with [meshChannelMessagesMutex] held.
+     */
+    private fun trimMeshMessages() {
+        val dropped = messageLimits.trim(meshChannelMessages)
+        if (dropped.isNotEmpty()) crossTransportTwins.forget(dropped.map { it.id })
     }
 
     private suspend fun markMeshMessageFailed(messageId: String, reason: String) {
@@ -1240,7 +1412,10 @@ class ChatRepo(
         content: String,
         toPeerID: String,
         recipientNickname: String,
-    ): Unit = sendPrivate(content, toPeerID, recipientNickname, BitchatMessageType.Message)
+    ): Unit {
+        requireSendable(content)
+        sendPrivate(content, toPeerID, recipientNickname, BitchatMessageType.Message)
+    }
 
     /**
      * [route] is the DM this line was sent in, when the caller knows it (sendMessage does). Without
@@ -1271,6 +1446,7 @@ class ChatRepo(
             senderPeerID = mesh.myPeerID,
             deliveryStatus = DeliveryStatus.Sent
         )
+        synchronized(privateChatsLock) { writtenPrivateChats.add(toPeerID) }
         addPrivateMessage(toPeerID, localMessage, markUnread = false, sendReadReceipt = false)
 
         val currentChannel = route ?: userPreferences.getUserState()
@@ -1420,7 +1596,7 @@ class ChatRepo(
     private fun resolveNostrPublicKey(peerID: String): String? {
         try {
             if (peerID.startsWith("nostr_")) {
-                val hex = knownPrivatePeers[peerID] ?: return null
+                val hex = synchronized(privateChatsLock) { knownPrivatePeers[peerID] } ?: return null
                 return hexToNpub(hex)
             }
 
@@ -1464,11 +1640,9 @@ class ChatRepo(
                 }
             }
 
-            for ((convKey, pubkeyHex) in knownPrivatePeers) {
-                if (pubkeyHex == npubHex) {
-                    return convKey
-                }
-            }
+            synchronized(privateChatsLock) {
+                knownPrivatePeers.entries.firstOrNull { it.value == npubHex }?.key
+            }?.let { return it }
 
             return null
         } catch (e: Exception) {
@@ -1671,21 +1845,25 @@ class ChatRepo(
             }
 
             is Channel.MeshDM -> {
-                privateChats[channel.peerID]?.clear()
-                unreadPrivatePeers.remove(channel.peerID)
-                unreadPrivateMessageIds.remove(channel.peerID)
-                if (latestUnreadPrivatePeer == channel.peerID) {
-                    latestUnreadPrivatePeer = resolveLatestUnreadPeer()
+                synchronized(privateChatsLock) {
+                    privateChats[channel.peerID]?.clear()
+                    unreadPrivatePeers.remove(channel.peerID)
+                    unreadPrivateMessageIds.remove(channel.peerID)
+                    if (latestUnreadPrivatePeer == channel.peerID) {
+                        latestUnreadPrivatePeer = resolveLatestUnreadPeer()
+                    }
                 }
                 chatEventBus.update(ChatEvent.PrivateChatsUpdated)
             }
 
             is Channel.NostrDM -> {
-                privateChats[channel.peerID]?.clear()
-                unreadPrivatePeers.remove(channel.peerID)
-                unreadPrivateMessageIds.remove(channel.peerID)
-                if (latestUnreadPrivatePeer == channel.peerID) {
-                    latestUnreadPrivatePeer = resolveLatestUnreadPeer()
+                synchronized(privateChatsLock) {
+                    privateChats[channel.peerID]?.clear()
+                    unreadPrivatePeers.remove(channel.peerID)
+                    unreadPrivateMessageIds.remove(channel.peerID)
+                    if (latestUnreadPrivatePeer == channel.peerID) {
+                        latestUnreadPrivatePeer = resolveLatestUnreadPeer()
+                    }
                 }
                 chatEventBus.update(ChatEvent.PrivateChatsUpdated)
             }
@@ -1714,7 +1892,7 @@ class ChatRepo(
 
     override suspend fun storePersonDataForDM(peerID: String, fullPubkey: String, sourceGeohash: String?, displayName: String?) =
         withContext(coroutinesContextFacade.io) {
-            knownPrivatePeers[peerID] = fullPubkey
+            synchronized(privateChatsLock) { knownPrivatePeers[peerID] = fullPubkey }
             if (sourceGeohash != null) {
                 geohashAliasCache[peerID] = fullPubkey
                 geohashConversationCache[peerID] = sourceGeohash
@@ -1725,7 +1903,7 @@ class ChatRepo(
         }
 
     override suspend fun getFullPubkey(peerID: String): String? = withContext(coroutinesContextFacade.io) {
-        knownPrivatePeers[peerID]
+        synchronized(privateChatsLock) { knownPrivatePeers[peerID] }
     }
 
     override suspend fun getSourceGeohash(peerID: String): String? = withContext(coroutinesContextFacade.io) {
@@ -1735,7 +1913,7 @@ class ChatRepo(
     override suspend fun getDisplayName(peerID: String): String? = withContext(coroutinesContextFacade.io) {
         peerDisplayNames[peerID]?.let { return@withContext it }
 
-        val fullPubkey = knownPrivatePeers[peerID]
+        val fullPubkey = synchronized(privateChatsLock) { knownPrivatePeers[peerID] }
         if (fullPubkey != null) {
             participantTracker.getNicknameByPubkey(fullPubkey)?.let { nickname ->
                 savePeerDisplayName(peerID, nickname)
@@ -1759,6 +1937,7 @@ class ChatRepo(
         sender: String,
         messageType: BitchatMessageType
     ) = withContext(coroutinesContextFacade.io) {
+        requireSendable(content)
         println("📬 ChatRepo.sendMessage: channel=$channel, sender=$sender, contentLen=${content.length}")
         when (channel) {
             is Channel.Mesh -> {
@@ -1800,16 +1979,24 @@ class ChatRepo(
         }
     }
 
+    private fun requireSendable(content: String) {
+        require(content.length <= BitchatMessage.MAX_CONTENT_CHARS) {
+            "message is longer than ${BitchatMessage.MAX_CONTENT_CHARS} characters"
+        }
+    }
+
     private fun initializePrivateDMIfNeeded(peerID: String) {
-        if (!privateChats.containsKey(peerID)) {
-            println("🆕 Initializing new DM: $peerID")
-            privateChats[peerID] = mutableListOf()
+        synchronized(privateChatsLock) {
+            if (!privateChats.containsKey(peerID)) {
+                println("🆕 Initializing new DM: $peerID")
+                privateChats[peerID] = mutableListOf()
+            }
         }
 
         val person = findPersonByPeerID(peerID)
 
         if (person != null) {
-            knownPrivatePeers[peerID] = person.fullPubkey
+            synchronized(privateChatsLock) { knownPrivatePeers[peerID] = person.fullPubkey }
 
             if (person.sourceGeohash != null) {
                 geohashAliasCache[peerID] = person.fullPubkey
@@ -2054,6 +2241,10 @@ class ChatRepo(
             val content = packetString.substring(colonIndex + 1)
 
             println("📻 ChatRepo: LoRa message from '$nickname': ${logBody(content)}")
+            if (content.length > BitchatMessage.MAX_CONTENT_CHARS) {
+                println("ChatRepo: Dropped LoRa message with content length ${content.length}")
+                return@withContext
+            }
 
             // Create message for mesh channel
             val now = clock.now()
@@ -2090,10 +2281,11 @@ class ChatRepo(
             // null: the BLE twin is already shown, so this copy is dropped (the first copy to arrive is
             // the one shown). Otherwise the new row count.
             val total = meshChannelMessagesMutex.withLock {
-                if (senderIsUnambiguous && crossTransportTwins.onLoRa(nickname, peerId, content, now)) {
+                if (senderIsUnambiguous && crossTransportTwins.onLoRa(nickname, peerId, content, now, rowId = messageID)) {
                     null
                 } else {
                     meshChannelMessages.add(message)
+                    trimMeshMessages()
                     meshChannelMessages.size
                 }
             } ?: return@withContext
@@ -2110,6 +2302,10 @@ class ChatRepo(
     }
 
     override fun didReceiveMessage(message: BitchatMessage) {
+        if (!messageLimits.accepts(message)) {
+            println("Bluetooth: Dropped mesh message with content length ${message.content.length}")
+            return
+        }
         if (message.isPrivate) {
             println("Bluetooth: Dropped unauthenticated private mesh message id=${message.id} from ${message.senderPeerID}")
             return
@@ -2137,23 +2333,18 @@ class ChatRepo(
                             message.content,
                             clock.now(),
                         )
-                    if (isNew) meshChannelMessages.add(message)
+                    if (isNew) {
+                        meshChannelMessages.add(message)
+                        trimMeshMessages()
+                    }
                     isNew
                 }
                 if (changed) {
                     chatEventBus.update(ChatEvent.MeshMessagesUpdated)
                 }
-            } else if (message.channel != null) {
-                val flow = geohashMessagesFlows.getOrPut(message.channel!!) {
-                    MutableStateFlow(emptyList())
-                }
-                val currentMessages = flow.value.toMutableList()
-                currentMessages.add(message)
-                flow.value = currentMessages
-
-                coroutineScopeFacade.nostrScope.launch {
-                    chatEventBus.update(ChatEvent.GeohashMessagesUpdated(message.channel!!))
-                }
+            } else {
+                println("Bluetooth: Dropped a mesh message that names a channel")
+                return@launch
             }
 
             chatEventBus.update(ChatEvent.MessageReceived)
@@ -2162,6 +2353,10 @@ class ChatRepo(
 
     override fun didReceiveAuthenticatedPrivateMessage(message: BitchatMessage) {
         val peerID = message.senderPeerID
+        if (!messageLimits.accepts(message)) {
+            println("Bluetooth: Dropped authenticated private mesh message with content length ${message.content.length}")
+            return
+        }
         if (!message.isPrivate || peerID == null) {
             println("Bluetooth: Dropped malformed authenticated private mesh message id=${message.id}")
             return
@@ -2201,17 +2396,19 @@ class ChatRepo(
             meshChannelMessages.addAll(updatedMeshMessages)
         }
 
-        privateChats[peerID]?.let { chatMessages ->
-            val updatedPrivateMessages = chatMessages.map { message ->
-                if (message.sender == "Unknown") {
-                    updatedCount++
-                    message.copy(sender = newNickname)
-                } else {
-                    message
+        synchronized(privateChatsLock) {
+            privateChats[peerID]?.let { chatMessages ->
+                val updatedPrivateMessages = chatMessages.map { message ->
+                    if (message.sender == "Unknown") {
+                        updatedCount++
+                        message.copy(sender = newNickname)
+                    } else {
+                        message
+                    }
                 }
+                chatMessages.clear()
+                chatMessages.addAll(updatedPrivateMessages)
             }
-            chatMessages.clear()
-            chatMessages.addAll(updatedPrivateMessages)
         }
 
         if (updatedCount > 0) {
@@ -2375,7 +2572,17 @@ class ChatRepo(
                 )
 
                 if (!isPrivate) {
-                    meshChannelMessagesMutex.withLock { meshChannelMessages.add(bitchatMessage) }
+                    val stored = meshChannelMessagesMutex.withLock {
+                        if (!messageLimits.accepts(bitchatMessage)) {
+                            println("ChatRepo: Dropped file message with content length ${bitchatMessage.content.length}")
+                            false
+                        } else {
+                            meshChannelMessages.add(bitchatMessage)
+                            trimMeshMessages()
+                            true
+                        }
+                    }
+                    if (!stored) return@launch
                     chatEventBus.update(ChatEvent.MeshMessagesUpdated)
                     println("ChatRepo: Added file message to mesh channel")
                 } else {
@@ -2463,15 +2670,21 @@ class ChatRepo(
 
     override suspend fun getNamedChannelMessages(channelName: String): List<BitchatMessage> = withContext(coroutinesContextFacade.io) {
         val normalized = normalizeChannelName(channelName)
-        namedChannelMessages[normalized]?.toList().orEmpty()
+        // Kept in arrival order (the oldest arrival is what a full chat drops), shown by timestamp.
+        namedChannelMessages[normalized]?.toList().orEmpty().sortedBy { it.timestamp }
     }
 
     override suspend fun addNamedChannelMessage(channelName: String, message: BitchatMessage) = withContext(coroutinesContextFacade.io) {
+        if (!messageLimits.accepts(message)) {
+            println("ChatRepo: Dropped named channel message with content length ${message.content.length}")
+            return@withContext
+        }
         val normalized = normalizeChannelName(channelName)
         val messages = namedChannelMessages.getOrPut(normalized) { mutableListOf() }
-        if (messages.none { it.id == message.id }) {
-            messages.add(message)
-            messages.sortBy { it.timestamp }
+        val limitedMessage = messageLimits.notLaterThan(message, clock.now())
+        if (messages.none { it.id == limitedMessage.id }) {
+            messages.add(limitedMessage)
+            messageLimits.trim(messages)
             chatEventBus.update(ChatEvent.NamedChannelMessagesUpdated(normalized))
         }
     }
@@ -2741,6 +2954,7 @@ class ChatRepo(
         nickname: String,
         messageType: BitchatMessageType = BitchatMessageType.Message
     ) = withContext(coroutinesContextFacade.io) {
+        requireSendable(content)
         try {
             val normalizedName = normalizeChannelName(channelName)
             println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -2833,12 +3047,15 @@ class ChatRepo(
         }
         meshPeers.value = emptyList()
 
-        privateChats.clear()
-        unreadPrivatePeers.clear()
-        unreadPrivateMessageIds.clear()
-        latestUnreadPrivatePeer = null
+        synchronized(privateChatsLock) {
+            privateChats.clear()
+            writtenPrivateChats.clear()
+            unreadPrivatePeers.clear()
+            unreadPrivateMessageIds.clear()
+            latestUnreadPrivatePeer = null
+            knownPrivatePeers.clear()
+        }
         selectedPrivatePeer = null
-        knownPrivatePeers.clear()
         peerDisplayNames.clear()
         lastReadTimestamps.clear()
         handledGiftWraps.clear()

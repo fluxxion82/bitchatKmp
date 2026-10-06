@@ -26,7 +26,8 @@ import kotlin.time.Instant
 internal class CrossTransportTwins(private val window: Duration = 10.seconds) {
     private val unpairedMesh = mutableListOf<Arrival>()
     private val unpairedLoRa = mutableListOf<Arrival>()
-    private val droppedMeshIds = mutableMapOf<String, Instant>()
+    // Mesh ids dropped because their LoRa twin was shown, with when and which row that was.
+    private val droppedMeshIds = mutableMapOf<String, DroppedFor>()
 
     /**
      * A BLE copy with the mesh message [id] arrived. True when its LoRa twin is already shown, so
@@ -35,15 +36,34 @@ internal class CrossTransportTwins(private val window: Duration = 10.seconds) {
     fun onMesh(id: String, sender: String, peerId: String?, content: String, now: Instant): Boolean {
         prune(now)
         if (id in droppedMeshIds) return true
-        val dropped = pair(Arrival(sender, peerId, content, now), shown = unpairedLoRa, own = unpairedMesh)
-        if (dropped) droppedMeshIds[id] = now
-        return dropped
+        val twin = pair(Arrival(sender, peerId, content, now, rowId = id), shown = unpairedLoRa, own = unpairedMesh)
+        if (twin != null) droppedMeshIds[id] = DroppedFor(twin.rowId, now)
+        bound()
+        return twin != null
     }
 
-    /** A LoRa copy arrived. True when its BLE twin is already shown, so this copy must not be added. */
-    fun onLoRa(sender: String, peerId: String?, content: String, now: Instant): Boolean {
+    /**
+     * A LoRa copy arrived. True when its BLE twin is already shown, so this copy must not be added.
+     * [rowId] is the id of the row this copy becomes when it is shown, for [forget].
+     */
+    fun onLoRa(sender: String, peerId: String?, content: String, now: Instant, rowId: String? = null): Boolean {
         prune(now)
-        return pair(Arrival(sender, peerId, content, now), shown = unpairedMesh, own = unpairedLoRa)
+        val twin = pair(Arrival(sender, peerId, content, now, rowId), shown = unpairedMesh, own = unpairedLoRa)
+        bound()
+        return twin != null
+    }
+
+    /**
+     * The rows with these ids are no longer shown (the channel dropped them as its oldest): their
+     * arrivals are forgotten, and so is every mesh id that was dropped in favour of one of them, so a
+     * copy that still comes is shown instead of being hidden behind nothing.
+     */
+    fun forget(rowIds: Collection<String>) {
+        if (rowIds.isEmpty()) return
+        val gone = rowIds.toSet()
+        unpairedMesh.removeAll { it.rowId in gone }
+        unpairedLoRa.removeAll { it.rowId in gone }
+        droppedMeshIds.entries.removeAll { it.value.shownRowId in gone }
     }
 
     /** Forgets every arrival. Clearing the channel calls this, so no message text outlives it here. */
@@ -53,22 +73,35 @@ internal class CrossTransportTwins(private val window: Duration = 10.seconds) {
         droppedMeshIds.clear()
     }
 
-    /** Consumes the oldest twin among [shown], or remembers [arrival] in [own] when there is none. */
-    private fun pair(arrival: Arrival, shown: MutableList<Arrival>, own: MutableList<Arrival>): Boolean {
+    /**
+     * Consumes and returns the oldest twin among [shown], or remembers [arrival] in [own] and returns
+     * null when there is none.
+     */
+    private fun pair(arrival: Arrival, shown: MutableList<Arrival>, own: MutableList<Arrival>): Arrival? {
         val twin = shown.firstOrNull { it.isTwinOf(arrival) }
-        return if (twin != null) {
-            shown.remove(twin)
-            true
-        } else {
-            own += arrival
-            false
+        if (twin != null) shown.remove(twin) else own += arrival
+        return twin
+    }
+
+    /**
+     * Keeps what is remembered small whatever arrives inside the window: past [MAX_ARRIVALS] arrivals
+     * or [MAX_ARRIVAL_CHARS] characters on one side, the oldest are forgotten. Forgetting one costs at
+     * most a duplicate row; it never hides a message.
+     */
+    private fun bound() {
+        for (arrivals in listOf(unpairedMesh, unpairedLoRa)) {
+            var chars = arrivals.sumOf { it.content.length.toLong() }
+            while (arrivals.size > MAX_ARRIVALS || chars > MAX_ARRIVAL_CHARS) {
+                chars -= arrivals.removeAt(0).content.length
+            }
         }
+        while (droppedMeshIds.size > MAX_ARRIVALS) droppedMeshIds.remove(droppedMeshIds.keys.first())
     }
 
     private fun prune(now: Instant) {
         unpairedMesh.removeAll { now - it.arrivedAt > window }
         unpairedLoRa.removeAll { now - it.arrivedAt > window }
-        droppedMeshIds.entries.removeAll { now - it.value > window }
+        droppedMeshIds.entries.removeAll { now - it.value.at > window }
     }
 
     private data class Arrival(
@@ -76,6 +109,7 @@ internal class CrossTransportTwins(private val window: Duration = 10.seconds) {
         val peerId: String?,
         val content: String,
         val arrivedAt: Instant,
+        val rowId: String? = null,
     ) {
         fun isTwinOf(other: Arrival): Boolean {
             if (content != other.content) return false
@@ -86,5 +120,12 @@ internal class CrossTransportTwins(private val window: Duration = 10.seconds) {
                 sender == other.sender
             }
         }
+    }
+
+    private class DroppedFor(val shownRowId: String?, val at: Instant)
+
+    private companion object {
+        const val MAX_ARRIVALS = 128
+        const val MAX_ARRIVAL_CHARS = 1_000_000L
     }
 }

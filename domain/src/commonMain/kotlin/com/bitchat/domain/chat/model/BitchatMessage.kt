@@ -24,4 +24,12 @@ data class BitchatMessage(
     val powDifficulty: Int? = null,
     val filePacket: BitchatFilePacket? = null,
     val isMining: Boolean = false
-)
+) {
+    companion object {
+        /**
+         * The longest content sent or accepted. Upstream's clients use the same number; file
+         * messages carry a path as content, which is short.
+         */
+        const val MAX_CONTENT_CHARS: Int = 60_000
+    }
+}
