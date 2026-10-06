@@ -61,6 +61,7 @@ internal fun chatRepo(
     participantTracker: NostrParticipantTracker = mockk(relaxed = true),
     configureNostrClient: (NostrClient) -> Unit = {},
     userEventBus: UserEventBus = mockk<UserEventBus>(relaxed = true).also { every { it.events() } returns emptyFlow() },
+    nostr: NostrTransport = mockk(relaxed = true),
 ): ChatRepo {
     val contextFacade = object : CoroutinesContextFacade {
         override val io: CoroutineContext = dispatcher
@@ -107,7 +108,7 @@ internal fun chatRepo(
         coroutineScopeFacade = scopeFacade,
         coroutinesContextFacade = contextFacade,
         mesh = mesh,
-        nostr = mockk<NostrTransport>(relaxed = true),
+        nostr = nostr,
         nostrPreferences = nostrPreferences,
         nostrClient = nostrClient,
         nostrRelay = nostrRelay,

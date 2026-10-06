@@ -65,6 +65,38 @@ class DmViewModelSendToTest : BaseViewModelTest() {
     }
 
     @Test
+    fun `a line too long for one private message is refused at once, so the draft stays`() {
+        val viewModel = buildViewModel()
+        // One byte more than a private message carries: the repository would refuse it too, but
+        // only after the caller had cleared its editor.
+        val tooLong = "x".repeat(256)
+
+        for (channel in listOf(Channel.MeshDM("b0b"), Channel.NostrDM("nostr_c3c3c3c3c3c3c3c3", "npub1friend", null))) {
+            assertEquals(false, viewModel.sendTo(channel, tooLong))
+            assertEquals("Not sent: a private message can be at most 255 bytes, this one is 256", viewModel.state.value.errorMessage)
+            viewModel.clearError()
+        }
+        instantExecutorRule.scheduler.runCurrent()
+
+        coVerify(exactly = 0) { sendMessage.invoke(any()) }
+        assertEquals(false, viewModel.state.value.isSending)
+    }
+
+    @Test
+    fun `the longest private message is taken, measured in bytes after trimming`() {
+        val viewModel = buildViewModel()
+        val bob = Channel.MeshDM("b0b", "bob")
+        // 85 characters of three bytes each: 255 bytes.
+        val longest = Char(0x20AC).toString().repeat(85)
+
+        assertEquals(true, viewModel.sendTo(bob, "  $longest  "))
+        instantExecutorRule.scheduler.runCurrent()
+
+        coVerify(exactly = 1) { sendMessage.invoke(SendMessage.Params(content = longest, channel = bob, sender = "anon")) }
+        assertEquals(null, viewModel.state.value.errorMessage)
+    }
+
+    @Test
     fun `a blank line sends nothing`() {
         val viewModel = buildViewModel()
         viewModel.sendTo(Channel.MeshDM("b0b"), "   ")

@@ -538,8 +538,22 @@ class BluetoothMeshService(
         }
     }
 
-    fun sendPrivateMessage(content: String, recipientPeerID: String, recipientNickname: String, messageID: String? = null) {
+    /**
+     * False when the message does not fit the private message encoding. That is decided here, on
+     * the caller's thread, before anything is started for the message: nothing goes out in its
+     * place (an empty payload would cost the session a nonce and the mesh a packet no receiver
+     * can read).
+     */
+    fun sendPrivateMessage(content: String, recipientPeerID: String, recipientNickname: String, messageID: String? = null): Boolean {
         noiseEncryption.markChosenByUser(recipientPeerID)
+        val messageData = buildPrivateMessagePayload(content, messageID)
+        if (messageData == null) {
+            logError(
+                "BluetoothMeshService",
+                "Private message for $recipientPeerID cannot be encoded (${content.encodeToByteArray().size} bytes), not sent"
+            )
+            return false
+        }
         serviceScope.launch {
             try {
                 if (!securityManager.hasEstablishedSession(recipientPeerID)) {
@@ -551,8 +565,6 @@ class BluetoothMeshService(
                     // ChatRepo queues messages and initiates handshake once
                     return@launch
                 }
-
-                val messageData = buildPrivateMessagePayload(content, messageID)
 
                 val encryptedPayload = noiseEncryption.encrypt(recipientPeerID, messageData)
                 if (encryptedPayload == null) {
@@ -574,15 +586,17 @@ class BluetoothMeshService(
                 logError("BluetoothMeshService", "Error sending private message: ${e.message}")
             }
         }
+        return true
     }
 
-    private fun buildPrivateMessagePayload(content: String, messageID: String?): ByteArray {
+    /** Null when the message does not fit the encoding: id and content have one-byte lengths. */
+    private fun buildPrivateMessagePayload(content: String, messageID: String?): ByteArray? {
         val packet = PrivateMessagePacket(
             messageID = messageID ?: "",
             content = content
         )
 
-        val tlvData = packet.encode() ?: return ByteArray(0)
+        val tlvData = packet.encode() ?: return null
         val noisePayload = NoisePayload(
             type = NoisePayloadType.PRIVATE_MESSAGE,
             data = tlvData

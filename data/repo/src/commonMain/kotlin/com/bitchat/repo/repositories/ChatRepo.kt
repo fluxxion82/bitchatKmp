@@ -29,6 +29,7 @@ import com.bitchat.domain.chat.model.ChannelTransport
 import com.bitchat.domain.chat.model.ChatEvent
 import com.bitchat.domain.chat.model.DeliveryStatus
 import com.bitchat.domain.chat.model.LoRaPerson
+import com.bitchat.domain.chat.model.PrivateMessageText
 import com.bitchat.domain.chat.repository.ChatRepository
 import com.bitchat.domain.connectivity.model.BluetoothConnectionEvent
 import com.bitchat.domain.location.eventbus.LocationEventBus
@@ -1474,6 +1475,7 @@ class ChatRepo(
         messageType: BitchatMessageType,
         route: Channel? = null,
     ): Unit = withContext(coroutinesContextFacade.io) {
+        requireSendablePrivately(content, messageType)
         val senderName = when (val user = userPreferences.getAppUser()) {
             is AppUser.ActiveAnonymous -> user.name
             AppUser.Anonymous -> "anon"
@@ -1985,6 +1987,7 @@ class ChatRepo(
             }
             is Channel.Location -> sendGeohashMessage(content, channel.geohash, sender, messageType)
             is Channel.NostrDM -> {
+                requireSendablePrivately(content, messageType)
                 initializePrivateDMIfNeeded(channel.peerID)
                 sendPrivate(
                     content = content,
@@ -1996,6 +1999,7 @@ class ChatRepo(
             }
 
             is Channel.MeshDM -> {
+                requireSendablePrivately(content, messageType)
                 initializePrivateDMIfNeeded(channel.peerID)
                 sendPrivate(
                     content = content,
@@ -2022,6 +2026,16 @@ class ChatRepo(
         require(content.length <= BitchatMessage.MAX_CONTENT_CHARS) {
             "message is longer than ${BitchatMessage.MAX_CONTENT_CHARS} characters"
         }
+    }
+
+    /**
+     * A private text that the private message encoding cannot carry is refused here, before it is
+     * shown, queued or handed to a transport: no transport can send it, and none reports that.
+     * An image or a voice note carries a path as content and travels as a file.
+     */
+    private fun requireSendablePrivately(content: String, messageType: BitchatMessageType) {
+        if (messageType == BitchatMessageType.Image || messageType == BitchatMessageType.Audio) return
+        PrivateMessageText.refusal(content)?.let { throw IllegalArgumentException(it) }
     }
 
     private fun initializePrivateDMIfNeeded(peerID: String) {

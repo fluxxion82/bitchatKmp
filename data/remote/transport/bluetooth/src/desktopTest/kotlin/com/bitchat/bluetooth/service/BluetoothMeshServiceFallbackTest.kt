@@ -167,6 +167,26 @@ class BluetoothMeshServiceFallbackTest {
     }
 
     @Test
+    fun aPrivateMessageThatCannotBeEncodedIsRefusedBeforeAnythingIsStartedForIt() = runTest {
+        val fixture = FallbackServiceFixture()
+        fixture.establish()
+
+        // One byte more than the one-byte length of the private message encoding can say. The
+        // answer comes on the caller's thread: no coroutine exists that could still send for it.
+        assertFalse(fixture.service.sendPrivateMessage("x".repeat(256), fixture.remoteID, "remote", "too-long"))
+
+        // So the longest that fits is the first thing this session encrypts, and reads back whole.
+        val longest = "x".repeat(255)
+        assertTrue(fixture.service.sendPrivateMessage(longest, fixture.remoteID, "remote", "longest"))
+        val encrypted = fixture.connection.awaitEncryptedFrom(fixture.service.myPeerID)
+        assertContentEquals(ByteArray(4), encrypted.payload.copyOfRange(0, 4), "the session's first nonce")
+        assertContentEquals(
+            NoisePayload(NoisePayloadType.PRIVATE_MESSAGE, PrivateMessagePacket("longest", longest).encode()!!).encode(),
+            assertNotNull(fixture.remoteNoise.decrypt(fixture.service.myPeerID, encrypted.payload)).plaintext
+        )
+    }
+
+    @Test
     fun aRecordStaysWhileItsHandshakeIsOwedAndGoesOnceItIsNot() = runTest {
         // Room for ONE owed handshake of each kind, so a second recovery pushes the first one out.
         val fixture = FallbackServiceFixture(maxOwedHandshakes = 1)
