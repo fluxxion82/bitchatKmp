@@ -66,8 +66,10 @@ import com.bitchat.nostr.model.NostrKind
 import com.bitchat.nostr.participant.NostrParticipantTracker
 import com.bitchat.nostr.util.HandledGiftWraps
 import com.bitchat.nostr.util.hexStringToByteArray
+import com.bitchat.nostr.util.sanitizedNickname
 import com.bitchat.nostr.util.toHexString
 import com.bitchat.lora.LoRaPeer
+import com.bitchat.local.prefs.FavoritesUpdate
 import com.bitchat.local.prefs.LoRaPreferences
 import com.bitchat.repo.lora.loRaConfiguration
 import com.bitchat.repo.lora.toLoRaConfiguration
@@ -75,8 +77,13 @@ import com.bitchat.repo.utils.CrossTransportTwins
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 import com.bitchat.repo.utils.BoundedIdSet
+import com.bitchat.repo.utils.FavoriteNotification
+import com.bitchat.repo.utils.LearnedNames
 import com.bitchat.repo.utils.MessageLimits
+import com.bitchat.repo.utils.MAX_NOT_FAVOURITED_RELATIONSHIPS
 import com.bitchat.repo.utils.ReceivedFileBudget
+import com.bitchat.repo.utils.applyFavoriteNotification
+import com.bitchat.repo.utils.notFavouritedOverLimit
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.LoRaProtocolManager
 import com.bitchat.lora.LoRaProtocolType
@@ -178,9 +185,9 @@ class ChatRepo(
     private var latestUnreadPrivatePeer: String? = null
     private var selectedPrivatePeer: String? = null
     private val knownPrivatePeers = mutableMapOf<String, String>()
-    private val peerDisplayNames = mutableMapOf<String, String>().apply {
-        putAll(userPreferences.getAllPeerDisplayNames())
-    }
+    // The names peers go by, in memory only: what traffic teaches (bounded) and what the user's own
+    // actions recorded. Nothing a peer calls itself is saved.
+    private val learnedNames = LearnedNames()
     private val lastReadTimestamps = mutableMapOf<String, Long>().apply {
         putAll(userPreferences.getAllLastReadTimestamps())
     }
@@ -246,6 +253,24 @@ class ChatRepo(
         observeTorReadyAndEstablishConnections()
         observeTorTurnedOffAndRestoreRelays()
         subscribeToDirectMessages()
+
+        // Older versions saved every name any key announced, and a favourite record plus a peer-id to
+        // npub mapping for anyone who sent a notification. The names are removed: they are kept in
+        // memory only now. So is the mapping: it was a second copy of the key each record carries
+        // itself, nothing read it, and a copy has to be kept right through every toggle and restart
+        // or it is wrong. The records the user never favourited are cut to the limit for new ones.
+        userPreferences.clearPeerDisplayNames()
+        userPreferences.clearAllPeerIDMappings()
+        coroutineScopeFacade.applicationScope.launch {
+            val removedKey = withContext(coroutinesContextFacade.io) {
+                userPreferences.updateFavorites { favorites ->
+                    val excess = notFavouritedOverLimit(favorites, MAX_NOT_FAVOURITED_RELATIONSHIPS)
+                    FavoritesUpdate(result = excess.firstOrNull(), remove = excess)
+                }
+            }
+            // Whoever read the favourites before this finished still shows what was removed.
+            if (removedKey != null) userEventBus.update(UserEvent.FavoriteStatusChanged(removedKey))
+        }
 
         // Listen for incoming LoRa packets
         lora?.let { loraTransport ->
@@ -650,6 +675,11 @@ class ChatRepo(
                     nRelays = 5
                 )
 
+                // The user has just posted here, so they are present. This used to happen when a
+                // relay echoed the event back; that echo is a duplicate of the local echo and marks
+                // nothing any more.
+                markGeohashParticipant(geohash, identity.publicKeyHex, sanitizedNickname(nickname), event.createdAt, isTeleported = false)
+
                 // Note: Geohash messages are ONLY sent via Nostr, not Bluetooth mesh
                 // (matches legacy Android behavior - Bluetooth is for mesh broadcasts only)
 
@@ -905,7 +935,7 @@ class ChatRepo(
             }
 
             val senderPubkey = event.pubkey
-            val senderNickname = event.tags.find { it.firstOrNull() == "n" }?.getOrNull(1)
+            val senderNickname = sanitizedNickname(event.tags.find { it.firstOrNull() == "n" }?.getOrNull(1))
             val isTeleported = event.tags.any { it.size >= 2 && it[0] == "t" && it[1] == "teleport" }
 
             println("   Sender pubkey: ${senderPubkey.take(16)}...")
@@ -924,23 +954,6 @@ class ChatRepo(
                 "Geohash=$geohash event=${event.id.take(16)} sender=${senderPubkey.take(16)}... nickname=${senderNickname ?: "anon"} teleported=$isTeleported"
             )
 
-            coroutineScopeFacade.nostrScope.launch {
-                participantTracker.updateParticipant(
-                    geohash = geohash,
-                    pubkey = senderPubkey,
-                    nickname = senderNickname ?: "anon",
-                    timestamp = kotlin.time.Instant.fromEpochSeconds(event.createdAt.toLong()),
-                    isTeleported = isTeleported
-                )
-                locationEventBus.update(LocationEvent.ParticipantsChanged)
-                chatEventBus.update(ChatEvent.GeohashParticipantsChanged(geohash))
-            }
-
-            val peerID = "nostr_${senderPubkey.take(16)}"
-            if (!senderNickname.isNullOrBlank()) {
-                savePeerDisplayName(peerID, senderNickname)
-            }
-
             val message = messageLimits.notLaterThan(BitchatMessage(
                 id = event.id,
                 sender = senderNickname ?: senderPubkey.take(16),
@@ -957,7 +970,8 @@ class ChatRepo(
             if (flow != null) {
                 val currentMessages = flow.value.toMutableList()
 
-                // Check for duplicates (our local echo or relay echo)
+                // Check for duplicates (our local echo or relay echo). A copy of something already
+                // shown changes nothing: no presence, no name. It is only an id until it is checked.
                 if (currentMessages.any { it.id == event.id }) {
                     println("⏭️  ChatRepo: Duplicate message detected, skipping")
                     println("   Message ID: ${event.id}")
@@ -979,6 +993,10 @@ class ChatRepo(
                     }
                     println("✅ ChatRepo: PoW validated for event ${event.id.take(16)} (difficulty >= $powDifficulty)")
                 }
+
+                // Only now, with the event accepted: one that is refused leaves no presence and no name.
+                markGeohashParticipant(geohash, senderPubkey, senderNickname, event.createdAt, isTeleported)
+                senderNickname?.let { learnedNames.learn("nostr_${senderPubkey.take(16)}", it) }
 
                 currentMessages.add(message)
                 flow.value = messageLimits.trimmed(currentMessages)
@@ -1053,6 +1071,26 @@ class ChatRepo(
         }
     }
 
+    private fun markGeohashParticipant(
+        geohash: String,
+        pubkey: String,
+        nickname: String?,
+        createdAt: Int,
+        isTeleported: Boolean,
+    ) {
+        coroutineScopeFacade.nostrScope.launch {
+            participantTracker.updateParticipant(
+                geohash = geohash,
+                pubkey = pubkey,
+                nickname = nickname ?: "anon",
+                timestamp = Instant.fromEpochSeconds(createdAt.toLong()),
+                isTeleported = isTeleported
+            )
+            locationEventBus.update(LocationEvent.ParticipantsChanged)
+            chatEventBus.update(ChatEvent.GeohashParticipantsChanged(geohash))
+        }
+    }
+
     private fun handlePrivateMessagePayload(
         payload: ByteArray,
         senderPubkey: String,
@@ -1075,15 +1113,12 @@ class ChatRepo(
         // 1. Cached display names from previous interactions
         // 2. Participant tracker (nicknames learned from geohash presence)
         // 3. Fall back to truncated pubkey for display only (don't cache fallback values)
-        val cachedDisplayName = peerDisplayNames[convKey]
-            ?: participantTracker.getNicknameByPubkeySync(senderPubkey)
-        val senderDisplayName = cachedDisplayName ?: senderPubkey.take(16)
+        val knownName = learnedNames[convKey]
+            ?: sanitizedNickname(participantTracker.getNicknameByPubkeySync(senderPubkey))
+                ?.also { learnedNames.learn(convKey, it) }
+        val senderDisplayName = knownName ?: senderPubkey.take(16)
 
-        if (cachedDisplayName != null) {
-            savePeerDisplayName(convKey, cachedDisplayName)
-        }
-
-        val favoritePayloadHandled = handleFavoriteNotificationIfNeeded(packet.content, convKey, senderDisplayName)
+        val favoritePayloadHandled = handleFavoriteNotificationIfNeeded(packet.content, convKey, senderDisplayName, senderPubkey)
         if (favoritePayloadHandled) return
 
         val message = BitchatMessage(
@@ -1355,36 +1390,46 @@ class ChatRepo(
         return "nostr_${pubkeyHex.take(16)}"
     }
 
+    /**
+     * Handles a private message that is a favourite notification; true when [content] was one, so it
+     * is never shown as a chat message. What it may change is decided by [applyFavoriteNotification]:
+     * over Nostr ([nostrSenderPubkey] set) only a relationship that already exists, over the mesh also
+     * a bounded number of "favourited you" records. The peer's Nostr key is kept in its record and
+     * nowhere else.
+     */
     private fun handleFavoriteNotificationIfNeeded(
         content: String,
         convKey: String,
-        senderDisplayName: String
+        senderDisplayName: String,
+        nostrSenderPubkey: String? = null,
     ): Boolean {
-        val normalized = content.trim()
-        val isFavorite = when {
-            normalized.startsWith("[FAVORITED]:") -> true
-            normalized.startsWith("[UNFAVORITED]:") -> false
-            else -> return false
-        }
-
-        val npub = normalized.substringAfter(":", "").takeIf { it.isNotBlank() }
-        val normalizedKey = convKey.removePrefix("nostr_").lowercase()
+        val notification = FavoriteNotification.parse(content) ?: return false
+        val senderKey = convKey.removePrefix("nostr_").lowercase()
+        // Over Nostr the sender's key is known from the envelope; without it there is nobody to update.
+        val senderNpub = if (nostrSenderPubkey == null) null else hexToNpub(nostrSenderPubkey) ?: return true
         coroutineScopeFacade.applicationScope.launch {
-            val now = Clock.System.now().toEpochMilliseconds()
-            val existing = userRepository.getFavorite(normalizedKey)
-            val updated = com.bitchat.domain.user.model.FavoriteRelationship(
-                peerNoisePublicKeyHex = normalizedKey,
-                peerNostrPublicKey = npub ?: existing?.peerNostrPublicKey,
-                peerNickname = existing?.peerNickname ?: senderDisplayName,
-                isFavorite = existing?.isFavorite ?: false,
-                theyFavoritedUs = isFavorite,
-                favoritedAt = existing?.favoritedAt ?: now,
-                lastUpdated = now
-            )
-
-            userRepository.saveFavorite(updated)
-            userEventBus.update(UserEvent.FavoriteStatusChanged(normalizedKey))
-            npub?.let { userPreferences.setNostrPubkeyForPeerID(normalizedKey, it) }
+            // Decided and written as one step of the preferences, which the user's own toggle goes
+            // through as well: what is decided here is never applied to a record that changed since.
+            // The event is published afterwards, so a slow observer holds nothing up.
+            val senderName = sanitizedNickname(senderDisplayName) ?: senderKey
+            val changedKey = withContext(coroutinesContextFacade.io) {
+                userPreferences.updateFavorites { favorites ->
+                    val change = applyFavoriteNotification(
+                        favorites = favorites,
+                        notification = notification,
+                        senderKey = senderKey,
+                        senderNpub = senderNpub,
+                        senderName = senderName,
+                        now = clock.now().toEpochMilliseconds(),
+                    )
+                    FavoritesUpdate(
+                        result = change.saved?.peerNoisePublicKeyHex?.lowercase() ?: change.removedKeys.firstOrNull(),
+                        save = listOfNotNull(change.saved),
+                        remove = change.removedKeys,
+                    )
+                }
+            }
+            if (changedKey != null) userEventBus.update(UserEvent.FavoriteStatusChanged(changedKey))
         }
 
         return true
@@ -1897,9 +1942,9 @@ class ChatRepo(
                 geohashAliasCache[peerID] = fullPubkey
                 geohashConversationCache[peerID] = sourceGeohash
             }
-            if (!displayName.isNullOrBlank()) {
-                savePeerDisplayName(peerID, displayName)
-            }
+            // The user opened this conversation: its name is theirs to keep, whatever traffic teaches.
+            sanitizedNickname(displayName)?.let { learnedNames.remember(peerID, it) }
+            Unit
         }
 
     override suspend fun getFullPubkey(peerID: String): String? = withContext(coroutinesContextFacade.io) {
@@ -1911,23 +1956,17 @@ class ChatRepo(
     }
 
     override suspend fun getDisplayName(peerID: String): String? = withContext(coroutinesContextFacade.io) {
-        peerDisplayNames[peerID]?.let { return@withContext it }
+        learnedNames[peerID]?.let { return@withContext it }
 
         val fullPubkey = synchronized(privateChatsLock) { knownPrivatePeers[peerID] }
         if (fullPubkey != null) {
-            participantTracker.getNicknameByPubkey(fullPubkey)?.let { nickname ->
-                savePeerDisplayName(peerID, nickname)
+            sanitizedNickname(participantTracker.getNicknameByPubkey(fullPubkey))?.let { nickname ->
+                learnedNames.learn(peerID, nickname)
                 return@withContext nickname
             }
         }
 
         null
-    }
-
-    private fun savePeerDisplayName(peerID: String, displayName: String) {
-        if (displayName.isBlank()) return
-        peerDisplayNames[peerID] = displayName
-        userPreferences.setPeerDisplayName(peerID, displayName)
     }
 
     @OptIn(ExperimentalUuidApi::class)
@@ -3056,7 +3095,7 @@ class ChatRepo(
             knownPrivatePeers.clear()
         }
         selectedPrivatePeer = null
-        peerDisplayNames.clear()
+        learnedNames.clear()
         lastReadTimestamps.clear()
         handledGiftWraps.clear()
         activeDmSubscriptions.clear()

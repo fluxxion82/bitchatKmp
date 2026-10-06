@@ -65,7 +65,13 @@ class LoRaSavedConfigTest {
         }
         val contexts = mockk<CoroutinesContextFacade> { every { io } returns coroutineContext }
         val userPrefs = mockk<UserPreferences> {
-            every { getAllPeerDisplayNames() } returns emptyMap()
+            every { clearPeerDisplayNames() } returns Unit
+            every { clearAllPeerIDMappings() } returns Unit
+            every { updateFavorites<Any?>(any()) } answers {
+                firstArg<(Map<String, com.bitchat.domain.user.model.FavoriteRelationship>) -> com.bitchat.local.prefs.FavoritesUpdate<Any?>>()
+                    .invoke(emptyMap()).result
+            }
+            every { getAllFavorites() } returns emptyMap()
             every { getAllLastReadTimestamps() } returns emptyMap()
         }
         val repo = ChatRepo(scopes, contexts,

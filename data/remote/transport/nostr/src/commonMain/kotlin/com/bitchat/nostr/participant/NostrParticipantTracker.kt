@@ -2,6 +2,9 @@ package com.bitchat.nostr.participant
 
 import com.bitchat.nostr.logging.logNostrDebug
 import com.bitchat.nostr.model.NostrParticipant
+import com.bitchat.nostr.util.sanitizedNickname
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,7 +14,16 @@ import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 
-class NostrParticipantTracker {
+class NostrParticipantTracker(
+    private val clock: Clock = Clock.System,
+    private val maxParticipantsPerGeohash: Int = 1337,
+) {
+    init {
+        require(maxParticipantsPerGeohash > 0) {
+            "maxParticipantsPerGeohash must be positive, was $maxParticipantsPerGeohash"
+        }
+    }
+
     private val mutex = Mutex()
 
     // geohash -> (pubkeyHex -> lastSeen)
@@ -19,6 +31,7 @@ class NostrParticipantTracker {
 
     // pubkeyHex -> nickname
     private val nicknames = mutableMapOf<String, String>()
+    private val nicknamesLock = SynchronizedObject()
 
     // teleported pubkeys
     private val teleported = mutableSetOf<String>()
@@ -33,19 +46,28 @@ class NostrParticipantTracker {
 
     suspend fun updateParticipant(geohash: String, pubkey: String, nickname: String, timestamp: Instant, isTeleported: Boolean) =
         mutex.withLock {
+            val normalizedPubkey = pubkey.lowercase()
+            val now = clock.now()
             val participantsMap = participants.getOrPut(geohash) { mutableMapOf() }
-            participantsMap[pubkey.lowercase()] = timestamp
+            // First drop whoever is past the five minutes here (and bring back times a clock set
+            // back has left ahead of now), so what follows is decided among live participants only.
+            getParticipantCountLocked(geohash)
 
-            nicknames[pubkey.lowercase()] = nickname
+            // The sender writes the timestamp. One dated ahead would keep its key "present" for ever
+            // and make it the last to be dropped, so no key is seen later than now.
+            if (admitLocked(participantsMap, normalizedPubkey, seen = minOf(timestamp, now))) {
+                val name = sanitizedNickname(nickname) ?: "anon"
+                synchronized(nicknamesLock) { nicknames[normalizedPubkey] = name }
 
-            if (isTeleported) {
-                teleported.add(pubkey.lowercase())
+                if (isTeleported) {
+                    teleported.add(normalizedPubkey)
+                }
+
+                logNostrDebug(
+                    "ParticipantTracker",
+                    "Updated participant ${shortPubkey(pubkey)} (nick='$name', geohash=$geohash, teleported=$isTeleported)"
+                )
             }
-
-            logNostrDebug(
-                "ParticipantTracker",
-                "Updated participant ${shortPubkey(pubkey)} (nick='$nickname', geohash=$geohash, teleported=$isTeleported)"
-            )
 
             updateCountsLocked()
             if (geohash == currentGeohash) {
@@ -64,9 +86,41 @@ class NostrParticipantTracker {
         refreshCurrentGeohashPeopleLocked()
     }
 
+    /**
+     * Records that [pubkey] was [seen] among [participantsMap], which holds live participants only.
+     * False when the event says nothing worth keeping, and then nothing has changed:
+     *  - it is older than what is known of that key: a replay must not move a key back toward the
+     *    cutoff, or rename it;
+     *  - the geohash is full and this new key would itself be the one seen longest ago (so also any
+     *    new key already past the five minutes: it cannot cost a live participant its place).
+     *    Otherwise the one seen longest ago makes room. A key already here evicts nobody.
+     * A new key past the five minutes that does find room is dropped by the pruning that follows.
+     */
+    private fun admitLocked(participantsMap: MutableMap<String, Instant>, pubkey: String, seen: Instant): Boolean {
+        val knownSince = participantsMap[pubkey]
+        if (knownSince != null) {
+            if (seen < knownSince) return false
+        } else {
+            if (participantsMap.size >= maxParticipantsPerGeohash) {
+                val oldest = participantsMap.minByOrNull { it.value } ?: return false
+                if (seen <= oldest.value) return false
+                participantsMap.remove(oldest.key)
+            }
+        }
+        participantsMap[pubkey] = seen
+        return true
+    }
+
     private fun getParticipantCountLocked(geohash: String): Int {
-        val cutoff = Clock.System.now() - 5.minutes
+        val now = clock.now()
+        val cutoff = now - 5.minutes
         val participantsMap = participants[geohash] ?: return 0
+
+        // This device's clock can be set back (the boards have no battery clock). A time stored before
+        // that is then later than now: nothing new could be newer than it, so its key could no longer
+        // be updated, and it would outlive its five minutes by as much as the clock moved. No stored
+        // time stays ahead of now.
+        participantsMap.filterValues { it > now }.keys.forEach { participantsMap[it] = now }
 
         // Remove expired entries using iterator (multiplatform-compatible). Read the key and the
         // timestamp BEFORE removing: Kotlin/Native invalidates the entry on remove(), so touching
@@ -80,8 +134,8 @@ class NostrParticipantTracker {
             val lastSeen = entry.value
             if (lastSeen < cutoff) {
                 iterator.remove()
-                val name = nicknames[pubkey] ?: "anon"
-                val ageSeconds = Clock.System.now().minus(lastSeen).inWholeSeconds
+                val name = synchronized(nicknamesLock) { nicknames[pubkey] } ?: "anon"
+                val ageSeconds = now.minus(lastSeen).inWholeSeconds
                 logNostrDebug(
                     "ParticipantTracker",
                     "Removed stale participant ${shortPubkey(pubkey)} ($name) from geohash=$geohash, lastSeen=$lastSeen, age=${ageSeconds}s"
@@ -98,12 +152,12 @@ class NostrParticipantTracker {
             return
         }
         val previous = _currentGeohashPeople.value
-        val cutoff = Clock.System.now() - 5.minutes
+        val cutoff = clock.now() - 5.minutes
         val participantsMap = participants[geohash] ?: emptyMap()
 
         val activeParticipants = participantsMap.filter { (_, lastSeen) -> lastSeen > cutoff }
         val baseNames = activeParticipants.mapValues { (pubkey, _) ->
-            nicknames[pubkey]?.trim().takeUnless { it.isNullOrEmpty() } ?: "anon"
+            synchronized(nicknamesLock) { nicknames[pubkey] }?.trim().takeUnless { it.isNullOrEmpty() } ?: "anon"
         }
         val nameCounts = baseNames.values
             .groupingBy { it.lowercase() }
@@ -135,11 +189,17 @@ class NostrParticipantTracker {
             getParticipantCountLocked(geohash)
         }
         _participantCounts.value = counts
+        // What is kept about a key goes when the key is a participant nowhere any more.
+        val activePubkeys = participants.values.flatMap { it.keys }.toSet()
+        synchronized(nicknamesLock) {
+            nicknames.keys.retainAll(activePubkeys)
+        }
+        teleported.retainAll(activePubkeys)
     }
 
     suspend fun clear() = mutex.withLock {
         participants.clear()
-        nicknames.clear()
+        synchronized(nicknamesLock) { nicknames.clear() }
         teleported.clear()
         _participantCounts.value = emptyMap()
         _currentGeohashPeople.value = emptyList()
@@ -150,7 +210,7 @@ class NostrParticipantTracker {
      * Returns null if the pubkey is not known or has no nickname.
      */
     suspend fun getNicknameByPubkey(pubkeyHex: String): String? = mutex.withLock {
-        nicknames[pubkeyHex.lowercase()]
+        synchronized(nicknamesLock) { nicknames[pubkeyHex.lowercase()] }
     }
 
     /**
@@ -159,7 +219,7 @@ class NostrParticipantTracker {
      * Returns null if the pubkey is not known or has no nickname.
      */
     fun getNicknameByPubkeySync(pubkeyHex: String): String? {
-        return nicknames[pubkeyHex.lowercase()]
+        return synchronized(nicknamesLock) { nicknames[pubkeyHex.lowercase()] }
     }
 
     private fun logGeohashSnapshot(geohash: String, previous: List<NostrParticipant>, current: List<NostrParticipant>) {

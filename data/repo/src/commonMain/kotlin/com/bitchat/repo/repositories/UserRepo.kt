@@ -6,6 +6,7 @@ import com.bitchat.domain.user.model.AppUser
 import com.bitchat.domain.user.model.FavoriteRelationship
 import com.bitchat.domain.user.model.Profile
 import com.bitchat.domain.user.repository.UserRepository
+import com.bitchat.local.prefs.FavoritesUpdate
 import com.bitchat.local.prefs.UserPreferences
 import com.bitchat.nostr.util.fromNoiseKeyHex
 import kotlinx.coroutines.withContext
@@ -64,6 +65,16 @@ class UserRepo(
 
     override suspend fun saveFavorite(favorite: FavoriteRelationship) = withContext(coroutinesContextFacade.io) {
         userPreferences.saveFavorite(favorite)
+    }
+
+    override suspend fun updateFavorite(
+        noisePublicKeyHex: String,
+        change: (FavoriteRelationship?) -> FavoriteRelationship,
+    ): FavoriteRelationship = withContext(coroutinesContextFacade.io) {
+        userPreferences.updateFavorites { favorites ->
+            val updated = change(favorites[noisePublicKeyHex.lowercase()])
+            FavoritesUpdate(result = updated, save = listOf(updated))
+        }
     }
 
     override suspend fun deleteFavorite(noisePublicKeyHex: String) = withContext(coroutinesContextFacade.io) {

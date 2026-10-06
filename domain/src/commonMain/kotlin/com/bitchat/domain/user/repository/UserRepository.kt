@@ -19,6 +19,17 @@ interface UserRepository {
     suspend fun getFavorite(noisePublicKeyHex: String): FavoriteRelationship?
     suspend fun getFavoriteByNoiseKey(noisePublicKeyBytes: ByteArray): FavoriteRelationship?
     suspend fun saveFavorite(favorite: FavoriteRelationship)
+
+    /**
+     * Changes the favourite saved under [noisePublicKeyHex] as one step: [change] is given the record
+     * as it is now (null when there is none) and returns the record to save, which is also returned.
+     * Nothing else can change the favourites between the read and the write, so a change decided on
+     * what was read is never written over something newer.
+     */
+    suspend fun updateFavorite(
+        noisePublicKeyHex: String,
+        change: (FavoriteRelationship?) -> FavoriteRelationship,
+    ): FavoriteRelationship
     suspend fun deleteFavorite(noisePublicKeyHex: String)
     suspend fun clearAllFavorites()
     suspend fun getMutualFavorites(): List<FavoriteRelationship>

@@ -22,22 +22,23 @@ class ToggleFavorite(
     override suspend fun invoke(param: Params): FavoriteRelationship {
         val normalizedKey = param.peerID.removePrefix("nostr_").lowercase()
 
-        val existing = userRepository.getFavorite(normalizedKey)
         val now = Clock.System.now().toEpochMilliseconds()
-        val nowFavorite = existing?.isFavorite != true
 
-        val updated = FavoriteRelationship(
-            peerNoisePublicKeyHex = normalizedKey,
-            peerNostrPublicKey = existing?.peerNostrPublicKey,
-            peerNickname = param.peerNickname,
-            isFavorite = nowFavorite,
-            theyFavoritedUs = existing?.theyFavoritedUs ?: false,
-            favoritedAt = existing?.favoritedAt ?: now,
-            lastUpdated = now
-        )
+        // Read and written as one step: a notification from that peer handled at the same moment
+        // must not be decided on, or written over, the record as it was before this.
+        val updated = userRepository.updateFavorite(normalizedKey) { existing ->
+            FavoriteRelationship(
+                peerNoisePublicKeyHex = normalizedKey,
+                peerNostrPublicKey = existing?.peerNostrPublicKey,
+                peerNickname = param.peerNickname,
+                isFavorite = existing?.isFavorite != true,
+                theyFavoritedUs = existing?.theyFavoritedUs ?: false,
+                favoritedAt = existing?.favoritedAt ?: now,
+                lastUpdated = now
+            )
+        }
 
-        userRepository.saveFavorite(updated)
-        chatRepository.sendFavoriteNotification(param.peerID, nowFavorite)
+        chatRepository.sendFavoriteNotification(param.peerID, updated.isFavorite)
         userEventBus.update(UserEvent.FavoriteStatusChanged(normalizedKey))
         return updated
     }

@@ -8,8 +8,11 @@ import com.bitchat.domain.location.model.GeohashChannelLevel
 import com.bitchat.domain.user.model.AppUser
 import com.bitchat.domain.user.model.FavoriteRelationship
 import com.bitchat.local.prefs.EncryptionSettingsFactory
+import com.bitchat.local.prefs.FavoritesUpdate
 import com.bitchat.local.prefs.UserPreferences
 import com.russhwolf.settings.set
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -18,6 +21,10 @@ class LocalUserPreferences(
     encryptedPreferenceFactory: EncryptionSettingsFactory,
 ) : UserPreferences {
     private val settings = encryptedPreferenceFactory.createEncrypted(PREFERENCES_NAME)
+
+    // Held across each read-modify-write of the favourites, which are one JSON value: without it
+    // two changes made at the same time would each write the map without the other's.
+    private val favoritesLock = SynchronizedObject()
 
     override fun getAppUser(): AppUser {
         val savedName = settings.getStringOrNull(USER_NAME)
@@ -210,35 +217,40 @@ class LocalUserPreferences(
     }
 
     override fun saveFavorite(favorite: FavoriteRelationship) {
-        try {
-            val allFavorites = getAllFavorites().toMutableMap()
-            allFavorites[favorite.peerNoisePublicKeyHex.lowercase()] = favorite
-
-            val serializer = MapSerializer(String.serializer(), FavoriteRelationship.serializer())
-            val data = allFavorites.mapValues { (_, rel) -> rel }
-            val json = Json.encodeToString(serializer, data)
-            settings[FAVORITES_KEY] = json
-        } catch (e: Exception) {
-            // Log error
-        }
+        updateFavorites { FavoritesUpdate(Unit, save = listOf(favorite)) }
     }
 
     override fun deleteFavorite(noisePublicKeyHex: String) {
-        try {
-            val allFavorites = getAllFavorites().toMutableMap()
-            allFavorites.remove(noisePublicKeyHex.lowercase())
-
-            val serializer = MapSerializer(String.serializer(), FavoriteRelationship.serializer())
-            val data = allFavorites.mapValues { (_, rel) -> rel }
-            val json = Json.encodeToString(serializer, data)
-            settings[FAVORITES_KEY] = json
-        } catch (e: Exception) {
-            // Log error
-        }
+        updateFavorites { FavoritesUpdate(Unit, remove = listOf(noisePublicKeyHex)) }
     }
 
+    override fun <T> updateFavorites(change: (Map<String, FavoriteRelationship>) -> FavoritesUpdate<T>): T =
+        synchronized(favoritesLock) {
+            val current = getAllFavorites().mapKeys { it.key.lowercase() }
+            val update = change(current)
+            val next = current.toMutableMap()
+            // Every key, then one write.
+            var changed = update.remove.count { next.remove(it.lowercase()) != null } > 0
+            for (favorite in update.save) {
+                val key = favorite.peerNoisePublicKeyHex.lowercase()
+                if (next[key] != favorite) {
+                    next[key] = favorite
+                    changed = true
+                }
+            }
+            if (changed) {
+                try {
+                    val serializer = MapSerializer(String.serializer(), FavoriteRelationship.serializer())
+                    settings[FAVORITES_KEY] = Json.encodeToString(serializer, next)
+                } catch (e: Exception) {
+                    // Log error
+                }
+            }
+            update.result
+        }
+
     override fun clearAllFavorites() {
-        settings[FAVORITES_KEY] = null
+        synchronized(favoritesLock) { settings[FAVORITES_KEY] = null }
     }
 
     override fun getNostrPubkeyForPeerID(peerID: String): String? {
@@ -269,38 +281,12 @@ class LocalUserPreferences(
     }
 
     override fun clearAllPeerIDMappings() {
-        settings[PEERID_INDEX_KEY] = null
-    }
-
-    override fun getPeerDisplayName(peerID: String): String? {
-        return getAllPeerDisplayNames()[peerID.lowercase()]
-    }
-
-    override fun setPeerDisplayName(peerID: String, displayName: String) {
-        try {
-            val all = getAllPeerDisplayNames().toMutableMap()
-            all[peerID.lowercase()] = displayName
-
-            val serializer = MapSerializer(String.serializer(), String.serializer())
-            val json = Json.encodeToString(serializer, all)
-            settings[PEER_DISPLAY_NAME_KEY] = json
-        } catch (e: Exception) {
-            // Log error
-        }
-    }
-
-    override fun getAllPeerDisplayNames(): Map<String, String> {
-        return try {
-            val json = settings.getStringOrNull(PEER_DISPLAY_NAME_KEY) ?: return emptyMap()
-            val serializer = MapSerializer(String.serializer(), String.serializer())
-            Json.decodeFromString(serializer, json)
-        } catch (e: Exception) {
-            emptyMap()
-        }
+        // Called at every start: nothing saved, nothing written.
+        if (settings.hasKey(PEERID_INDEX_KEY)) settings.remove(PEERID_INDEX_KEY)
     }
 
     override fun clearPeerDisplayNames() {
-        settings[PEER_DISPLAY_NAME_KEY] = null
+        if (settings.hasKey(PEER_DISPLAY_NAME_KEY)) settings.remove(PEER_DISPLAY_NAME_KEY)
     }
 
     // Last-read timestamps for private conversations

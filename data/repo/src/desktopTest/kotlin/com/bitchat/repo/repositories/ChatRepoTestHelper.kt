@@ -10,11 +10,13 @@ import com.bitchat.domain.connectivity.eventbus.ConnectionEventBus
 import com.bitchat.domain.connectivity.model.BluetoothConnectionEvent
 import com.bitchat.domain.location.eventbus.LocationEventBus
 import com.bitchat.domain.user.eventbus.UserEventBus
+import com.bitchat.domain.user.model.FavoriteRelationship
 import com.bitchat.domain.user.model.BlockType
 import com.bitchat.domain.user.model.BlockedUser
 import com.bitchat.domain.user.repository.UserRepository
 import com.bitchat.local.prefs.BlockListPreferences
 import com.bitchat.local.prefs.ChannelPreferences
+import com.bitchat.local.prefs.FavoritesUpdate
 import com.bitchat.local.prefs.UserPreferences
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.nostr.NostrClient
@@ -53,6 +55,12 @@ internal fun chatRepo(
     // breaks any path that looks a peer up (the private send path does). These discard what is written.
     geohashAliasCache: Cache<String, String> = mockk<Cache<String, String>>(relaxed = true).also { every { it.get(any()) } returns null },
     geohashConversationCache: Cache<String, String> = mockk<Cache<String, String>>(relaxed = true).also { every { it.get(any()) } returns null },
+    userPreferences: UserPreferences = emptyUserPreferences(),
+    userRepository: UserRepository = mockk<UserRepository>(relaxed = true).also { coEvery { it.getUserState() } returns null },
+    nostrPreferences: NostrPreferences = mockk(relaxed = true),
+    participantTracker: NostrParticipantTracker = mockk(relaxed = true),
+    configureNostrClient: (NostrClient) -> Unit = {},
+    userEventBus: UserEventBus = mockk<UserEventBus>(relaxed = true).also { every { it.events() } returns emptyFlow() },
 ): ChatRepo {
     val contextFacade = object : CoroutinesContextFacade {
         override val io: CoroutineContext = dispatcher
@@ -65,10 +73,6 @@ internal fun chatRepo(
         override val connectivityEventScope: CoroutineScope = scope
         override val bluetoothScope: CoroutineScope = scope
         override val nostrScope: CoroutineScope = scope
-    }
-    val userPreferences = mockk<UserPreferences>(relaxed = true).also {
-        every { it.getAllPeerDisplayNames() } returns emptyMap()
-        every { it.getAllLastReadTimestamps() } returns emptyMap()
     }
     val channelPreferences = mockk<ChannelPreferences>(relaxed = true).also {
         every { it.getChannelEventIds() } returns emptyMap()
@@ -85,6 +89,7 @@ internal fun chatRepo(
         every { it.decryptPrivateMessage(any(), any()) } answers {
             firstArg<NostrEvent>().let { Triple(it.content, it.pubkey, it.createdAt) }
         }
+        configureNostrClient(it)
     }
     val nostrRelay = mockk<NostrRelay>(relaxed = true).also {
         every { it.getRelaysForGeohash(any()) } returns emptyList()
@@ -93,9 +98,6 @@ internal fun chatRepo(
             subscriptions += subscription
             subscription.id
         }
-    }
-    val userEventBus = mockk<UserEventBus>(relaxed = true).also {
-        every { it.events() } returns emptyFlow()
     }
     val connectEventBus = mockk<ConnectionEventBus>(relaxed = true).also {
         coEvery { it.getBluetoothConnectionEvent() } returns flowOf(BluetoothConnectionEvent.DISCONNECTED)
@@ -106,7 +108,7 @@ internal fun chatRepo(
         coroutinesContextFacade = contextFacade,
         mesh = mesh,
         nostr = mockk<NostrTransport>(relaxed = true),
-        nostrPreferences = mockk<NostrPreferences>(relaxed = true),
+        nostrPreferences = nostrPreferences,
         nostrClient = nostrClient,
         nostrRelay = nostrRelay,
         geohashAliasCache = geohashAliasCache,
@@ -119,12 +121,10 @@ internal fun chatRepo(
                 it.lowercase() to BlockedUser(it.lowercase(), null, 0, BlockType.MESH)
             }
         },
-        participantTracker = mockk<NostrParticipantTracker>(relaxed = true),
+        participantTracker = participantTracker,
         locationEventBus = mockk<LocationEventBus>(relaxed = true),
         chatEventBus = mockk<ChatEventBus>(relaxed = true),
-        userRepository = mockk<UserRepository>(relaxed = true).also {
-            coEvery { it.getUserState() } returns null
-        },
+        userRepository = userRepository,
         appRepository = mockk<AppRepository>(relaxed = true).also {
             coEvery { it.hasRequiredPermissions() } returns false
         },
@@ -135,6 +135,88 @@ internal fun chatRepo(
         receivedFileBudget = receivedFileBudget,
         messageLimits = messageLimits,
     )
+}
+
+/** Preferences with nothing saved; what a test wants to observe it verifies on the mock. */
+internal fun emptyUserPreferences(): UserPreferences = mockk<UserPreferences>(relaxed = true).also {
+    every { it.getAllLastReadTimestamps() } returns emptyMap()
+    every { it.getAllFavorites() } returns emptyMap()
+    every { it.getFavorite(any()) } returns null
+    every { it.getAllPeerIDMappings() } returns emptyMap()
+    every { it.getNostrPubkeyForPeerID(any()) } returns null
+    every { it.updateFavorites<Any?>(any()) } answers {
+        firstArg<(Map<String, FavoriteRelationship>) -> FavoritesUpdate<Any?>>().invoke(emptyMap()).result
+    }
+}
+
+/**
+ * [delegate] behind a proxy that notes the name of every method called on it, so a test can say
+ * "nothing was written" about a whole interface rather than about the methods it thought of.
+ */
+internal class Recorded<T : Any>(type: Class<T>, delegate: T) {
+    val calls = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+    @Suppress("UNCHECKED_CAST")
+    val proxy: T = java.lang.reflect.Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, arguments ->
+        calls += method.name
+        try {
+            method.invoke(delegate, *(arguments ?: emptyArray()))
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            throw e.targetException
+        }
+    } as T
+
+    /** Every call that is not a read. */
+    fun writes(): List<String> = calls.filterNot { name ->
+        name.startsWith("get") || name.startsWith("find") || name.startsWith("is") || name in setOf("hashCode", "equals", "toString")
+    }
+}
+
+/** Preferences whose favourite state changes as the repository writes it. */
+internal class StatefulFavoritePreferences(
+    initial: Map<String, FavoriteRelationship> = emptyMap(),
+    initialMappings: Map<String, String> = emptyMap(),
+) {
+    val favorites = initial.mapKeys { it.key.lowercase() }.toMutableMap()
+    val mappings = initialMappings.mapKeys { it.key.lowercase() }.toMutableMap()
+    var favoriteWrites = 0
+        private set
+    var mappingWrites = 0
+        private set
+
+    val preferences: UserPreferences = mockk<UserPreferences>(relaxed = true).also { preferences ->
+        every { preferences.getAllLastReadTimestamps() } returns emptyMap()
+        every { preferences.getAllFavorites() } answers { favorites.toMap() }
+        every { preferences.getFavorite(any()) } answers { favorites[firstArg<String>().lowercase()] }
+        // One step, as the real store does it: decided on what is saved now, written once if at all.
+        every { preferences.updateFavorites<Any?>(any()) } answers {
+            val update = firstArg<(Map<String, FavoriteRelationship>) -> FavoritesUpdate<Any?>>().invoke(favorites.toMap())
+            var changed = update.remove.count { favorites.remove(it.lowercase()) != null } > 0
+            for (favorite in update.save) {
+                val key = favorite.peerNoisePublicKeyHex.lowercase()
+                if (favorites[key] != favorite) {
+                    favorites[key] = favorite
+                    changed = true
+                }
+            }
+            if (changed) favoriteWrites++
+            update.result
+        }
+        // The repository changes favourites through that one step only: a separate read and write
+        // could be decided on a record the user has changed in between.
+        every { preferences.saveFavorite(any()) } throws IllegalStateException("favourites are changed through updateFavorites")
+        every { preferences.deleteFavorite(any()) } throws IllegalStateException("favourites are changed through updateFavorites")
+        every { preferences.getAllPeerIDMappings() } answers { mappings.toMap() }
+        every { preferences.getNostrPubkeyForPeerID(any()) } answers { mappings[firstArg<String>().lowercase()] }
+        every { preferences.setNostrPubkeyForPeerID(any(), any()) } answers {
+            mappings[firstArg<String>().lowercase()] = secondArg()
+            mappingWrites++
+        }
+        every { preferences.clearAllPeerIDMappings() } answers {
+            if (mappings.isNotEmpty()) mappingWrites++
+            mappings.clear()
+        }
+    }
 }
 
 internal data class Subscription(val id: String, val filter: NostrFilter, val handler: (NostrEvent) -> Unit = {})
