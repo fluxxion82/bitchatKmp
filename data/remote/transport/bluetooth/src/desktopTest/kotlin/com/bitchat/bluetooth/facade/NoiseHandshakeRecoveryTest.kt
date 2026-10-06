@@ -50,7 +50,7 @@ class NoiseHandshakeRecoveryTest {
         assertTrue(supervisor.isExpired(startedAt, startedAt + HandshakeSupervisor.HANDSHAKE_TIMEOUT_MS))
 
         // What the sweeper does once the deadline has passed.
-        facade.removeSession(peerID)
+        facade.abandonHandshake(peerID)
 
         assertFalse(facade.isHandshaking(peerID))
         assertEquals("uninitialized", facade.getSessionState(peerID))
@@ -93,7 +93,7 @@ class NoiseHandshakeRecoveryTest {
         // And the established session still works after the point a stalled one would have died.
         val plaintext = "hey".encodeToByteArray()
         val ciphertext = assertNotNull(alice.facade.encrypt(bob.peerID, plaintext))
-        assertContentEquals(plaintext, bob.facade.decrypt(alice.peerID, ciphertext))
+        assertContentEquals(plaintext, assertNotNull(bob.facade.decrypt(alice.peerID, ciphertext)).plaintext)
     }
 
     @Test

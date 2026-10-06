@@ -149,7 +149,7 @@ class NoiseIdentityGateTest {
                     assertTrue(go.await(5, TimeUnit.SECONDS))
                     val plaintext = "message-$index".encodeToByteArray()
                     val ciphertext = assertNotNull(bob.facade.encrypt(alice.peerID, plaintext))
-                    assertContentEquals(plaintext, alice.facade.decrypt(bob.peerID, ciphertext))
+                    assertContentEquals(plaintext, assertNotNull(alice.facade.decrypt(bob.peerID, ciphertext)).plaintext)
                     received += plaintext.decodeToString()
                     delivered.countDown()
                     ciphertext
@@ -196,7 +196,7 @@ class NoiseIdentityGateTest {
     private fun assertTraffic(sender: Party, receiver: Party, text: String) {
         val plaintext = text.encodeToByteArray()
         val ciphertext = assertNotNull(sender.facade.encrypt(receiver.peerID, plaintext))
-        assertContentEquals(plaintext, receiver.facade.decrypt(sender.peerID, ciphertext))
+        assertContentEquals(plaintext, assertNotNull(receiver.facade.decrypt(sender.peerID, ciphertext)).plaintext)
     }
 
     private fun response(result: NoiseEncryptionFacade.HandshakeResult): ByteArray = when (result) {

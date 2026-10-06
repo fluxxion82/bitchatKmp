@@ -139,7 +139,7 @@ class SecurityManager(
     /**
      * Decrypt data from peer using Noise protocol
      */
-    fun decryptFromPeer(peerID: String, encryptedData: ByteArray): ByteArray? {
+    fun decryptFromPeer(peerID: String, encryptedData: ByteArray): NoiseEncryptionFacade.DecryptionResult? {
         return noiseEncryption.decrypt(peerID, encryptedData)
     }
 
@@ -148,6 +148,11 @@ class SecurityManager(
      */
     fun hasEstablishedSession(peerID: String): Boolean {
         return noiseEncryption.hasEstablishedSession(peerID)
+    }
+
+    /** True while the first handshake with [peerID] is in flight (see the facade). */
+    fun isHandshaking(peerID: String): Boolean {
+        return noiseEncryption.isHandshaking(peerID)
     }
 
     /**

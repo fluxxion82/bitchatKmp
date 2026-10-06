@@ -25,7 +25,9 @@ class MessageHandler(
     private val myPeerID: String,
     private val securityManager: SecurityManager,
     private val peerManager: PeerManager,
-    private val cryptoSigning: CryptoSigningFacade
+    private val cryptoSigning: CryptoSigningFacade,
+    // The failure tracker's cooldown is measured on this clock, so a test can let it pass.
+    private val clock: Clock = Clock.System
 ) {
     var delegate: MessageHandlerDelegate? = null
 
@@ -197,9 +199,10 @@ class MessageHandler(
     private fun handleEncryptedPayload(peerID: String, payload: ByteArray, requeueOnFailure: Boolean) {
         val decrypted = securityManager.decryptFromPeer(peerID, payload)
         if (decrypted != null) {
-            val noisePayload = NoisePayload.decode(decrypted)
+            val noisePayload = NoisePayload.decode(decrypted.plaintext)
             if (noisePayload == null) {
                 println("❌ Failed to parse NoisePayload from $peerID")
+                recordDecryptOutcome(peerID, decrypted.via)
                 return
             }
 
@@ -208,8 +211,8 @@ class MessageHandler(
                     val privateMessage = PrivateMessagePacket.decode(noisePayload.data)
                     if (privateMessage != null) {
                         println("✅ Decrypted message from $peerID: ${logBody(privateMessage.content, 50)}")
-                        // decryptFromPeer only succeeds from an established session. A2 will add
-                        // identity validation when that session is promoted.
+                        // A successful decrypt authenticated either the established session or
+                        // its read-only validated predecessor. A2 validates identity at promotion.
                         delegate?.onAuthenticatedPrivateMessage(
                             peerID,
                             privateMessage.messageID,
@@ -238,30 +241,49 @@ class MessageHandler(
                     }
                 }
             }
-            sessionFailures.onDecryptSucceeded(peerID)
+            recordDecryptOutcome(peerID, decrypted.via)
         } else if (requeueOnFailure) {
             println("⏳ Failed to decrypt from $peerID, queueing for retry")
             queueEncryptedMessage(peerID, payload)
-            condemnSessionIfHopeless(peerID)
+            condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.UNDECRYPTABLE)
         } else {
             println("❌ Failed to decrypt from $peerID, not requeueing")
-            condemnSessionIfHopeless(peerID)
+            condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.UNDECRYPTABLE)
+        }
+    }
+
+    private fun recordDecryptOutcome(peerID: String, via: NoiseEncryptionFacade.DecryptionVia) {
+        if (via == NoiseEncryptionFacade.DecryptionVia.ESTABLISHED) {
+            sessionFailures.onDecryptSucceeded(peerID)
+        } else if (securityManager.hasEstablishedSession(peerID)) {
+            // The peer authenticated this payload with the predecessor, proving it has not
+            // switched to the established session. Deliver it, but do not let it bless that
+            // session or suppress the ordinary recovery lifecycle.
+            condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.FALLBACK_SUCCESS)
+        } else if (!securityManager.isHandshaking(peerID)) {
+            // Only the predecessor is left and no handshake is in flight: the one that was owed
+            // was lost, abandoned or destroyed, and nothing else would notice, because this traffic
+            // still reads. Before the fallback existed these payloads failed to decrypt and that is
+            // what asked for the next attempt, so they ask for it still, at the tracker's pace.
+            condemnSessionIfHopeless(peerID, SessionFailureTracker.FailureEvidence.UNDECRYPTABLE)
         }
     }
 
     /**
-     * A run of failures means the session is wrong, not the packets. Nothing used to notice: the
-     * facade returned null, the payload was queued, and direct messages from that peer stopped for
-     * good while the session still reported itself established.
+     * A run of undecryptable payloads or fallback-only proofs means the established session needs
+     * recovery. The latter is delivered, but cannot certify that the newer session is shared.
      */
-    private fun condemnSessionIfHopeless(peerID: String) {
-        if (!sessionFailures.onDecryptFailed(peerID, Clock.System.now().toEpochMilliseconds())) return
+    private fun condemnSessionIfHopeless(peerID: String, evidence: SessionFailureTracker.FailureEvidence) {
+        val recovery = sessionFailures.onDecryptFailed(peerID, clock.now().toEpochMilliseconds(), evidence) ?: return
 
-        println("🔁 ${SessionFailureTracker.FAILURES_BEFORE_RECOVERY} consecutive decryption " +
-            "failures from $peerID; the session cannot be the right one, rebuilding it")
-        // Anything queued was encrypted under the session being discarded, so it can never decrypt.
+        println("🔁 ${SessionFailureTracker.FAILURES_BEFORE_RECOVERY} consecutive session-recovery " +
+            "signals from $peerID; the session needs replacement")
+        // Drop this failed run before asking the service to demote and replace the session.
         pendingEncryptedMessages.remove(peerID)
-        delegate?.onSessionUnusable(peerID)
+        when (recovery) {
+            SessionFailureTracker.RecoveryReason.UNUSABLE -> delegate?.onSessionUnusable(peerID)
+            SessionFailureTracker.RecoveryReason.NOT_SHARED -> delegate?.onSessionNotShared(peerID)
+        }
     }
 
     private fun queueEncryptedMessage(peerID: String, payload: ByteArray) {
@@ -314,6 +336,9 @@ interface MessageHandlerDelegate {
      * Implementations should discard it and start a fresh handshake.
      */
     fun onSessionUnusable(peerID: String)
+
+    /** The peer authenticated traffic with the predecessor while a newer session was established. */
+    fun onSessionNotShared(peerID: String)
     fun onPeerLeft(peerID: String)
     fun onFragmentReceived(peerID: String)
     fun onPublicFileReceived(peerID: String, filePacket: BitchatFilePacket)

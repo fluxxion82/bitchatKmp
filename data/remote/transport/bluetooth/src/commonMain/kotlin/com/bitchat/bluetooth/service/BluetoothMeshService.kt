@@ -60,6 +60,9 @@ class BluetoothMeshService(
     private val gattServerService: GattServerService,
     private val advertisingService: AdvertisingService,
     private val cryptoSigning: CryptoSigningFacade,
+    // Only the decrypt-failure cooldown reads this clock (see MessageHandler); everything else in
+    // the service keeps real time.
+    private val failureClock: Clock = Clock.System,
 ) : ConnectionEstablishedCallback {
     val myPeerID: String = cryptoSigning.getIdentityFingerprint()
 
@@ -145,7 +148,7 @@ class BluetoothMeshService(
     }
 
     private fun setupComponents() {
-        messageHandler = MessageHandler(myPeerID, securityManager, peerManager, cryptoSigning)
+        messageHandler = MessageHandler(myPeerID, securityManager, peerManager, cryptoSigning, failureClock)
         packetProcessor = PacketProcessor(myPeerID, securityManager, messageHandler)
     }
 
@@ -287,16 +290,28 @@ class BluetoothMeshService(
             }
 
             override fun onSessionUnusable(peerID: String) {
-                // The session says it is established and cannot read what the peer sends, so it is
-                // not the session the peer is using. Discard it and open a fresh handshake;
-                // initiateNoiseHandshake refuses while one is established, so the removal has to
-                // come first. SessionFailureTracker rate limits this, so a peer that can forge a
-                // packet cannot use it to demand handshakes.
-                serviceScope.launch {
-                    logInfo("BluetoothMeshService", "Rebuilding the unusable Noise session with $peerID")
-                    noiseEncryption.removeSession(peerID)
-                    initiateNoiseHandshake(peerID)
-                }
+                // Keep the validated key only for decrypting while lifecycle state starts the
+                // ordinary first handshake again; outgoing traffic still waits for establishment.
+                // SessionFailureTracker rate limits this, so a peer that can
+                // forge a packet cannot use it to demand handshakes.
+                //
+                // The session is changed here, on the coroutine that reached the verdict, not on a
+                // launched one. A peer's packets normally go through one actor, one at a time, so
+                // a handshake from that peer cannot complete between the verdict and this line;
+                // deferred, the same call could land after one had, and take down the session that
+                // had just replaced the bad one. (Two actors for one peer can still be created by
+                // a race in PacketProcessor; that is older than this and narrows, not closes, the
+                // gap.) Only the handshake itself is started asynchronously.
+                logInfo("BluetoothMeshService", "Replacing the unusable Noise session with $peerID")
+                noiseEncryption.demote(peerID)
+                initiateNoiseHandshake(peerID)
+            }
+
+            override fun onSessionNotShared(peerID: String) {
+                // Synchronous for the same reason as onSessionUnusable.
+                logInfo("BluetoothMeshService", "The established Noise session is not shared with $peerID")
+                noiseEncryption.discardEstablished(peerID)
+                initiateNoiseHandshake(peerID)
             }
 
             override fun onSessionEstablished(peerID: String) {
@@ -374,8 +389,8 @@ class BluetoothMeshService(
      * incoming packet, or a reconnect on an address we had already mapped.
      *
      * A handshake still in flight at this point cannot complete: our message went out over the
-     * link that has just been replaced, and the peer never saw it. Discard the stalled session and
-     * start over, and give the peer a fresh retry budget, since its history says nothing about a
+     * link that has just been replaced, and the peer never saw it. Discard the stalled candidate
+     * and start over, and give the peer a fresh retry budget, since its history says nothing about a
      * link it did not have.
      */
     private fun onPeerLinkRefreshed(peerID: String) {
@@ -409,7 +424,7 @@ class BluetoothMeshService(
                         "BluetoothMeshService",
                         "Peer $peerID reappeared with our handshake in flight; restarting it on the new link"
                     )
-                    noiseEncryption.removeSession(peerID)
+                    noiseEncryption.abandonHandshake(peerID)
                     initiateNoiseHandshake(peerID)
                 }
             }
@@ -440,9 +455,9 @@ class BluetoothMeshService(
                 logInfo(
                     "BluetoothMeshService",
                     "Noise handshake with $peerID stalled for ${now - startedAt}ms and the retry " +
-                        "budget is spent; discarding the session and giving up until the peer returns"
+                        "budget is spent; discarding the candidate and giving up until the peer returns"
                 )
-                noiseEncryption.removeSession(peerID)
+                noiseEncryption.abandonHandshake(peerID)
                 return@forEach
             }
 
@@ -453,9 +468,9 @@ class BluetoothMeshService(
             logInfo(
                 "BluetoothMeshService",
                 "Noise handshake with $peerID stalled for ${now - startedAt}ms after $attempts " +
-                    "attempt(s); discarding the session"
+                    "attempt(s); discarding the candidate"
             )
-            noiseEncryption.removeSession(peerID)
+            noiseEncryption.abandonHandshake(peerID)
 
             if (peerManager.isPeerActive(peerID)) {
                 // initiateNoiseHandshake defers to the link coming up if nothing can carry it, so
@@ -773,10 +788,10 @@ class BluetoothMeshService(
                         "No live link can carry a handshake to $peerID; it will be sent when one " +
                             "comes up"
                     )
-                    // The session is dropped rather than left handshaking: initiateHandshake()
+                    // The candidate is dropped rather than left handshaking: initiateHandshake()
                     // returns empty while one exists, so keeping it would block the retry that the
                     // link coming up is about to ask for.
-                    noiseEncryption.removeSession(peerID)
+                    noiseEncryption.abandonHandshake(peerID)
                     handshakeMutex.withLock { handshakesOwed.add(peerID) }
                     return@launch
                 }

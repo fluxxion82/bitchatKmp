@@ -68,7 +68,7 @@ class NoiseHandshakeCollisionTest {
 
         val plaintext = "hey".encodeToByteArray()
         val ciphertext = assertNotNull(local.facade.encrypt(remote.peerID, plaintext))
-        assertContentEquals(plaintext, remote.facade.decrypt(local.peerID, ciphertext))
+        assertContentEquals(plaintext, assertNotNull(remote.facade.decrypt(local.peerID, ciphertext)).plaintext)
     }
 
     @Test

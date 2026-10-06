@@ -54,7 +54,7 @@ class NoiseStrayHandshakeTest {
         val plaintext = "the session must survive".encodeToByteArray()
         val sealed = initiator.facade.encrypt(responder.peerID, plaintext)
         assertNotNull(sealed, "an established session should still encrypt")
-        assertContentEquals(plaintext, responder.facade.decrypt(initiator.peerID, sealed))
+        assertContentEquals(plaintext, assertNotNull(responder.facade.decrypt(initiator.peerID, sealed)).plaintext)
     }
 
     @Test
