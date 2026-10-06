@@ -113,4 +113,33 @@ class HandshakeSupervisorTest {
         assertFalse(supervisor.isExhausted("b"))
         assertTrue(supervisor.mayAttempt("b", 0L))
     }
+
+    @Test
+    fun pruneDropsOnlyOldRecordsThatTheCallerDoesNotKeep() {
+        val supervisor = supervisor()
+        supervisor.recordAttempt("old", 0L)
+        supervisor.recordAttempt("kept", 0L)
+        supervisor.recordAttempt("recent", 9_500L)
+
+        assertEquals(1, supervisor.prune(now = 10_000L, maxAgeMs = 1_000L) { it == "kept" })
+        assertEquals(0, supervisor.attemptsFor("old"))
+        assertEquals(1, supervisor.attemptsFor("kept"))
+        assertEquals(1, supervisor.attemptsFor("recent"))
+        assertEquals(2, supervisor.size)
+    }
+
+    @Test
+    fun aNewRecordAtTheHardLimitEvictsTheOldestAttempt() {
+        val supervisor = supervisor()
+        repeat(HandshakeSupervisor.MAX_HANDSHAKE_RECORDS) { index ->
+            supervisor.recordAttempt("peer-$index", index.toLong())
+        }
+
+        supervisor.recordAttempt("new", HandshakeSupervisor.MAX_HANDSHAKE_RECORDS.toLong())
+
+        assertEquals(HandshakeSupervisor.MAX_HANDSHAKE_RECORDS, supervisor.size)
+        assertEquals(0, supervisor.attemptsFor("peer-0"))
+        assertEquals(1, supervisor.attemptsFor("peer-1"))
+        assertEquals(1, supervisor.attemptsFor("new"))
+    }
 }

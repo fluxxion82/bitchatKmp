@@ -27,7 +27,12 @@ class PacketProcessor(
     private val maxQueuedBytesPerLane: Int = MAX_QUEUED_MESH_BYTES_PER_LANE,
     dispatcher: CoroutineDispatcher = Dispatchers.Default
 ) {
-    private data class QueuedPacket(val packet: BitchatPacket, val peerID: String, val reservedBytes: Int)
+    private data class QueuedPacket(
+        val packet: BitchatPacket,
+        val peerID: String,
+        val link: String,
+        val reservedBytes: Int
+    )
 
     private val processorScope = CoroutineScope(dispatcher + SupervisorJob())
     private val countersLock = ReentrantLock()
@@ -49,7 +54,7 @@ class PacketProcessor(
             processorScope.launch {
                 for (queued in lane) {
                     try {
-                        handleReceivedPacket(queued.packet, queued.peerID)
+                        handleReceivedPacket(queued.packet, queued.peerID, queued.link)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {
@@ -65,7 +70,7 @@ class PacketProcessor(
     /** Stable hashing lets tests choose separate lanes without retaining a sender-keyed table. */
     internal fun laneOf(peerID: String): Int = (peerID.hashCode() and Int.MAX_VALUE) % lanes.size
 
-    fun processPacket(packet: BitchatPacket, peerID: String): Boolean {
+    fun processPacket(packet: BitchatPacket, peerID: String, link: String = ""): Boolean {
         val bytes = packet.payload.size + PACKET_OVERHEAD_BYTES
         val lane = laneOf(peerID)
         val accepted = countersLock.withLock {
@@ -75,7 +80,7 @@ class PacketProcessor(
             }
         }
         if (!accepted) return dropped()
-        if (lanes[lane].trySend(QueuedPacket(packet, peerID, bytes)).isSuccess) return true
+        if (lanes[lane].trySend(QueuedPacket(packet, peerID, link, bytes)).isSuccess) return true
         releaseReservation(lane, bytes)
         return dropped()
     }
@@ -90,7 +95,7 @@ class PacketProcessor(
         return false
     }
 
-    private suspend fun handleReceivedPacket(packet: BitchatPacket, peerID: String) {
+    private suspend fun handleReceivedPacket(packet: BitchatPacket, peerID: String, link: String) {
         if (!securityManager.validatePacket(packet, peerID)) {
             return
         }
@@ -99,7 +104,7 @@ class PacketProcessor(
             delegate?.onPacketShouldRelay(packet)
         }
 
-        messageHandler.handlePacket(packet, peerID)
+        messageHandler.handlePacket(packet, peerID, link)
     }
 
     private fun shouldRelayPacket(packet: BitchatPacket): Boolean {

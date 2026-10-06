@@ -144,7 +144,8 @@ class SecurityManager(
         packet: BitchatPacket,
         peerID: String,
         localPrivateKey: ByteArray,
-        localPublicKey: ByteArray
+        localPublicKey: ByteArray,
+        link: String = ""
     ): NoiseEncryptionFacade.HandshakeResult {
         // Skip handshakes not addressed to us
         if (packet.recipientID != null && !packet.recipientID.contentEquals(myPeerIDBytes)) {
@@ -154,7 +155,7 @@ class SecurityManager(
         // Skip our own handshake messages
         if (peerID == myPeerID) return NoiseEncryptionFacade.HandshakeResult.Ignored
 
-        return noiseEncryption.processHandshake(peerID, packet.payload, localPrivateKey, localPublicKey)
+        return noiseEncryption.processHandshake(peerID, packet.payload, localPrivateKey, localPublicKey, link = link)
     }
 
     /**

@@ -19,15 +19,30 @@ import kotlin.time.Clock
  * has to give up its own attempt and answer, and both sides have to agree which — see
  * [processHandshake].
  */
-class NoiseEncryptionFacade(private val myPeerID: String) {
+class NoiseEncryptionFacade(
+    private val myPeerID: String,
+    private val maxInboundHandshakes: Int = MAX_INBOUND_HANDSHAKES,
+    private val maxInboundHandshakesPerLink: Int = MAX_INBOUND_HANDSHAKES_PER_LINK,
+    private val maxSessions: Int = MAX_NOISE_SESSIONS,
+    private val maxChosenPeers: Int = 2 * maxSessions
+) {
 
     // AtomicFU's non-suspending common lock is deliberately used here instead of Mutex: facade
     // operations do not suspend, and callbacks/network sends happen after the operation returns.
     // A registry entry stays alive while an operation waits for its peer lock, so removing an idle
     // lock cannot split one peer's state across two locks. The locks never nest: registry lookup
     // finishes before the peer lock is acquired, and peer cleanup finishes before registry cleanup.
+    // The inbound counter and session order locks are leaf locks: they are taken while holding a
+    // peer lock, never the other way round, and never together with the registry lock.
     private val peerLocks = mutableMapOf<String, PeerLock>()
     private val peerLocksRegistry = ReentrantLock()
+    private val inboundHandshakeLock = ReentrantLock()
+    private var inboundHandshakes = 0
+    private val inboundAdmissionsByLink = mutableMapOf<String, ArrayDeque<Long>>()
+    private val sessionOrderLock = ReentrantLock()
+    private val sessionOrder = LinkedHashMap<String, Unit>()
+    // Peers the user chose to write to, oldest choice first. Guarded by sessionOrderLock.
+    private val chosenByUser = LinkedHashMap<String, Unit>()
 
     private class PeerLock {
         val lock = ReentrantLock()
@@ -40,6 +55,7 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
         /** When [fallback] began sitting beside an established session, if it does. */
         var fallbackEstablishedAt: Long? = null
         var initiated = false
+        var countedInbound = false
     }
 
     /** The candidate, when it is a handshake in flight with no established session beside it. */
@@ -68,7 +84,13 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
             peerLocks.getOrPut(peerID) { PeerLock() }.also { it.users += 1 }
         }
         return try {
-            peerLock.lock.withLock { block(peerLock) }
+            peerLock.lock.withLock {
+                try {
+                    block(peerLock)
+                } finally {
+                    reconcilePeerBookkeeping(peerID, peerLock)
+                }
+            }
         } finally {
             peerLocksRegistry.withLock {
                 peerLock.users -= 1
@@ -78,6 +100,95 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
             }
         }
     }
+
+    /** Kept generic so every route that drops or promotes a candidate releases its reservation. */
+    private fun reconcilePeerBookkeeping(peerID: String, state: PeerLock) {
+        val countsInbound = state.candidate != null && !state.initiated && state.established == null
+        if (state.countedInbound && !countsInbound) {
+            inboundHandshakeLock.withLock {
+                inboundHandshakes -= 1
+                state.countedInbound = false
+            }
+        }
+
+        val hasSession = state.established != null || state.fallback != null
+        sessionOrderLock.withLock {
+            if (hasSession) {
+                if (peerID !in sessionOrder) sessionOrder[peerID] = Unit
+            } else {
+                sessionOrder.remove(peerID)
+            }
+        }
+    }
+
+    /** Reserve before allocating responder state, so a refused opening changes no peer state. */
+    private fun reserveInboundHandshake(state: PeerLock, now: Long, link: String): Boolean {
+        if (state.countedInbound) return true
+        return inboundHandshakeLock.withLock {
+            pruneTrackedLinks(now)
+            val admissions = inboundAdmissionsByLink[link]
+            while (admissions?.isNotEmpty() == true && now - admissions.first() >= INBOUND_HANDSHAKE_WINDOW_MS) {
+                admissions.removeFirst()
+            }
+            if (admissions?.isEmpty() == true) inboundAdmissionsByLink.remove(link)
+            val currentAdmissions = inboundAdmissionsByLink[link]
+            if (currentAdmissions != null && currentAdmissions.size >= maxInboundHandshakesPerLink) return@withLock false
+            if (inboundHandshakes >= maxInboundHandshakes) return@withLock false
+            inboundAdmissionsByLink.getOrPut(link) { ArrayDeque() }.addLast(now)
+            inboundHandshakes += 1
+            state.countedInbound = true
+            true
+        }
+    }
+
+    /** The table is only swept under pressure, so quiet links do not cause work on every opening. */
+    private fun pruneTrackedLinks(now: Long) {
+        if (inboundAdmissionsByLink.size <= MAX_TRACKED_LINKS) return
+        val iterator = inboundAdmissionsByLink.iterator()
+        while (iterator.hasNext()) {
+            val (_, admissions) = iterator.next()
+            if (admissions.isEmpty() || now - admissions.last() >= INBOUND_HANDSHAKE_WINDOW_MS) iterator.remove()
+        }
+    }
+
+    /**
+     * Records that the USER chose to write to [peerID] (a message or file sent, a session asked
+     * for). A session with such a peer is pushed out by the session limit only when every other
+     * session is with a chosen peer too. Nothing a packet says can put a peer here, which is the
+     * point: ids are free to mint and each can earn a session, but none of them can make the user
+     * write to it.
+     */
+    fun markChosenByUser(peerID: String) {
+        sessionOrderLock.withLock {
+            if (chosenByUser.remove(peerID) == null && chosenByUser.size >= maxChosenPeers) {
+                // The set is bounded, so a choice has to go. One with no session goes first: the
+                // mark only matters for a session, and a peer the user asked for and never reached
+                // must not cost a live conversation its protection. The set holds twice as many
+                // ids as there can be sessions, so there is always such a choice unless the user
+                // has live sessions with more than maxSessions chosen peers, which cannot be.
+                val goes = chosenByUser.keys.firstOrNull { it !in sessionOrder } ?: chosenByUser.keys.first()
+                chosenByUser.remove(goes)
+            }
+            chosenByUser[peerID] = Unit
+        }
+    }
+
+    internal fun isChosenByUser(peerID: String): Boolean = sessionOrderLock.withLock { peerID in chosenByUser }
+
+    private fun touchSession(peerID: String) {
+        sessionOrderLock.withLock {
+            if (sessionOrder.remove(peerID) != null) sessionOrder[peerID] = Unit
+        }
+    }
+
+    internal val inboundHandshakeCount: Int
+        get() = inboundHandshakeLock.withLock { inboundHandshakes }
+
+    internal val trackedLinkCount: Int
+        get() = inboundHandshakeLock.withLock { inboundAdmissionsByLink.size }
+
+    internal val sessionCount: Int
+        get() = sessionOrderLock.withLock { sessionOrder.size }
 
     fun hasEstablishedSession(peerID: String, now: Long = currentTimeMillis()): Boolean {
         return withPeerLock(peerID) { state ->
@@ -256,64 +367,129 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
         message: ByteArray,
         localStaticPrivateKey: ByteArray,
         localStaticPublicKey: ByteArray,
-        now: Long = currentTimeMillis()
-    ): HandshakeResult = withPeerLock(peerID) { state ->
-        retireExpiredFallback(state, now)
-        // The construction is inside the try. Every current actual swallows its own init failure
-        // into NoiseSessionState.Failed, but a throw from here would propagate through
-        // MessageHandler into the per-peer actor loop in PacketProcessor and kill that coroutine,
-        // after which every packet from this peer is swallowed by a channel with no consumer.
-        // Nothing about the call site guarantees it cannot throw, so it is covered.
-        renegotiation(peerID, state, message, localStaticPrivateKey, localStaticPublicKey, now)
-            ?.let { return@withPeerLock it }
+        now: Long = currentTimeMillis(),
+        // The link is the address of the connection a packet arrived on, supplied by the
+        // platform's GATT layer; it is never taken from a packet field. A relayed opening carries
+        // the relay's link, so peers reached through one neighbour share that neighbour's admission.
+        link: String = ""
+    ): HandshakeResult {
+        val result = withPeerLock(peerID) { state ->
+            retireExpiredFallback(state, now)
+            // The construction is inside the try. Every current actual swallows its own init failure
+            // into NoiseSessionState.Failed, but a throw from here would propagate through
+            // MessageHandler into the per-peer actor loop in PacketProcessor and kill that coroutine,
+            // after which every packet from this peer is swallowed by a channel with no consumer.
+            // Nothing about the call site guarantees it cannot throw, so it is covered.
+            renegotiation(peerID, state, message, localStaticPrivateKey, localStaticPublicKey, now)
+                ?.let { return@withPeerLock it }
 
-        when (collisionVerdict(peerID, state, message, now)) {
-            CollisionVerdict.HOLD -> {
-                println(
-                    "[NoiseEncryptionFacade] Handshake collision with $peerID; holding our " +
-                        "initiator session and ignoring its message 1"
-                )
-                return@withPeerLock HandshakeResult.Ignored
+            val collision = collisionVerdict(peerID, state, message, now)
+            when (collision) {
+                CollisionVerdict.HOLD -> {
+                    println(
+                        "[NoiseEncryptionFacade] Handshake collision with $peerID; holding our " +
+                            "initiator session and ignoring its message 1"
+                    )
+                    return@withPeerLock HandshakeResult.Ignored
+                }
+
+                CollisionVerdict.YIELD -> {
+                    if (!reserveInboundHandshake(state, now, link)) return@withPeerLock HandshakeResult.Ignored
+                    println(
+                        "[NoiseEncryptionFacade] Handshake collision with $peerID; yielding our " +
+                            "initiator session and answering as responder"
+                    )
+                    setCandidate(state, null, destroyPrevious = true)
+                }
+
+                CollisionVerdict.NONE -> Unit
             }
 
-            CollisionVerdict.YIELD -> {
-                println(
-                    "[NoiseEncryptionFacade] Handshake collision with $peerID; yielding our " +
-                        "initiator session and answering as responder"
-                )
+            try {
+                val session = state.candidate ?: run {
+                    if (!reserveInboundHandshake(state, now, link)) return@withPeerLock HandshakeResult.Ignored
+                    NoiseSession(
+                        peerID = peerID,
+                        isInitiator = false,
+                        localStaticPrivateKey = localStaticPrivateKey,
+                        localStaticPublicKey = localStaticPublicKey
+                    ).also { setCandidate(state, it, initiated = false) }
+                }
+
+                val response = session.processHandshakeMessage(message)
+                if (session.isEstablished()) {
+                    validateAndPromote(peerID, state, session, response, now)
+                } else {
+                    response?.let(HandshakeResult::Response) ?: HandshakeResult.Ignored
+                }
+            } catch (e: Exception) {
+                println("[NoiseEncryptionFacade] Handshake failed for $peerID: ${e.message}")
                 setCandidate(state, null, destroyPrevious = true)
+                HandshakeResult.Ignored
             }
-
-            CollisionVerdict.NONE -> Unit
         }
+        if (result is HandshakeResult.Established && !enforceSessionLimit(peerID)) {
+            // The handshake completed, but there was no room for its session: every other session
+            // is with a peer the user chose to write to and this one is not. Nothing may claim a
+            // session exists, and the handshake's last message (if this node owed one) is not sent.
+            println("[NoiseEncryptionFacade] No room to keep a session with $peerID; sessions the user chose stay")
+            return HandshakeResult.Ignored
+        }
+        return result
+    }
 
-        try {
-            val session = state.candidate ?: NoiseSession(
-                peerID = peerID,
-                isInitiator = false,
-                localStaticPrivateKey = localStaticPrivateKey,
-                localStaticPublicKey = localStaticPublicKey
-            ).also { setCandidate(state, it, initiated = false) }
-
-            val response = session.processHandshakeMessage(message)
-            if (session.isEstablished()) {
-                validateAndPromote(peerID, state, session, response, now)
-            } else {
-                response?.let(HandshakeResult::Response) ?: HandshakeResult.Ignored
+    /**
+     * Brings the number of sessions back under the limit after a promotion. Runs outside any peer
+     * lock, because it has to take the lock of the peer whose session goes.
+     *
+     * The peer is picked under the order lock and then picked AGAIN under its own lock, and its
+     * session is destroyed while the order lock is still held. [markChosenByUser] takes that same
+     * lock, so the user's mark either lands before the second pick (and the peer is kept) or after
+     * the session is gone; it cannot land in between. Between the two picks the peer may also have
+     * been used, or another promotion may already have made room.
+     */
+    private fun enforceSessionLimit(promotedPeerID: String): Boolean {
+        while (true) {
+            // Whether the promoted peer still has its session is read at the end, not tracked
+            // here: another promotion's enforcement may be the one that pushed it out.
+            val picked = sessionOrderLock.withLock { sessionToPushOut(promotedPeerID) }
+                ?: return sessionOrderLock.withLock { promotedPeerID in sessionOrder }
+            beforePushingOut?.invoke(picked)
+            withPeerLock(picked) { state ->
+                sessionOrderLock.withLock {
+                    if (sessionToPushOut(promotedPeerID) == picked) {
+                        destroySessions(state)
+                        sessionOrder.remove(picked)
+                    }
+                }
             }
-        } catch (e: Exception) {
-            println("[NoiseEncryptionFacade] Handshake failed for $peerID: ${e.message}")
-            setCandidate(state, null, destroyPrevious = true)
-            HandshakeResult.Ignored
         }
     }
+
+    /**
+     * Which session goes when there is one too many. A peer the user did not choose goes first,
+     * least recently used first. The peer just promoted is the most recently used of them, so it
+     * goes only when it is the ONLY one the user did not choose: a newcomer nobody asked for does
+     * not displace a conversation the user is having. When every session is with a chosen peer,
+     * the least recently used of the others goes and the newcomer (chosen too) stays.
+     */
+    private fun sessionToPushOut(promotedPeerID: String): String? {
+        if (sessionOrder.size <= maxSessions) return null
+        return sessionOrder.keys.firstOrNull { it !in chosenByUser }
+            ?: sessionOrder.keys.firstOrNull { it != promotedPeerID }
+    }
+
+    /** Test hook: runs after a session has been picked to go and before its peer's lock is taken. */
+    internal var beforePushingOut: ((String) -> Unit)? = null
 
     fun encrypt(peerID: String, data: ByteArray, now: Long = currentTimeMillis()): ByteArray? {
         return withPeerLock(peerID) { state ->
             retireExpiredFallback(state, now)
-            state.established
+            val encrypted = state.established
                 ?.takeIf { it.isEstablished() }
                 ?.encrypt(data)
+            if (encrypted != null) touchSession(peerID)
+            encrypted
         }
     }
 
@@ -334,11 +510,15 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
                 state.fallback?.destroy()
                 state.fallback = null
                 state.fallbackEstablishedAt = null
+                touchSession(peerID)
                 return@withPeerLock DecryptionResult(establishedPlaintext, DecryptionVia.ESTABLISHED)
             }
             state.fallback?.takeIf { it.isEstablished() }?.let { session ->
                 val fallbackPlaintext = try { session.decrypt(encryptedData) } catch (e: Exception) { null }
-                fallbackPlaintext?.let { DecryptionResult(it, DecryptionVia.FALLBACK) }
+                fallbackPlaintext?.let {
+                    touchSession(peerID)
+                    DecryptionResult(it, DecryptionVia.FALLBACK)
+                }
             }
         }
     }
@@ -415,17 +595,19 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
     }
 
     fun removeSession(peerID: String) {
-        withPeerLock(peerID) { state ->
-            state.established?.destroy()
-            state.established = null
-            state.fallback?.destroy()
-            state.fallback = null
-            state.fallbackEstablishedAt = null
-            // A renegotiation only exists to replace the session being removed here, so it goes
-            // too -- otherwise it would outlive its purpose and later promote itself over a
-            // session the peer has since built by other means.
-            setCandidate(state, null, destroyPrevious = true)
-        }
+        withPeerLock(peerID) { state -> destroySessions(state) }
+    }
+
+    private fun destroySessions(state: PeerLock) {
+        state.established?.destroy()
+        state.established = null
+        state.fallback?.destroy()
+        state.fallback = null
+        state.fallbackEstablishedAt = null
+        // A renegotiation only exists to replace the session being removed here, so it goes
+        // too -- otherwise it would outlive its purpose and later promote itself over a
+        // session the peer has since built by other means.
+        setCandidate(state, null, destroyPrevious = true)
     }
 
     fun clearAllSessions() {
@@ -466,6 +648,7 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
         }
         state.established = candidate
         state.fallbackEstablishedAt = state.fallback?.let { now }
+        touchSession(peerID)
         println("[NoiseEncryptionFacade] Noise identity validated for $peerID; session established")
         return HandshakeResult.Established(response)
     }
@@ -501,6 +684,40 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
         this in '0'..'9' || this in 'a'..'f' || this in 'A'..'F'
 
     companion object {
+        /**
+         * This global backstop bounds live responder candidates. Reaching all 256 takes seven or
+         * more links each sending eight or more openings every three seconds at once; handshakes
+         * this node starts are not affected.
+         */
+        const val MAX_INBOUND_HANDSHAKES = 256
+
+        /**
+         * One link that sends eight or more openings every three seconds keeps its own admission
+         * full, so other peers whose openings arrive over that link (including peers relayed by
+         * that neighbour) wait and retry. Peers on every other link are unaffected.
+         */
+        const val MAX_INBOUND_HANDSHAKES_PER_LINK = 8
+
+        const val INBOUND_HANDSHAKE_WINDOW_MS = 3_000L
+
+        /**
+         * Above this many links in the admission table, links that admitted nothing within the
+         * window are dropped from it. A threshold for tidying, not a limit: a link that is inside
+         * its window stays, and a link exists only for as long as a connection's address does.
+         */
+        const val MAX_TRACKED_LINKS = 64
+
+        /**
+         * Each session holds cipher state, and ids are free to mint, so their number has to be
+         * limited; when it is reached the least recently used session goes. Filling the table takes
+         * 256 completed handshakes under 256 different ids, each with its own key, and after that
+         * every further one pushes out a session. What that costs the peer pushed out: one new
+         * handshake, and the message that reveals the session is gone (it cannot be read) is lost.
+         * So sessions with peers the user chose to write to ([markChosenByUser]) go last: a flood
+         * of minted ids pushes out one another and peers that have only ever written to us.
+         */
+        const val MAX_NOISE_SESSIONS = 256
+
         const val ID_BYTES = 8
         const val ID_HEX_LENGTH = ID_BYTES * 2
         const val FALLBACK_MAX_AGE_MS = 5 * 60 * 1000L

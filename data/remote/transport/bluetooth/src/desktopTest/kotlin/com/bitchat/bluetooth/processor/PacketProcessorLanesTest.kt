@@ -121,8 +121,35 @@ class PacketProcessorLanesTest {
         }
     }
 
+    @Test
+    fun handshakeLinkReachesTheFacadeAdmissionLimit() {
+        handshakeFixture().use { fixture ->
+            val first = fixture.openingPacket("1".repeat(64), 1uL)
+            val second = fixture.openingPacket("2".repeat(64), 2uL)
+            fixture.processor.processPacket(first.packet, first.peerID, "same-link")
+            fixture.processor.processPacket(second.packet, second.peerID, "same-link")
+
+            awaitUntil { fixture.delegate.handshakeResponses.size == 1 }
+            // Packet processing is asynchronous; give a refused opening enough time to reach the
+            // handler before deciding it did not produce a second response.
+            Thread.sleep(400)
+            assertEquals(1, fixture.delegate.handshakeResponses.size)
+        }
+
+        handshakeFixture().use { fixture ->
+            val first = fixture.openingPacket("3".repeat(64), 1uL)
+            val second = fixture.openingPacket("4".repeat(64), 2uL)
+            fixture.processor.processPacket(first.packet, first.peerID, "first-link")
+            fixture.processor.processPacket(second.packet, second.peerID, "second-link")
+
+            awaitUntil { fixture.delegate.handshakeResponses.size == 2 }
+        }
+    }
+
     private fun fixture(laneCount: Int, laneCapacity: Int, maxQueuedBytesPerLane: Int = 100_000): Fixture =
         Fixture(laneCount, laneCapacity, maxQueuedBytesPerLane)
+
+    private fun handshakeFixture(): HandshakeFixture = HandshakeFixture()
 
     private fun packet(number: Int, content: String) = BitchatPacket(
         type = MessageType.MESSAGE.value,
@@ -139,11 +166,47 @@ class PacketProcessorLanesTest {
         override fun close() { processor.shutdown(); security.shutdown() }
     }
 
+    private class HandshakeFixture : AutoCloseable {
+        private val localCrypto = CryptoSigningFacade("a".repeat(64))
+        private val localID = localCrypto.getIdentityFingerprint()
+        private val facade = NoiseEncryptionFacade(localID, maxInboundHandshakesPerLink = 1)
+        private val security = SecurityManager(facade, localCrypto, localID)
+        val delegate = Delegate()
+        private val handler = MessageHandler(localID, security, PeerManager(), localCrypto).also { it.delegate = delegate }
+        val processor = PacketProcessor(localID, security, handler, laneCount = 1, laneCapacity = 4)
+
+        fun openingPacket(seed: String, timestamp: ULong): Opening {
+            val remoteCrypto = CryptoSigningFacade(seed)
+            val remoteID = remoteCrypto.getIdentityFingerprint()
+            val remoteFacade = NoiseEncryptionFacade(remoteID)
+            return Opening(
+                remoteID,
+                BitchatPacket(
+                    type = MessageType.NOISE_HANDSHAKE.value,
+                    senderID = BitchatPacket.hexStringToByteArray(remoteID),
+                    recipientID = BitchatPacket.hexStringToByteArray(localID),
+                    timestamp = timestamp,
+                    payload = remoteFacade.initiateHandshake(
+                        localID,
+                        remoteCrypto.getNoisePrivateKey(),
+                        remoteCrypto.getNoisePublicKey()
+                    ),
+                    ttl = 1u
+                )
+            )
+        }
+
+        override fun close() { processor.shutdown(); security.shutdown() }
+    }
+
+    private data class Opening(val peerID: String, val packet: BitchatPacket)
+
     private class Delegate : MessageHandlerDelegate {
         val messages = java.util.Collections.synchronizedList(mutableListOf<Pair<String, String>>())
         val firstEntered = CountDownLatch(1)
         val otherArrived = CountDownLatch(1)
         val arrived = CountDownLatch(1)
+        val handshakeResponses = java.util.Collections.synchronizedList(mutableListOf<ByteArray>())
         /** When set, the first packet to arrive waits inside the handler until it is released. */
         var holdFirst: CountDownLatch? = null
         private val held = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -163,7 +226,7 @@ class PacketProcessorLanesTest {
         override fun onAuthenticatedDelivered(peerID: String, messageId: String) = Unit
         override fun onAuthenticatedRead(peerID: String, messageId: String) = Unit
         override fun onHandshakeReceived(peerID: String) = Unit
-        override fun onHandshakeResponse(peerID: String, responsePacket: ByteArray) = Unit
+        override fun onHandshakeResponse(peerID: String, responsePacket: ByteArray) { handshakeResponses += responsePacket }
         override fun onSessionEstablished(peerID: String) = Unit
         override fun onSessionUnusable(peerID: String) = Unit
         override fun onSessionNotShared(peerID: String) = Unit

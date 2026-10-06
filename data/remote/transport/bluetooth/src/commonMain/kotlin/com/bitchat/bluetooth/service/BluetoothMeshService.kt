@@ -9,6 +9,7 @@ import com.bitchat.bluetooth.handler.MessageHandlerDelegate
 import com.bitchat.bluetooth.manager.HandshakeRefreshPolicy
 import com.bitchat.bluetooth.manager.FragmentManager
 import com.bitchat.bluetooth.manager.HandshakeSupervisor
+import com.bitchat.bluetooth.manager.OwedHandshakes
 import com.bitchat.bluetooth.manager.PeerLinkDirectory
 import com.bitchat.bluetooth.manager.PeerManager
 import com.bitchat.bluetooth.manager.PeerManagerDelegate
@@ -63,6 +64,8 @@ class BluetoothMeshService(
     // Only the decrypt-failure cooldown reads this clock (see MessageHandler); everything else in
     // the service keeps real time.
     private val failureClock: Clock = Clock.System,
+    // How many owed handshakes of each kind are kept. A parameter so a test can fill it.
+    maxOwedHandshakes: Int = HandshakeSupervisor.MAX_OWED_HANDSHAKES,
 ) : ConnectionEstablishedCallback {
     val myPeerID: String = cryptoSigning.getIdentityFingerprint()
 
@@ -96,10 +99,11 @@ class BluetoothMeshService(
 
     private val handshakeRefreshPolicy = HandshakeRefreshPolicy()
 
-    // Peers this node owes a handshake to but could not send one for, because no link could carry
-    // it. They are retried when a link to them comes up rather than on a timer. Guarded by
+    // Peers this node owes a handshake to but could not send one for, or is still attempting. They
+    // are retried when a link to them comes up rather than on a timer. What the user asked for and
+    // what this node started by itself are kept apart (see OwedHandshakes). Guarded by
     // handshakeMutex.
-    private val handshakesOwed = mutableSetOf<String>()
+    private val handshakesOwed = OwedHandshakes(maxOwedHandshakes)
 
     // When the handshake with a peer was last (re)started, so two link-up signals for the same
     // link -- the inbound packet that binds the address and the outbound connection becoming
@@ -196,7 +200,7 @@ class BluetoothMeshService(
                 val recipientHex = packet.recipientID?.toHexString() ?: "null"
                 println("🔍 BLE: Packet received - Type: $messageType, From: $peerID, RecipientID: $recipientHex, DeviceAddr: $deviceAddress")
 
-                packetProcessor.processPacket(packet, peerID)
+                packetProcessor.processPacket(packet, peerID, deviceAddress)
             } catch (e: Exception) {
                 logError("BluetoothMeshService", "Error processing received packet: ${e.message}")
             }
@@ -303,14 +307,14 @@ class BluetoothMeshService(
                 // asynchronously.
                 logInfo("BluetoothMeshService", "Replacing the unusable Noise session with $peerID")
                 noiseEncryption.demote(peerID)
-                initiateNoiseHandshake(peerID)
+                startHandshake(peerID, byUser = false)
             }
 
             override fun onSessionNotShared(peerID: String) {
                 // Synchronous for the same reason as onSessionUnusable.
                 logInfo("BluetoothMeshService", "The established Noise session is not shared with $peerID")
                 noiseEncryption.discardEstablished(peerID)
-                initiateNoiseHandshake(peerID)
+                startHandshake(peerID, byUser = false)
             }
 
             override fun onSessionEstablished(peerID: String) {
@@ -395,9 +399,9 @@ class BluetoothMeshService(
     private fun onPeerLinkRefreshed(peerID: String) {
         serviceScope.launch {
             val now = Clock.System.now().toEpochMilliseconds()
-            val owed = handshakeMutex.withLock {
+            val (owed, byUser) = handshakeMutex.withLock {
                 handshakeSupervisor.reset(peerID)
-                peerID in handshakesOwed
+                (peerID in handshakesOwed) to handshakesOwed.isForUser(peerID)
             }
             val startedAt = handshakeMutex.withLock { handshakeStartedAt[peerID] }
 
@@ -415,7 +419,7 @@ class BluetoothMeshService(
                         "BluetoothMeshService",
                         "Peer $peerID is reachable again; sending the handshake it is owed"
                     )
-                    initiateNoiseHandshake(peerID)
+                    startHandshake(peerID, byUser = byUser)
                 }
 
                 HandshakeRefreshPolicy.Decision.RESTART -> {
@@ -424,7 +428,9 @@ class BluetoothMeshService(
                         "Peer $peerID reappeared with our handshake in flight; restarting it on the new link"
                     )
                     noiseEncryption.abandonHandshake(peerID)
-                    initiateNoiseHandshake(peerID)
+                    // A link coming up is reported by a packet that only CLAIMS the peer's id, so
+                    // it may restart a handshake but must not turn it into one the user asked for.
+                    startHandshake(peerID, byUser = byUser)
                 }
             }
         }
@@ -439,11 +445,18 @@ class BluetoothMeshService(
      * replace it and every later direct message to that peer is queued and never sent.
      *
      * A session that is past the deadline but is still inside its retry backoff is deliberately
-     * left in place: it is the marker that says a handshake is owed, and dropping it early would
-     * lose the only record that the retry is still coming.
+     * left in place: it is the marker that says an automatic retry is still coming, and dropping
+     * it early would lose that retry.
      */
     internal suspend fun sweepStalledHandshakes(now: Long) {
         val inFlight = noiseEncryption.handshakesInFlight()
+        handshakeMutex.withLock {
+            handshakeSupervisor.prune(
+                now,
+                HandshakeSupervisor.HANDSHAKE_RECORD_MAX_AGE_MS
+            ) { peerID -> peerID in inFlight || peerID in handshakesOwed }
+            pruneStartedAt(now, inFlight.keys)
+        }
         if (inFlight.isEmpty()) return
 
         inFlight.forEach { (peerID, startedAt) ->
@@ -475,7 +488,7 @@ class BluetoothMeshService(
                 // initiateNoiseHandshake defers to the link coming up if nothing can carry it, so
                 // a peer that is "active" only because its announce is still inside the three
                 // minute window no longer costs an attempt.
-                initiateNoiseHandshake(peerID)
+                startHandshake(peerID, byUser = handshakeMutex.withLock { handshakesOwed.isForUser(peerID) })
             } else {
                 logInfo(
                     "BluetoothMeshService",
@@ -526,6 +539,7 @@ class BluetoothMeshService(
     }
 
     fun sendPrivateMessage(content: String, recipientPeerID: String, recipientNickname: String, messageID: String? = null) {
+        noiseEncryption.markChosenByUser(recipientPeerID)
         serviceScope.launch {
             try {
                 if (!securityManager.hasEstablishedSession(recipientPeerID)) {
@@ -734,6 +748,16 @@ class BluetoothMeshService(
         return noiseEncryption.isHandshaking(peerID)
     }
 
+    /** Handshakes the user asked for and that are still owed. */
+    internal suspend fun handshakesOwedCount(): Int = handshakeMutex.withLock { handshakesOwed.userCount }
+
+    /** Handshakes this node started by itself (recoveries, retries) and that are still owed. */
+    internal suspend fun automaticHandshakesOwedCount(): Int = handshakeMutex.withLock { handshakesOwed.automaticCount }
+
+    internal suspend fun handshakeStartedAtCount(): Int = handshakeMutex.withLock { handshakeStartedAt.size }
+
+    internal suspend fun handshakeSupervisorSize(): Int = handshakeMutex.withLock { handshakeSupervisor.size }
+
     fun getSessionState(peerID: String): String {
         return noiseEncryption.getSessionState(peerID)
     }
@@ -748,6 +772,17 @@ class BluetoothMeshService(
      * - Secure key persistence
      */
     fun initiateNoiseHandshake(peerID: String) {
+        noiseEncryption.markChosenByUser(peerID)
+        startHandshake(peerID, byUser = true)
+    }
+
+    internal fun sessionIsChosenByUser(peerID: String): Boolean = noiseEncryption.isChosenByUser(peerID)
+
+    /**
+     * [byUser] says who wanted this handshake: the user (a private message was sent to the peer) or
+     * this node by itself (a recovery, a retry). It only decides which kind of owed entry is kept.
+     */
+    private fun startHandshake(peerID: String, byUser: Boolean) {
         serviceScope.launch {
             try {
                 // Get Noise static keys from crypto signing facade
@@ -764,6 +799,18 @@ class BluetoothMeshService(
                 // If handshakeData is empty, session already exists - don't broadcast
                 if (handshakeData.isEmpty()) {
                     logInfo("BluetoothMeshService", "Session with $peerID already exists, skipping handshake initiation")
+                    // Nothing new goes out, but if a handshake with this peer is already in flight
+                    // (one this node started by itself, or one the peer opened) and the USER has
+                    // now asked for a session, it is the user's from here on. Otherwise it would
+                    // stay in the room that forged traffic can churn.
+                    // Looked at and recorded under the lock that the completion's cleanup takes: a
+                    // handshake that finishes first is seen as finished here, and one that finishes
+                    // after has its cleanup run after this and remove the entry.
+                    if (byUser) {
+                        handshakeMutex.withLock {
+                            if (noiseEncryption.isHandshaking(peerID)) handshakesOwed.rememberForUser(peerID)
+                        }
+                    }
                     return@launch
                 }
 
@@ -791,15 +838,15 @@ class BluetoothMeshService(
                     // returns empty while one exists, so keeping it would block the retry that the
                     // link coming up is about to ask for.
                     noiseEncryption.abandonHandshake(peerID)
-                    handshakeMutex.withLock { handshakesOwed.add(peerID) }
+                    handshakeMutex.withLock { rememberOwed(peerID, byUser) }
                     return@launch
                 }
 
                 val attempts = handshakeMutex.withLock {
                     val now = Clock.System.now().toEpochMilliseconds()
                     handshakeSupervisor.recordAttempt(peerID, now)
-                    handshakeStartedAt[peerID] = now
-                    handshakesOwed.add(peerID)
+                    recordStartedAt(peerID, now)
+                    rememberOwed(peerID, byUser)
                     handshakeSupervisor.attemptsFor(peerID)
                 }
 
@@ -807,6 +854,31 @@ class BluetoothMeshService(
 
             } catch (e: Exception) {
                 logError("BluetoothMeshService", "Error initiating handshake: ${e.message}")
+            }
+        }
+    }
+
+    private fun rememberOwed(peerID: String, byUser: Boolean) {
+        if (byUser) handshakesOwed.rememberForUser(peerID) else handshakesOwed.rememberAutomatic(peerID)
+    }
+
+    /** A new id at capacity gives up the least recently started record. */
+    private fun recordStartedAt(peerID: String, now: Long) {
+        if (peerID !in handshakeStartedAt && handshakeStartedAt.size >= HandshakeSupervisor.MAX_HANDSHAKE_RECORDS) {
+            handshakeStartedAt.minByOrNull { it.value }?.key?.let(handshakeStartedAt::remove)
+        }
+        handshakeStartedAt[peerID] = now
+    }
+
+    private fun pruneStartedAt(now: Long, inFlight: Set<String>) {
+        val iterator = handshakeStartedAt.iterator()
+        while (iterator.hasNext()) {
+            val (peerID, startedAt) = iterator.next()
+            if (
+                now - startedAt >= HandshakeSupervisor.HANDSHAKE_RECORD_MAX_AGE_MS &&
+                peerID !in inFlight && peerID !in handshakesOwed
+            ) {
+                iterator.remove()
             }
         }
     }
@@ -936,6 +1008,7 @@ class BluetoothMeshService(
     }
 
     fun sendFilePrivate(recipientPeerID: String, file: BitchatFilePacket) {
+        noiseEncryption.markChosenByUser(recipientPeerID)
         serviceScope.launch {
             try {
                 if (!securityManager.hasEstablishedSession(recipientPeerID)) {

@@ -28,6 +28,9 @@ class HandshakeSupervisor(
 
     private val attempts = mutableMapOf<String, Attempt>()
 
+    val size: Int
+        get() = attempts.size
+
     /**
      * True when a handshake started at [startedAt] has been in flight past the deadline and can
      * no longer be expected to complete.
@@ -37,7 +40,20 @@ class HandshakeSupervisor(
     /** Record that a handshake message actually went out on the wire. */
     fun recordAttempt(peerID: String, now: Long) {
         val previous = attempts[peerID]
+        if (previous == null && attempts.size >= MAX_HANDSHAKE_RECORDS) {
+            val oldestPeerID = attempts.minByOrNull { it.value.at }?.key
+            if (oldestPeerID != null) attempts.remove(oldestPeerID)
+        }
         attempts[peerID] = Attempt(count = (previous?.count ?: 0) + 1, at = now)
+    }
+
+    /** Remove spent records unless [keep] says the peer still has an in-flight or owed handshake. */
+    fun prune(now: Long, maxAgeMs: Long, keep: (String) -> Boolean): Int {
+        val expired = attempts.filter { (peerID, attempt) ->
+            now - attempt.at >= maxAgeMs && !keep(peerID)
+        }.keys
+        expired.forEach(attempts::remove)
+        return expired.size
     }
 
     /**
@@ -100,5 +116,21 @@ class HandshakeSupervisor(
 
         /** Ceiling on the doubling backoff. */
         const val MAX_BACKOFF_MS = 120_000L
+
+        /** How many owed handshakes of each kind are kept; see [OwedHandshakes]. */
+        const val MAX_OWED_HANDSHAKES = 256
+
+        /** A spent record is kept this long; after that a new request for the peer starts with a fresh budget. */
+        const val HANDSHAKE_RECORD_MAX_AGE_MS = 10 * 60 * 1000L
+
+        /**
+         * The record tables have this many entries at most; the oldest goes when a new peer is
+         * recorded in a full one. A record is made for every handshake this node starts, and what
+         * makes it start one is often not authenticated (a recovery after unreadable packets, a
+         * retry of a handshake someone else opened and left), so the age rule alone would not be a
+         * limit. What losing a record costs a peer: its history is gone, which means a fresh retry
+         * budget the next time something asks for a handshake with it.
+         */
+        const val MAX_HANDSHAKE_RECORDS = 1024
     }
 }

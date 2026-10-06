@@ -37,13 +37,13 @@ class MessageHandler(
     // A session can report itself established and be unusable; this is what notices.
     private val sessionFailures = SessionFailureTracker()
 
-    suspend fun handlePacket(packet: BitchatPacket, peerID: String) {
+    suspend fun handlePacket(packet: BitchatPacket, peerID: String, link: String = "") {
         val messageType = MessageType.fromValue(packet.type) ?: return
 
         when (messageType) {
             MessageType.ANNOUNCE -> handleAnnounce(packet, peerID)
             MessageType.MESSAGE -> handleMessage(packet, peerID)
-            MessageType.NOISE_HANDSHAKE -> handleNoiseHandshake(packet, peerID)
+            MessageType.NOISE_HANDSHAKE -> handleNoiseHandshake(packet, peerID, link)
             MessageType.NOISE_ENCRYPTED -> handleNoiseEncrypted(packet, peerID)
             MessageType.LEAVE -> handleLeave(packet, peerID)
             MessageType.FRAGMENT -> handleFragment(packet, peerID)
@@ -95,7 +95,7 @@ class MessageHandler(
         delegate?.onMessageReceived(peerID, packet.payload.decodeToString())
     }
 
-    private suspend fun handleNoiseHandshake(packet: BitchatPacket, peerID: String) {
+    private suspend fun handleNoiseHandshake(packet: BitchatPacket, peerID: String, link: String) {
         val localPrivateKey = cryptoSigning.getNoisePrivateKey()
         val localPublicKey = cryptoSigning.getNoisePublicKey()
 
@@ -103,7 +103,8 @@ class MessageHandler(
             packet = packet,
             peerID = peerID,
             localPrivateKey = localPrivateKey,
-            localPublicKey = localPublicKey
+            localPublicKey = localPublicKey,
+            link = link
         )) {
             is NoiseEncryptionFacade.HandshakeResult.Response -> {
                 println("🔐 NOISE_HANDSHAKE: Generated response packet (${result.message.size} bytes)")
