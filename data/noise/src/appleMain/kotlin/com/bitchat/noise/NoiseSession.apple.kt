@@ -20,7 +20,8 @@ import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
 import noise.c.NoiseBuffer
 import noise.c.NoiseHandshakeState
-import noise.c.noise_cipherstate_decrypt_with_ad
+import noise.c.bitchat_noise_cipherstate_decrypt_at
+import noise.c.bitchat_noise_cipherstate_layout_is_compatible
 import noise.c.noise_cipherstate_encrypt_with_ad
 import noise.c.noise_cipherstate_get_mac_length
 import noise.c.noise_cipherstate_set_nonce
@@ -37,6 +38,11 @@ import noise.c.noise_handshakestate_split
 import noise.c.noise_handshakestate_start
 import noise.c.noise_handshakestate_write_message
 import kotlin.time.Clock
+
+@OptIn(ExperimentalForeignApi::class)
+private object NativeCipherStateLayout {
+    val isCompatible = bitchat_noise_cipherstate_layout_is_compatible() == 1
+}
 
 /**
  * iOS/Native implementation of Noise Protocol
@@ -678,14 +684,8 @@ actual class NoiseSession actual constructor(
             val recvCipherLocal = recvCipherPtr
                 ?: throw IllegalStateException("Receive cipher not available - handshake not complete")
 
-            // Set the nonce for this message
-            val setNonceResult = noise_cipherstate_set_nonce(
-                recvCipherLocal.reinterpret(),
-                extractedNonce.toULong()
-            )
-
-            if (setNonceResult != 0) {
-                println("[NoiseSession-Native] Failed to set nonce for decryption: error code $setNonceResult")
+            if (!NativeCipherStateLayout.isCompatible) {
+                println("[NoiseSession-Native] Receive cipher layout verification failed; refusing decryption")
                 throw SessionError.DecryptionFailed
             }
 
@@ -707,11 +707,9 @@ actual class NoiseSession actual constructor(
                         noiseBuffer.size = ciphertext.size.toULong()
                         noiseBuffer.max_size = ciphertext.size.toULong()
 
-                        // Decrypt the data with associated data = null
-                        val decryptResult = noise_cipherstate_decrypt_with_ad(
+                        val decryptResult = bitchat_noise_cipherstate_decrypt_at(
                             recvCipherLocal.reinterpret(),
-                            null,  // No associated data
-                            0UL,   // AD length = 0
+                            extractedNonce.toULong(),
                             noiseBuffer.ptr
                         )
 

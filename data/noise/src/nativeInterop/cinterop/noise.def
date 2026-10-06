@@ -19,3 +19,102 @@ headers = noise/protocol.h \
 staticLibraries = libnoiseprotocol.a libnoisekeys.a libnoiseprotobufs.a
 
 package = noise.c
+
+---
+
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+#include <noise/protocol/buffer.h>
+#include <noise/protocol/cipherstate.h>
+#include <noise/protocol/constants.h>
+
+/*
+ * noise-c keeps a cipher's next nonce in NoiseCipherState_s.n, has no call that reads it, and
+ * its set_nonce refuses to go backwards.  The helpers below therefore reach the field directly.
+ *
+ * This struct exists only to name the field's offset.  It repeats the leading fields of
+ * NoiseCipherState_s from noise-c commit cfe2541 (src/protocol/internal.h; that header must not
+ * become part of the generated Kotlin bindings).  Nothing is ever accessed through it: to the
+ * compiler it is unrelated to the real struct, so the bytes are copied with memcpy.
+ * bitchat_noise_cipherstate_layout_is_compatible() checks the offset against noise-c itself.
+ */
+typedef struct {
+    size_t size;
+    int cipher_id;
+    uint8_t has_key;
+    uint8_t key_len;
+    uint8_t mac_len;
+    uint64_t n;
+} BitchatNoiseCipherStateLayout;
+
+static uint64_t bitchat_noise_cipherstate_nonce(const NoiseCipherState *state)
+{
+    uint64_t nonce;
+    memcpy(&nonce,
+           (const unsigned char *)state + offsetof(BitchatNoiseCipherStateLayout, n),
+           sizeof(nonce));
+    return nonce;
+}
+
+static void bitchat_noise_cipherstate_store_nonce(NoiseCipherState *state, uint64_t nonce)
+{
+    memcpy((unsigned char *)state + offsetof(BitchatNoiseCipherStateLayout, n),
+           &nonce,
+           sizeof(nonce));
+}
+
+/*
+ * Decrypts one packet at the nonce it carries.  A packet that fails leaves the counter where it
+ * was; a packet that succeeds never moves it back.
+ */
+static int bitchat_noise_cipherstate_decrypt_at(
+    NoiseCipherState *state, uint64_t nonce, NoiseBuffer *buffer)
+{
+    uint64_t saved_nonce = bitchat_noise_cipherstate_nonce(state);
+    int result;
+
+    bitchat_noise_cipherstate_store_nonce(state, nonce);
+    result = noise_cipherstate_decrypt_with_ad(state, 0, 0, buffer);
+    if (result != 0) {
+        bitchat_noise_cipherstate_store_nonce(state, saved_nonce);
+        return result;
+    }
+
+    /* noise-c has advanced the counter to nonce + 1.  Keep the later value when this packet
+     * arrived out of order. */
+    if (saved_nonce > bitchat_noise_cipherstate_nonce(state))
+        bitchat_noise_cipherstate_store_nonce(state, saved_nonce);
+    return result;
+}
+
+/*
+ * 1 when the offset above is where this build of noise-c keeps the counter.  Reading: a value
+ * noise-c stores must read back.  Writing: after a higher value is stored here, noise-c must
+ * refuse the lower one as going backwards.  Both values use all eight bytes, so a narrower or
+ * shifted field cannot pass.
+ */
+static int bitchat_noise_cipherstate_layout_is_compatible(void)
+{
+    static const uint64_t lower = 0x0102030405060708ULL;
+    static const uint64_t higher = 0xF1E2D3C4B5A69788ULL;
+    NoiseCipherState *state = 0;
+    uint8_t key[32] = {0};
+    int compatible;
+
+    if (noise_cipherstate_new_by_id(&state, NOISE_CIPHER_CHACHAPOLY) != 0 || !state)
+        return 0;
+
+    compatible = noise_cipherstate_init_key(state, key, sizeof(key)) == 0
+        && noise_cipherstate_set_nonce(state, lower) == 0
+        && bitchat_noise_cipherstate_nonce(state) == lower;
+    if (compatible) {
+        bitchat_noise_cipherstate_store_nonce(state, higher);
+        compatible = noise_cipherstate_set_nonce(state, lower) != 0
+            && noise_cipherstate_set_nonce(state, higher) == 0
+            && bitchat_noise_cipherstate_nonce(state) == higher;
+    }
+
+    noise_cipherstate_free(state);
+    return compatible;
+}

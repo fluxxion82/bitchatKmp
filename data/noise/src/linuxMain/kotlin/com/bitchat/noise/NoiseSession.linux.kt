@@ -19,7 +19,8 @@ import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
 import noise.c.NoiseBuffer
 import noise.c.NoiseHandshakeState
-import noise.c.noise_cipherstate_decrypt_with_ad
+import noise.c.bitchat_noise_cipherstate_decrypt_at
+import noise.c.bitchat_noise_cipherstate_layout_is_compatible
 import noise.c.noise_cipherstate_encrypt_with_ad
 import noise.c.noise_cipherstate_get_mac_length
 import noise.c.noise_cipherstate_set_nonce
@@ -36,6 +37,11 @@ import noise.c.noise_handshakestate_split
 import noise.c.noise_handshakestate_start
 import noise.c.noise_handshakestate_write_message
 import platform.posix.time
+
+@OptIn(ExperimentalForeignApi::class)
+private object NativeCipherStateLayout {
+    val isCompatible = bitchat_noise_cipherstate_layout_is_compatible() == 1
+}
 
 /**
  * Linux ARM64 implementation of Noise Protocol using noise-c via cinterop.
@@ -558,13 +564,8 @@ actual class NoiseSession actual constructor(
             val recvCipherLocal = recvCipherPtr
                 ?: throw IllegalStateException("Receive cipher not available - handshake not complete")
 
-            val setNonceResult = noise_cipherstate_set_nonce(
-                recvCipherLocal.reinterpret(),
-                extractedNonce.toULong()
-            )
-
-            if (setNonceResult != 0) {
-                println("[NoiseSession-Linux] Failed to set nonce for decryption: error code $setNonceResult")
+            if (!NativeCipherStateLayout.isCompatible) {
+                println("[NoiseSession-Linux] Receive cipher layout verification failed; refusing decryption")
                 throw SessionError.DecryptionFailed
             }
 
@@ -582,10 +583,9 @@ actual class NoiseSession actual constructor(
                         noiseBuffer.size = ciphertext.size.toULong()
                         noiseBuffer.max_size = ciphertext.size.toULong()
 
-                        val decryptResult = noise_cipherstate_decrypt_with_ad(
+                        val decryptResult = bitchat_noise_cipherstate_decrypt_at(
                             recvCipherLocal.reinterpret(),
-                            null,
-                            0UL,
+                            extractedNonce.toULong(),
                             noiseBuffer.ptr
                         )
 
