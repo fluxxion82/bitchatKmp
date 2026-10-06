@@ -1,7 +1,5 @@
 package com.bitchat.bluetooth.facade
 
-import com.bitchat.noise.NoiseConstants
-import java.security.SecureRandom
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertNotNull
@@ -29,25 +27,22 @@ import kotlin.test.assertTrue
  */
 class NoiseStrayHandshakeTest {
 
-    private val pi = "fefe735fc063ff08"
-    private val phone = "3b146c2741c9a37e"
-
-    private class Party(val peerID: String) {
+    private class Party(seed: String) {
+        private val crypto = CryptoSigningFacade(seed)
+        val peerID = crypto.getIdentityFingerprint()
         val facade = NoiseEncryptionFacade(peerID)
-        val privateKey: ByteArray = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        val publicKey: ByteArray = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val privateKey = crypto.getNoisePrivateKey()
+        val publicKey = crypto.getNoisePublicKey()
     }
 
     /** Runs XX to completion and returns the two parties, initiator first. */
     private fun established(): Pair<Party, Party> {
-        val initiator = Party(pi)
-        val responder = Party(phone)
+        val initiator = Party("1".repeat(64))
+        val responder = Party("2".repeat(64))
 
         val message1 = initiator.facade.initiateHandshake(responder.peerID, initiator.privateKey, initiator.publicKey)
-        val message2 = responder.facade.processHandshake(initiator.peerID, message1, responder.privateKey, responder.publicKey)
-        assertNotNull(message2)
-        val message3 = initiator.facade.processHandshake(responder.peerID, message2, initiator.privateKey, initiator.publicKey)
-        assertNotNull(message3)
+        val message2 = response(responder.facade.processHandshake(initiator.peerID, message1, responder.privateKey, responder.publicKey))
+        val message3 = response(initiator.facade.processHandshake(responder.peerID, message2, initiator.privateKey, initiator.publicKey))
         responder.facade.processHandshake(initiator.peerID, message3, responder.privateKey, responder.publicKey)
 
         assertTrue(initiator.facade.hasEstablishedSession(responder.peerID))
@@ -67,7 +62,10 @@ class NoiseStrayHandshakeTest {
         val (initiator, responder) = established()
 
         // The same message 1 arriving a second time, which is what a TTL-carrying mesh does.
-        val replay = ByteArray(NoiseConstants.XX_MESSAGE_1_SIZE).also { SecureRandom().nextBytes(it) }
+        val replayingPeer = Party("3".repeat(64))
+        val replay = replayingPeer.facade.initiateHandshake(
+            responder.peerID, replayingPeer.privateKey, replayingPeer.publicKey
+        )
         responder.facade.processHandshake(initiator.peerID, replay, responder.privateKey, responder.publicKey)
 
         assertTrue(
@@ -82,7 +80,8 @@ class NoiseStrayHandshakeTest {
         val (initiator, responder) = established()
 
         repeat(10) {
-            val noise = ByteArray(NoiseConstants.XX_MESSAGE_1_SIZE).also { SecureRandom().nextBytes(it) }
+            val attacker = Party(("3456789abc"[it]).toString().repeat(64))
+            val noise = attacker.facade.initiateHandshake(responder.peerID, attacker.privateKey, attacker.publicKey)
             responder.facade.processHandshake(initiator.peerID, noise, responder.privateKey, responder.publicKey)
         }
 
@@ -97,19 +96,24 @@ class NoiseStrayHandshakeTest {
         // The peer lost its state and opens a genuinely new handshake with fresh keys. Ignoring
         // every handshake while established would leave this peer unable to talk to us again, so
         // the new one has to be negotiated -- without the old session going dark while it is.
-        val restarted = Party(initiator.peerID)
+        val restarted = Party("1".repeat(64))
         val message1 = restarted.facade.initiateHandshake(responder.peerID, restarted.privateKey, restarted.publicKey)
-        val message2 = responder.facade.processHandshake(restarted.peerID, message1, responder.privateKey, responder.publicKey)
-        assertNotNull(message2, "a restarted peer must be answered")
+        val message2 = response(responder.facade.processHandshake(restarted.peerID, message1, responder.privateKey, responder.publicKey))
 
         // Mid-renegotiation the old session is still the live one and still works.
         assertStillTalking(initiator, responder)
 
-        val message3 = restarted.facade.processHandshake(responder.peerID, message2, restarted.privateKey, restarted.publicKey)
-        assertNotNull(message3)
+        val message3 = response(restarted.facade.processHandshake(responder.peerID, message2, restarted.privateKey, restarted.publicKey))
         responder.facade.processHandshake(restarted.peerID, message3, responder.privateKey, responder.publicKey)
 
         assertTrue(responder.facade.hasEstablishedSession(restarted.peerID))
         assertStillTalking(restarted, responder)
+    }
+
+    private fun response(result: NoiseEncryptionFacade.HandshakeResult): ByteArray = when (result) {
+        is NoiseEncryptionFacade.HandshakeResult.Response -> result.message
+        is NoiseEncryptionFacade.HandshakeResult.Established -> assertNotNull(result.response)
+        NoiseEncryptionFacade.HandshakeResult.Ignored,
+        NoiseEncryptionFacade.HandshakeResult.RejectedIdentity -> error("expected handshake response, got $result")
     }
 }

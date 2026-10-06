@@ -1,11 +1,9 @@
 package com.bitchat.bluetooth.facade
 
-import java.security.SecureRandom
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -20,23 +18,22 @@ import kotlin.test.assertTrue
  *
  * The phone was already applying the tie-break the upstream client implements and waiting for us to
  * give way; because we never did, no direct message between the two could ever be encrypted. The
- * peer IDs used here are the real ones, so the direction of the tie is the one that was observed.
+ * peers here use IDs derived from their real Noise static keys, while [orderedParties] keeps the
+ * observed larger-ID-yields direction deterministic.
  */
 class NoiseHandshakeCollisionTest {
 
-    private val pi = "fefe735fc063ff08"
-    private val phone = "269e37bb6be7caf9"
-
-    private class Party(val peerID: String) {
+    private class Party(seed: String) {
+        private val crypto = CryptoSigningFacade(seed)
+        val peerID = crypto.getIdentityFingerprint()
         val facade = NoiseEncryptionFacade(peerID)
-        val privateKey: ByteArray = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        val publicKey: ByteArray = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val privateKey = crypto.getNoisePrivateKey()
+        val publicKey = crypto.getNoisePublicKey()
     }
 
     @Test
     fun bothSidesInitiatingStillCompletesAHandshake() {
-        val local = Party(pi)
-        val remote = Party(phone)
+        val (local, remote) = orderedParties("1".repeat(64), "2".repeat(64))
 
         val ourMessage1 = local.facade.initiateHandshake(remote.peerID, local.privateKey, local.publicKey)
         val theirMessage1 = remote.facade.initiateHandshake(local.peerID, remote.privateKey, remote.publicKey)
@@ -47,18 +44,17 @@ class NoiseHandshakeCollisionTest {
         val ignored = remote.facade.processHandshake(
             local.peerID, ourMessage1, remote.privateKey, remote.publicKey
         )
-        assertNull(ignored, "the peer that holds must not answer the message 1 it collided with")
+        assertEquals(NoiseEncryptionFacade.HandshakeResult.Ignored, ignored, "the peer that holds must not answer the message 1 it collided with")
         assertTrue(remote.facade.isHandshaking(local.peerID))
 
         // The higher peer ID yields: it throws away its own attempt and answers as responder.
-        val message2 = local.facade.processHandshake(
+        val message2 = response(local.facade.processHandshake(
             remote.peerID, theirMessage1, local.privateKey, local.publicKey
-        )
-        assertNotNull(message2, "the peer that yields must answer as responder")
+        ))
         assertEquals(96, message2.size, "XX message 2")
 
         val message3 = assertNotNull(
-            remote.facade.processHandshake(local.peerID, message2, remote.privateKey, remote.publicKey)
+            response(remote.facade.processHandshake(local.peerID, message2, remote.privateKey, remote.publicKey))
         )
         // 64 on the wire: the 48-byte XX message 3 plus its 16-byte tag, as the device journal
         // records it. What the tie-break depends on is only that it is not the 32 bytes of a
@@ -80,8 +76,7 @@ class NoiseHandshakeCollisionTest {
         // If both yielded there would be two responders and no message 1 left; if neither did, the
         // deadlock the journal recorded. Exactly one side must yield, whichever way round the two
         // facades are created.
-        val lower = Party(phone)
-        val higher = Party(pi)
+        val (higher, lower) = orderedParties("3".repeat(64), "4".repeat(64))
 
         val fromLower = lower.facade.initiateHandshake(higher.peerID, lower.privateKey, lower.publicKey)
         val fromHigher = higher.facade.initiateHandshake(lower.peerID, higher.privateKey, higher.publicKey)
@@ -93,50 +88,44 @@ class NoiseHandshakeCollisionTest {
             higher.peerID, fromHigher, lower.privateKey, lower.publicKey
         )
 
-        assertNotNull(higherAnswer, "the larger peer ID yields")
-        assertNull(lowerAnswer, "the smaller peer ID holds")
+        assertTrue(higherAnswer is NoiseEncryptionFacade.HandshakeResult.Response, "the larger peer ID yields")
+        assertEquals(NoiseEncryptionFacade.HandshakeResult.Ignored, lowerAnswer, "the smaller peer ID holds")
     }
 
     @Test
     fun anOrdinaryOpeningIsNotTreatedAsACollision() {
-        val local = Party(pi)
-        val remote = Party(phone)
+        val local = Party("5".repeat(64))
+        val remote = Party("6".repeat(64))
 
         // No handshake of ours is in flight, so message 1 is answered whatever the peer IDs are --
         // including from a peer whose ID would have made us hold in a collision.
         val message1 = remote.facade.initiateHandshake(local.peerID, remote.privateKey, remote.publicKey)
-        val response = local.facade.processHandshake(
+        val response = response(local.facade.processHandshake(
             remote.peerID, message1, local.privateKey, local.publicKey
-        )
-
-        assertNotNull(response)
+        ))
         assertEquals(96, response.size)
     }
 
     @Test
     fun aMessageTwoIsNeverMistakenForACollision() {
-        val local = Party(pi)
-        val remote = Party(phone)
+        val local = Party("7".repeat(64))
+        val remote = Party("8".repeat(64))
 
         val message1 = local.facade.initiateHandshake(remote.peerID, local.privateKey, local.publicKey)
-        val message2 = assertNotNull(
-            remote.facade.processHandshake(local.peerID, message1, remote.privateKey, remote.publicKey)
-        )
+        val message2 = response(remote.facade.processHandshake(local.peerID, message1, remote.privateKey, remote.publicKey))
 
         // Our own handshake is in flight and we are the higher peer ID, so a size-blind rule would
         // yield here and destroy the session the reply belongs to.
-        val message3 = local.facade.processHandshake(
+        val message3 = response(local.facade.processHandshake(
             remote.peerID, message2, local.privateKey, local.publicKey
-        )
-
-        assertNotNull(message3)
+        ))
         assertEquals(64, message3.size)
     }
 
     @Test
     fun anAbandonedInitiationNoLongerCausesAHold() {
-        val local = Party(pi)
-        val remote = Party(phone)
+        val local = Party("9".repeat(64))
+        val remote = Party("a".repeat(64))
 
         local.facade.initiateHandshake(remote.peerID, local.privateKey, local.publicKey)
 
@@ -146,11 +135,23 @@ class NoiseHandshakeCollisionTest {
         local.facade.removeSession(remote.peerID)
 
         val theirMessage1 = remote.facade.initiateHandshake(local.peerID, remote.privateKey, remote.publicKey)
-        val response = local.facade.processHandshake(
+        val response = response(local.facade.processHandshake(
             remote.peerID, theirMessage1, local.privateKey, local.publicKey
-        )
-
-        assertNotNull(response)
+        ))
         assertEquals(96, response.size)
+    }
+
+    private fun response(result: NoiseEncryptionFacade.HandshakeResult): ByteArray = when (result) {
+        is NoiseEncryptionFacade.HandshakeResult.Response -> result.message
+        is NoiseEncryptionFacade.HandshakeResult.Established -> assertNotNull(result.response)
+        NoiseEncryptionFacade.HandshakeResult.Ignored,
+        NoiseEncryptionFacade.HandshakeResult.RejectedIdentity -> error("expected handshake response, got $result")
+    }
+
+    /** Returns the larger-ID peer first because that peer must yield. */
+    private fun orderedParties(firstSeed: String, secondSeed: String): Pair<Party, Party> {
+        val first = Party(firstSeed)
+        val second = Party(secondSeed)
+        return if (first.peerID > second.peerID) first to second else second to first
     }
 }

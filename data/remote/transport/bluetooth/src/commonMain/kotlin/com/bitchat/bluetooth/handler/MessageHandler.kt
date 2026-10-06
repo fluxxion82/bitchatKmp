@@ -4,6 +4,7 @@ import com.bitchat.domain.base.logPath
 import com.bitchat.domain.base.logBody
 import com.bitchat.api.dto.mapper.toBitchatFilePacket
 import com.bitchat.bluetooth.facade.CryptoSigningFacade
+import com.bitchat.bluetooth.facade.NoiseEncryptionFacade
 import com.bitchat.bluetooth.manager.PeerManager
 import com.bitchat.bluetooth.manager.SecurityManager
 import com.bitchat.bluetooth.manager.SessionFailureTracker
@@ -14,7 +15,6 @@ import com.bitchat.bluetooth.protocol.SpecialRecipients
 import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
-import com.bitchat.crypto.Cryptography
 import kotlin.time.Clock
 import com.bitchat.domain.chat.model.BitchatFilePacket
 import com.bitchat.noise.model.NoisePayload
@@ -93,37 +93,38 @@ class MessageHandler(
     }
 
     private suspend fun handleNoiseHandshake(packet: BitchatPacket, peerID: String) {
-        println("🔐 NOISE_HANDSHAKE: Processing handshake from $peerID")
-
         val localPrivateKey = cryptoSigning.getNoisePrivateKey()
         val localPublicKey = cryptoSigning.getNoisePublicKey()
 
-        val responsePacket = securityManager.handleNoiseHandshake(
+        when (val result = securityManager.handleNoiseHandshake(
             packet = packet,
             peerID = peerID,
             localPrivateKey = localPrivateKey,
             localPublicKey = localPublicKey
-        )
-
-        if (responsePacket != null) {
-            println("🔐 NOISE_HANDSHAKE: Generated response packet (${responsePacket.size} bytes)")
-            delegate?.onHandshakeResponse(peerID, responsePacket)
-        }
-
-        if (securityManager.hasEstablishedSession(peerID)) {
-            val remoteStaticKey = securityManager.getRemoteStaticKey(peerID)
-            if (remoteStaticKey != null) {
-                val fingerprint = calculateSHA256Fingerprint(remoteStaticKey)
-                println("✅ NOISE_HANDSHAKE: Session established with $peerID")
-                println("📍 NOISE_HANDSHAKE: Remote static key fingerprint: $fingerprint")
-                println("   Remote static key (hex): ${remoteStaticKey.toHexString()}")
-            } else {
-                println("✅ NOISE_HANDSHAKE: Session established with $peerID")
+        )) {
+            is NoiseEncryptionFacade.HandshakeResult.Response -> {
+                println("🔐 NOISE_HANDSHAKE: Generated response packet (${result.message.size} bytes)")
+                delegate?.onHandshakeResponse(peerID, result.message)
             }
-            delegate?.onSessionEstablished(peerID)
-            processPendingEncryptedMessages(peerID)
-        } else {
-            println("⏳ NOISE_HANDSHAKE: Session not yet established with $peerID")
+
+            is NoiseEncryptionFacade.HandshakeResult.Established -> {
+                result.response?.let { responsePacket ->
+                    println("🔐 NOISE_HANDSHAKE: Generated response packet (${responsePacket.size} bytes)")
+                    delegate?.onHandshakeResponse(peerID, responsePacket)
+                }
+                println("✅ NOISE_HANDSHAKE: Session established with $peerID")
+                delegate?.onSessionEstablished(peerID)
+                processPendingEncryptedMessages(peerID)
+            }
+
+            NoiseEncryptionFacade.HandshakeResult.Ignored -> {
+                println("⏳ NOISE_HANDSHAKE: Session not yet established with $peerID")
+            }
+
+            // The facade already logged the sole identity-rejection line, including only the
+            // permitted 8-byte derived identifiers. In particular, don't treat an old live
+            // session as a new establishment and flush its pending outbox here.
+            NoiseEncryptionFacade.HandshakeResult.RejectedIdentity -> Unit
         }
 
         delegate?.onHandshakeReceived(peerID)
@@ -295,10 +296,6 @@ class MessageHandler(
         )
     }
 
-    private fun calculateSHA256Fingerprint(publicKey: ByteArray): String {
-        val hash = Cryptography.getDigestHash(publicKey)
-        return hash.joinToString("") { it.toHexString() }
-    }
 }
 
 interface MessageHandlerDelegate {

@@ -158,14 +158,14 @@ class SecurityManager(
         peerID: String,
         localPrivateKey: ByteArray,
         localPublicKey: ByteArray
-    ): ByteArray? {
+    ): NoiseEncryptionFacade.HandshakeResult {
         // Skip handshakes not addressed to us
         if (packet.recipientID != null && !packet.recipientID.contentEquals(myPeerIDBytes)) {
-            return null
+            return NoiseEncryptionFacade.HandshakeResult.Ignored
         }
 
         // Skip our own handshake messages
-        if (peerID == myPeerID) return null
+        if (peerID == myPeerID) return NoiseEncryptionFacade.HandshakeResult.Ignored
 
         return noiseEncryption.processHandshake(peerID, packet.payload, localPrivateKey, localPublicKey)
     }

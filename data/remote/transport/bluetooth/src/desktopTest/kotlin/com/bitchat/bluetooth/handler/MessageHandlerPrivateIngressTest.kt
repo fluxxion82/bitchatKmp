@@ -98,6 +98,87 @@ class MessageHandlerPrivateIngressTest {
     }
 
     @Test
+    fun completedImpostorHandshakeCannotEstablishOrDeliverAPrivateMessage() = runTest {
+        val fixture = Fixture()
+        val attacker = Party("3".repeat(64), claimedPeerID = fixture.sender.peerID)
+        try {
+            val message1 = attacker.noise.initiateHandshake(
+                fixture.receiver.peerID, attacker.crypto.getNoisePrivateKey(), attacker.crypto.getNoisePublicKey()
+            )
+            fixture.handler.handlePacket(
+                packet(MessageType.NOISE_HANDSHAKE, fixture, message1), fixture.sender.peerID
+            )
+            val message2 = fixture.delegate.handshakeResponses.single().second
+            val message3 = handshakeResponse(attacker.noise.processHandshake(
+                fixture.receiver.peerID, message2, attacker.crypto.getNoisePrivateKey(), attacker.crypto.getNoisePublicKey()
+            ))
+            fixture.handler.handlePacket(
+                packet(MessageType.NOISE_HANDSHAKE, fixture, message3), fixture.sender.peerID
+            )
+
+            val encrypted = attacker.noise.encrypt(
+                fixture.receiver.peerID,
+                NoisePayload(
+                    NoisePayloadType.PRIVATE_MESSAGE,
+                    PrivateMessagePacket("impostor", "must not arrive").encode()!!
+                ).encode()
+            )!!
+            fixture.handler.handlePacket(
+                packet(MessageType.NOISE_ENCRYPTED, fixture, encrypted), fixture.sender.peerID
+            )
+
+            assertTrue(fixture.delegate.authenticatedMessages.isEmpty())
+            assertTrue(fixture.delegate.establishedPeers.isEmpty())
+            assertTrue(fixture.delegate.handshakeResponses.single().second.contentEquals(message2))
+        } finally {
+            fixture.securityManager.shutdown()
+        }
+    }
+
+    @Test
+    fun rejectedRenegotiationBesideALiveSessionAnnouncesNothingAndTheLiveSessionStillDelivers() = runTest {
+        val fixture = Fixture()
+        val attacker = Party("3".repeat(64), claimedPeerID = fixture.sender.peerID)
+        try {
+            fixture.establishSession()
+            val message1 = attacker.noise.initiateHandshake(
+                fixture.receiver.peerID, attacker.crypto.getNoisePrivateKey(), attacker.crypto.getNoisePublicKey()
+            )
+            fixture.handler.handlePacket(packet(MessageType.NOISE_HANDSHAKE, fixture, message1), fixture.sender.peerID)
+            val message3 = handshakeResponse(attacker.noise.processHandshake(
+                fixture.receiver.peerID,
+                fixture.delegate.handshakeResponses.single().second,
+                attacker.crypto.getNoisePrivateKey(),
+                attacker.crypto.getNoisePublicKey()
+            ))
+            fixture.handler.handlePacket(packet(MessageType.NOISE_HANDSHAKE, fixture, message3), fixture.sender.peerID)
+
+            // "Is there an established session for this peer?" is true here because of the OLD
+            // session. Asking that after a handshake packet, as the handler once did, would announce
+            // an establishment and flush what is queued for the peer on the impostor's cue.
+            assertTrue(fixture.delegate.establishedPeers.isEmpty())
+
+            val forged = attacker.noise.encrypt(
+                fixture.receiver.peerID,
+                NoisePayload(NoisePayloadType.PRIVATE_MESSAGE, PrivateMessagePacket("impostor", "must not arrive").encode()!!).encode()
+            )!!
+            fixture.handler.handlePacket(packet(MessageType.NOISE_ENCRYPTED, fixture, forged), fixture.sender.peerID)
+            val genuine = fixture.sender.noise.encrypt(
+                fixture.receiver.peerID,
+                NoisePayload(NoisePayloadType.PRIVATE_MESSAGE, PrivateMessagePacket("genuine", "still arrives").encode()!!).encode()
+            )!!
+            fixture.handler.handlePacket(packet(MessageType.NOISE_ENCRYPTED, fixture, genuine), fixture.sender.peerID)
+
+            assertEquals(
+                listOf(AuthenticatedMessage(fixture.sender.peerID, "genuine", "still arrives")),
+                fixture.delegate.authenticatedMessages
+            )
+        } finally {
+            fixture.securityManager.shutdown()
+        }
+    }
+
+    @Test
     fun broadcastFileStillReachesThePublicFileCallback() = runTest {
         val fixture = Fixture()
         try {
@@ -212,18 +293,18 @@ class MessageHandlerPrivateIngressTest {
                 sender.crypto.getNoisePrivateKey(),
                 sender.crypto.getNoisePublicKey()
             )
-            val message2 = receiver.noise.processHandshake(
+            val message2 = handshakeResponse(receiver.noise.processHandshake(
                 sender.peerID,
                 message1,
                 receiver.crypto.getNoisePrivateKey(),
                 receiver.crypto.getNoisePublicKey()
-            )!!
-            val message3 = sender.noise.processHandshake(
+            ))
+            val message3 = handshakeResponse(sender.noise.processHandshake(
                 receiver.peerID,
                 message2,
                 sender.crypto.getNoisePrivateKey(),
                 sender.crypto.getNoisePublicKey()
-            )!!
+            ))
             receiver.noise.processHandshake(
                 sender.peerID,
                 message3,
@@ -233,9 +314,9 @@ class MessageHandlerPrivateIngressTest {
         }
     }
 
-    private class Party(seed: String) {
+    private class Party(seed: String, claimedPeerID: String? = null) {
         val crypto = CryptoSigningFacade(seed)
-        val peerID = crypto.getIdentityFingerprint()
+        val peerID = claimedPeerID ?: crypto.getIdentityFingerprint()
         val noise = NoiseEncryptionFacade(peerID)
     }
 
@@ -247,6 +328,8 @@ class MessageHandlerPrivateIngressTest {
         val readReceipts = mutableListOf<Pair<String, String>>()
         val publicFiles = mutableListOf<Pair<String, BitchatFilePacket>>()
         val fragments = mutableListOf<String>()
+        val handshakeResponses = mutableListOf<Pair<String, ByteArray>>()
+        val establishedPeers = mutableListOf<String>()
 
         override fun onPeerAnnounced(peerID: String, nickname: String) = Unit
 
@@ -271,8 +354,12 @@ class MessageHandlerPrivateIngressTest {
         }
 
         override fun onHandshakeReceived(peerID: String) = Unit
-        override fun onHandshakeResponse(peerID: String, responsePacket: ByteArray) = Unit
-        override fun onSessionEstablished(peerID: String) = Unit
+        override fun onHandshakeResponse(peerID: String, responsePacket: ByteArray) {
+            handshakeResponses += peerID to responsePacket
+        }
+        override fun onSessionEstablished(peerID: String) {
+            establishedPeers += peerID
+        }
         override fun onSessionUnusable(peerID: String) = Unit
         override fun onPeerLeft(peerID: String) = Unit
         override fun onFragmentReceived(peerID: String) {
@@ -284,7 +371,17 @@ class MessageHandlerPrivateIngressTest {
         }
     }
 
+
     private data class AuthenticatedMessage(val peerID: String, val messageId: String, val content: String)
 
     private fun String.hexToBytes() = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+}
+
+// File level: the nested Fixture class uses it and cannot see the test class's members.
+private fun handshakeResponse(result: NoiseEncryptionFacade.HandshakeResult): ByteArray = when (result) {
+    is NoiseEncryptionFacade.HandshakeResult.Response -> result.message
+    is NoiseEncryptionFacade.HandshakeResult.Established -> result.response
+        ?: error("expected response message")
+    NoiseEncryptionFacade.HandshakeResult.Ignored,
+    NoiseEncryptionFacade.HandshakeResult.RejectedIdentity -> error("expected handshake response, got $result")
 }

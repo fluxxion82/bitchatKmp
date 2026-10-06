@@ -1,7 +1,6 @@
 package com.bitchat.bluetooth.facade
 
 import com.bitchat.bluetooth.manager.HandshakeSupervisor
-import java.security.SecureRandom
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -16,23 +15,23 @@ import kotlin.test.assertTrue
  */
 class NoiseHandshakeRecoveryTest {
 
-    private val random = SecureRandom()
-
-    private fun key(): ByteArray = ByteArray(32).also { random.nextBytes(it) }
-
-    private class Party(val peerID: String) {
+    private class Party(seed: String) {
+        private val crypto = CryptoSigningFacade(seed)
+        val peerID = crypto.getIdentityFingerprint()
         val facade = NoiseEncryptionFacade(peerID)
-        val privateKey: ByteArray = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        val publicKey: ByteArray = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val privateKey = crypto.getNoisePrivateKey()
+        val publicKey = crypto.getNoisePublicKey()
     }
 
     @Test
     fun aHandshakeWithNoResponseIsAbandonedAfterTheDeadlineAndCanBeReInitiated() {
         val supervisor = HandshakeSupervisor()
-        val facade = NoiseEncryptionFacade("fefe735fc063ff08")
-        val peerID = "269e37bb6be7caf9"
-        val privateKey = key()
-        val publicKey = key()
+        val local = Party("1".repeat(64))
+        val remote = Party("2".repeat(64))
+        val facade = local.facade
+        val peerID = remote.peerID
+        val privateKey = local.privateKey
+        val publicKey = local.publicKey
 
         val first = facade.initiateHandshake(peerID, privateKey, publicKey)
         assertEquals(32, first.size, "XX message 1 should have gone out")
@@ -66,17 +65,19 @@ class NoiseHandshakeRecoveryTest {
     @Test
     fun aHandshakeThatCompletesNormallyIsUntouchedByTheDeadline() {
         val supervisor = HandshakeSupervisor()
-        val alice = Party("fefe735fc063ff08")
-        val bob = Party("269e37bb6be7caf9")
+        val alice = Party("3".repeat(64))
+        val bob = Party("4".repeat(64))
 
         val message1 = alice.facade.initiateHandshake(bob.peerID, alice.privateKey, alice.publicKey)
         assertEquals(32, message1.size)
 
-        val message2 = bob.facade.processHandshake(alice.peerID, message1, bob.privateKey, bob.publicKey)
-        assertNotNull(message2, "responder should answer XX message 1")
+        val message2 = response(
+            bob.facade.processHandshake(alice.peerID, message1, bob.privateKey, bob.publicKey)
+        )
 
-        val message3 = alice.facade.processHandshake(bob.peerID, message2, alice.privateKey, alice.publicKey)
-        assertNotNull(message3, "initiator should answer XX message 2")
+        val message3 = response(
+            alice.facade.processHandshake(bob.peerID, message2, alice.privateKey, alice.publicKey)
+        )
 
         bob.facade.processHandshake(alice.peerID, message3, bob.privateKey, bob.publicKey)
 
@@ -98,10 +99,12 @@ class NoiseHandshakeRecoveryTest {
     @Test
     fun aHandshakeThatIsStillInsideTheDeadlineIsNotAbandoned() {
         val supervisor = HandshakeSupervisor()
-        val facade = NoiseEncryptionFacade("fefe735fc063ff08")
-        val peerID = "9343bbdb113d0118"
+        val local = Party("5".repeat(64))
+        val remote = Party("6".repeat(64))
+        val facade = local.facade
+        val peerID = remote.peerID
 
-        facade.initiateHandshake(peerID, key(), key())
+        facade.initiateHandshake(peerID, local.privateKey, local.publicKey)
         val startedAt = facade.handshakesInFlight().getValue(peerID)
 
         val stillInFlight = facade.handshakesInFlight().filterValues { started ->
@@ -114,8 +117,10 @@ class NoiseHandshakeRecoveryTest {
 
     @Test
     fun aFailedHandshakeLeavesNoSessionBehindAndNeverThrows() {
-        val facade = NoiseEncryptionFacade("fefe735fc063ff08")
-        val peerID = "deadbeefdeadbeef"
+        val local = Party("7".repeat(64))
+        val remote = Party("8".repeat(64))
+        val facade = local.facade
+        val peerID = remote.peerID
 
         // All-zero static keys fail validation, so the session can never handshake. The facade must
         // absorb that: a throw here would propagate into the per-peer actor loop in PacketProcessor
@@ -127,8 +132,15 @@ class NoiseHandshakeRecoveryTest {
             localStaticPublicKey = ByteArray(32)
         )
 
-        assertEquals(null, response)
+        assertEquals(NoiseEncryptionFacade.HandshakeResult.Ignored, response)
         assertEquals("uninitialized", facade.getSessionState(peerID))
         assertTrue(facade.handshakesInFlight().isEmpty())
+    }
+
+    private fun response(result: NoiseEncryptionFacade.HandshakeResult): ByteArray = when (result) {
+        is NoiseEncryptionFacade.HandshakeResult.Response -> result.message
+        is NoiseEncryptionFacade.HandshakeResult.Established -> assertNotNull(result.response)
+        NoiseEncryptionFacade.HandshakeResult.Ignored,
+        NoiseEncryptionFacade.HandshakeResult.RejectedIdentity -> error("expected handshake response, got $result")
     }
 }

@@ -1,8 +1,11 @@
 package com.bitchat.bluetooth.facade
 
+import com.bitchat.crypto.Cryptography
 import com.bitchat.noise.NoiseConstants
 import com.bitchat.noise.NoiseSession
 import com.bitchat.noise.NoiseSessionState
+import kotlinx.atomicfu.locks.ReentrantLock
+import kotlinx.atomicfu.locks.withLock
 
 /**
  * Facade for Noise Protocol encryption/decryption
@@ -15,31 +18,66 @@ import com.bitchat.noise.NoiseSessionState
  * [processHandshake].
  */
 class NoiseEncryptionFacade(private val myPeerID: String) {
-    // Session storage: peerID -> NoiseSession
-    private val sessions = mutableMapOf<String, NoiseSession>()
 
-    // Peers whose current session we created ourselves, as the XX initiator. The role is not
-    // readable back off NoiseSession, and it is what decides whether an incoming message 1 is a
-    // collision or an ordinary opening.
-    private val initiatedPeers = mutableSetOf<String>()
+    // AtomicFU's non-suspending common lock is deliberately used here instead of Mutex: facade
+    // operations do not suspend, and callbacks/network sends happen after the operation returns.
+    // A registry entry stays alive while an operation waits for its peer lock, so removing an idle
+    // lock cannot split one peer's state across two locks. The locks never nest: registry lookup
+    // finishes before the peer lock is acquired, and peer cleanup finishes before registry cleanup.
+    private val peerLocks = mutableMapOf<String, PeerLock>()
+    private val peerLocksRegistry = ReentrantLock()
 
-    // Renegotiations running alongside a session that is still carrying traffic.
-    //
-    // A peer that restarts has lost its keys and must be able to handshake again, but its message 1
-    // must not be allowed to take down the session we are still using: handshakes travel as
-    // broadcast packets with a TTL, so duplicates and echoes of one arrive as a matter of course,
-    // and before this any of them could strip two peers of a working session. So a handshake that
-    // arrives while a session is established is negotiated here, off to one side, and only replaces
-    // the live session once it has completed.
-    private val pendingSessions = mutableMapOf<String, NoiseSession>()
-
-    fun hasEstablishedSession(peerID: String): Boolean {
-        return sessions[peerID]?.isEstablished() == true
+    private class PeerLock {
+        val lock = ReentrantLock()
+        var users = 0
+        /** Only this peer's lock reads or mutates these slots. */
+        var established: NoiseSession? = null
+        var candidate: NoiseSession? = null
+        var initiated = false
     }
 
-    /** True while a handshake with [peerID] has been started but has not completed or failed. */
+    /** The candidate, when it is a handshake in flight with no established session beside it. */
+    private fun PeerLock.firstHandshake(): NoiseSession? =
+        candidate?.takeIf { established == null && it.isHandshaking() }
+
+    sealed interface HandshakeResult {
+        data class Response(val message: ByteArray) : HandshakeResult
+        data class Established(val response: ByteArray?) : HandshakeResult
+        data object Ignored : HandshakeResult
+        data object RejectedIdentity : HandshakeResult
+    }
+
+    private inline fun <T> withPeerLock(peerID: String, block: (PeerLock) -> T): T {
+        val peerLock = peerLocksRegistry.withLock {
+            peerLocks.getOrPut(peerID) { PeerLock() }.also { it.users += 1 }
+        }
+        return try {
+            peerLock.lock.withLock { block(peerLock) }
+        } finally {
+            peerLocksRegistry.withLock {
+                peerLock.users -= 1
+                if (peerLock.users == 0 && peerLock.established == null && peerLock.candidate == null) {
+                    if (peerLocks[peerID] === peerLock) peerLocks.remove(peerID)
+                }
+            }
+        }
+    }
+
+    fun hasEstablishedSession(peerID: String): Boolean {
+        return withPeerLock(peerID) { it.established?.isEstablished() == true }
+    }
+
+    /**
+     * True while the FIRST handshake with [peerID] has been started and has not completed or failed.
+     *
+     * A renegotiation running beside an established session is deliberately not "handshaking": the
+     * callers of this and of [handshakesInFlight] restart or discard what they are told is in
+     * flight with [removeSession], which also drops the established session. Anyone in range can
+     * open a renegotiation under a peer's id with one unsigned packet, so reporting it here would
+     * let that packet end the real session when the deadline passes.
+     */
     fun isHandshaking(peerID: String): Boolean {
-        return sessions[peerID]?.isHandshaking() == true
+        return withPeerLock(peerID) { it.firstHandshake() != null }
     }
 
     /**
@@ -47,40 +85,35 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
      * was created. That instant is when the handshake started, so it is the deadline's origin.
      */
     fun handshakesInFlight(): Map<String, Long> {
-        return sessions
-            .filterValues { it.isHandshaking() }
-            .mapValues { (_, session) -> session.getCreationTime() }
+        val peerIDs = peerLocksRegistry.withLock { peerLocks.keys.toList() }
+        return peerIDs.mapNotNull { peerID ->
+            withPeerLock(peerID) { state ->
+                state.firstHandshake()?.let { peerID to it.getCreationTime() }
+            }
+        }.toMap()
     }
 
     fun initiateHandshake(peerID: String, localStaticPrivateKey: ByteArray, localStaticPublicKey: ByteArray): ByteArray {
-        // Check if session already exists and is handshaking or established
-        val existingSession = sessions[peerID]
-        if (existingSession != null) {
-            if (existingSession.isEstablished()) {
-                // Session already established, no need to re-handshake
-                return byteArrayOf()  // Return empty, no handshake needed
+        return withPeerLock(peerID) { state ->
+            if (state.established?.isEstablished() == true) {
+                return@withPeerLock byteArrayOf()
             }
-            if (existingSession.isHandshaking()) {
-                // Handshake in progress, don't recreate session!
-                // Return empty to avoid sending duplicate handshake message
-                return byteArrayOf()
+            val existingCandidate = state.candidate
+            if (existingCandidate?.isHandshaking() == true) {
+                return@withPeerLock byteArrayOf()
             }
+            existingCandidate?.destroy()
+            val session = NoiseSession(
+                peerID = peerID,
+                isInitiator = true,
+                localStaticPrivateKey = localStaticPrivateKey,
+                localStaticPublicKey = localStaticPublicKey
+            )
+            state.candidate = session
+            state.initiated = true
+            session.startHandshake()
         }
-
-        // Only create new session if none exists or previous failed
-        val session = NoiseSession(
-            peerID = peerID,
-            isInitiator = true,
-            localStaticPrivateKey = localStaticPrivateKey,
-            localStaticPublicKey = localStaticPublicKey
-        )
-        sessions[peerID] = session
-        initiatedPeers.add(peerID)
-        return session.startHandshake()
     }
-
-    /** A handshake handled off to the side, and whatever should be sent back for it. */
-    private class Renegotiated(val response: ByteArray?)
 
     /**
      * Handle [message] against a session that is already established, or against a renegotiation
@@ -92,24 +125,27 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
      */
     private fun renegotiation(
         peerID: String,
+        state: PeerLock,
         message: ByteArray,
         localStaticPrivateKey: ByteArray,
         localStaticPublicKey: ByteArray
-    ): Renegotiated? {
+    ): HandshakeResult? {
         val isOpening = message.size == NoiseConstants.XX_MESSAGE_1_SIZE
-        val pending = pendingSessions[peerID]
+        val pending = state.candidate
 
-        if (pending == null && sessions[peerID]?.isEstablished() != true) return null
+        // A candidate without a live session is the ordinary initial handshake. It must continue
+        // to the collision rule below rather than being mistaken for a renegotiation.
+        if (state.established?.isEstablished() != true) return null
 
         if (pending != null && !isOpening) {
-            return Renegotiated(advanceRenegotiation(peerID, pending, message))
+            return advanceRenegotiation(peerID, state, pending, message)
         }
 
         if (!isOpening) {
             // A stray message 2 or 3 with no renegotiation to belong to. There is nothing to do
             // with it, and feeding it to the live session is what used to destroy the live session.
             println("[NoiseEncryptionFacade] Ignoring a stray handshake message from $peerID; the established session stands")
-            return Renegotiated(null)
+            return HandshakeResult.Ignored
         }
 
         // A fresh opening. Any half-finished renegotiation is stale, so it gives way to this one.
@@ -120,28 +156,30 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
             localStaticPrivateKey = localStaticPrivateKey,
             localStaticPublicKey = localStaticPublicKey
         )
-        pendingSessions[peerID] = session
-        println("[NoiseEncryptionFacade] Renegotiating with $peerID alongside the established session")
-        return Renegotiated(advanceRenegotiation(peerID, session, message))
+        state.candidate = session
+        return advanceRenegotiation(peerID, state, session, message)
     }
 
     /** Feed [message] to a renegotiation, promoting it if it completes and dropping it if it fails. */
-    private fun advanceRenegotiation(peerID: String, session: NoiseSession, message: ByteArray): ByteArray? {
+    private fun advanceRenegotiation(
+        peerID: String,
+        state: PeerLock,
+        session: NoiseSession,
+        message: ByteArray
+    ): HandshakeResult {
         val response = try {
             session.processHandshakeMessage(message)
         } catch (e: Exception) {
             println("[NoiseEncryptionFacade] Renegotiation with $peerID failed: ${e.message}; the established session stands")
-            pendingSessions.remove(peerID)?.destroy()
-            return null
+            state.candidate?.destroy()
+            state.candidate = null
+            return HandshakeResult.Ignored
         }
 
         if (session.isEstablished()) {
-            println("[NoiseEncryptionFacade] Renegotiation with $peerID completed; replacing the established session")
-            pendingSessions.remove(peerID)
-            sessions.put(peerID, session)?.destroy()
-            initiatedPeers.remove(peerID)
+            return validateAndPromote(peerID, state, session, response)
         }
-        return response
+        return response?.let(HandshakeResult::Response) ?: HandshakeResult.Ignored
     }
 
     /**
@@ -157,11 +195,11 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
      * the same time — which is what the device journal shows, our message 1 ignored by the phone
      * and the phone's message 1 failing here with INVALID_LENGTH.
      */
-    private fun collisionVerdict(peerID: String, message: ByteArray): CollisionVerdict {
+    private fun collisionVerdict(peerID: String, state: PeerLock, message: ByteArray): CollisionVerdict {
         if (message.size != NoiseConstants.XX_MESSAGE_1_SIZE) return CollisionVerdict.NONE
-        val session = sessions[peerID] ?: return CollisionVerdict.NONE
+        val session = state.candidate ?: return CollisionVerdict.NONE
         if (!session.isHandshaking()) return CollisionVerdict.NONE
-        if (peerID !in initiatedPeers) return CollisionVerdict.NONE
+        if (!state.initiated) return CollisionVerdict.NONE
         return if (myPeerID > peerID) CollisionVerdict.YIELD else CollisionVerdict.HOLD
     }
 
@@ -181,21 +219,22 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
         message: ByteArray,
         localStaticPrivateKey: ByteArray,
         localStaticPublicKey: ByteArray
-    ): ByteArray? {
+    ): HandshakeResult = withPeerLock(peerID) { state ->
         // The construction is inside the try. Every current actual swallows its own init failure
         // into NoiseSessionState.Failed, but a throw from here would propagate through
         // MessageHandler into the per-peer actor loop in PacketProcessor and kill that coroutine,
         // after which every packet from this peer is swallowed by a channel with no consumer.
         // Nothing about the call site guarantees it cannot throw, so it is covered.
-        renegotiation(peerID, message, localStaticPrivateKey, localStaticPublicKey)?.let { return it.response }
+        renegotiation(peerID, state, message, localStaticPrivateKey, localStaticPublicKey)
+            ?.let { return@withPeerLock it }
 
-        when (collisionVerdict(peerID, message)) {
+        when (collisionVerdict(peerID, state, message)) {
             CollisionVerdict.HOLD -> {
                 println(
                     "[NoiseEncryptionFacade] Handshake collision with $peerID; holding our " +
                         "initiator session and ignoring its message 1"
                 )
-                return null
+                return@withPeerLock HandshakeResult.Ignored
             }
 
             CollisionVerdict.YIELD -> {
@@ -203,79 +242,135 @@ class NoiseEncryptionFacade(private val myPeerID: String) {
                     "[NoiseEncryptionFacade] Handshake collision with $peerID; yielding our " +
                         "initiator session and answering as responder"
                 )
-                sessions.remove(peerID)?.destroy()
-                initiatedPeers.remove(peerID)
+                state.candidate?.destroy()
+                state.candidate = null
+                state.initiated = false
             }
 
             CollisionVerdict.NONE -> Unit
         }
 
-        return try {
-            val session = sessions[peerID] ?: NoiseSession(
+        try {
+            val session = state.candidate ?: NoiseSession(
                 peerID = peerID,
                 isInitiator = false,
                 localStaticPrivateKey = localStaticPrivateKey,
                 localStaticPublicKey = localStaticPublicKey
-            ).also { sessions[peerID] = it }
+            ).also { state.candidate = it }
 
-            session.processHandshakeMessage(message)
+            val response = session.processHandshakeMessage(message)
+            if (session.isEstablished()) {
+                validateAndPromote(peerID, state, session, response)
+            } else {
+                response?.let(HandshakeResult::Response) ?: HandshakeResult.Ignored
+            }
         } catch (e: Exception) {
             println("[NoiseEncryptionFacade] Handshake failed for $peerID: ${e.message}")
-            sessions.remove(peerID)?.destroy()
-            initiatedPeers.remove(peerID)
-            null
+            state.candidate?.destroy()
+            state.candidate = null
+            state.initiated = false
+            HandshakeResult.Ignored
         }
     }
 
     fun encrypt(peerID: String, data: ByteArray): ByteArray? {
-        val session = sessions[peerID] ?: return null
-        return if (session.isEstablished()) {
-            session.encrypt(data)
-        } else {
-            null
+        return withPeerLock(peerID) { state ->
+            state.established
+                ?.takeIf { it.isEstablished() }
+                ?.encrypt(data)
         }
     }
 
     fun decrypt(peerID: String, encryptedData: ByteArray): ByteArray? {
-        val session = sessions[peerID] ?: return null
-        return if (session.isEstablished()) {
+        return withPeerLock(peerID) { state ->
+            val session = state.established ?: return@withPeerLock null
+            if (!session.isEstablished()) return@withPeerLock null
             try {
                 session.decrypt(encryptedData)
             } catch (e: Exception) {
                 null
             }
-        } else {
-            null
         }
     }
 
     fun getSessionState(peerID: String): String {
-        val state = sessions[peerID]?.getState()
-        return when (state) {
-            NoiseSessionState.Established -> "established"
-            NoiseSessionState.Handshaking -> "handshaking"
-            NoiseSessionState.Uninitialized -> "uninitialized"
-            is NoiseSessionState.Failed -> "failed"
-            else -> "uninitialized"
+        return withPeerLock(peerID) { state ->
+            val sessionState = state.established?.getState() ?: state.candidate?.getState()
+            when (sessionState) {
+                NoiseSessionState.Established -> if (state.established != null) "established" else "uninitialized"
+                NoiseSessionState.Handshaking -> "handshaking"
+                NoiseSessionState.Uninitialized -> "uninitialized"
+                is NoiseSessionState.Failed -> "failed"
+                else -> "uninitialized"
+            }
         }
     }
 
     fun getRemoteStaticKey(peerID: String): ByteArray? {
-        return sessions[peerID]?.getRemoteStaticPublicKey()
+        return withPeerLock(peerID) { it.established?.getRemoteStaticPublicKey() }
     }
 
     fun removeSession(peerID: String) {
-        sessions.remove(peerID)?.destroy()
-        // A renegotiation only exists to replace the session being removed here, so it goes too --
-        // otherwise it would outlive its purpose and later promote itself over a session the peer
-        // has since built by other means.
-        pendingSessions.remove(peerID)?.destroy()
-        initiatedPeers.remove(peerID)
+        withPeerLock(peerID) { state ->
+            state.established?.destroy()
+            state.established = null
+            // A renegotiation only exists to replace the session being removed here, so it goes
+            // too -- otherwise it would outlive its purpose and later promote itself over a
+            // session the peer has since built by other means.
+            state.candidate?.destroy()
+            state.candidate = null
+            state.initiated = false
+        }
     }
 
     fun clearAllSessions() {
-        sessions.values.forEach { it.destroy() }
-        sessions.clear()
-        initiatedPeers.clear()
+        val peerIDs = peerLocksRegistry.withLock {
+            peerLocks.keys.toList()
+        }
+        peerIDs.forEach(::removeSession)
+    }
+
+    /** Runs under the peer lock, immediately after XX has learned the authenticated static key. */
+    private fun validateAndPromote(
+        peerID: String,
+        state: PeerLock,
+        candidate: NoiseSession,
+        response: ByteArray?
+    ): HandshakeResult {
+        val remoteStaticKey = candidate.getRemoteStaticPublicKey()
+        val rawID = remoteStaticKey?.hexPrefix()
+        val hashID = remoteStaticKey?.let(Cryptography::getDigestHash)?.hexPrefix()
+        val claimedID = peerID.lowercase()
+        val accepted = peerID.length == ID_HEX_LENGTH && peerID.all { it.isHexDigit() } &&
+            (claimedID == rawID || claimedID == hashID)
+        if (!accepted) {
+            println(
+                "[NoiseEncryptionFacade] Rejected Noise identity claimed=$peerID " +
+                    "raw=${rawID ?: "unavailable"} sha256=${hashID ?: "unavailable"}"
+            )
+            state.candidate?.destroy()
+            state.candidate = null
+            state.initiated = false
+            return HandshakeResult.RejectedIdentity
+        }
+
+        state.candidate = null
+        state.established?.destroy()
+        state.established = candidate
+        state.initiated = false
+        println("[NoiseEncryptionFacade] Noise identity validated for $peerID; session established")
+        return HandshakeResult.Established(response)
+    }
+
+    private fun ByteArray.hexPrefix(): String = take(ID_BYTES).joinToString("") { byte ->
+        (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+    }
+
+    private fun Char.isHexDigit(): Boolean =
+        this in '0'..'9' || this in 'a'..'f' || this in 'A'..'F'
+
+    private companion object {
+        const val ID_BYTES = 8
+        const val ID_HEX_LENGTH = ID_BYTES * 2
     }
 }
