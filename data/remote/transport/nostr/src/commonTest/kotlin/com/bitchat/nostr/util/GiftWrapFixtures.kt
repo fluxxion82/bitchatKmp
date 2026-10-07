@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.Flow
 /** A client for sealing and opening DMs; neither path touches preferences or stored identity. */
 internal fun dmClient(): NostrClient = NostrClient(UnusedNostrPreferences, UnusedIdentityProvider)
 
+/** A client for posting to a geohash, mining to [powDifficulty] first (0 = no proof of work); stored identity is never touched. */
+internal fun geohashClient(powDifficulty: Int): NostrClient = NostrClient(ProofOfWorkPreferences(powDifficulty), UnusedIdentityProvider)
+
 /** One genuine gift wrap of [content] from [sender] to [recipient], as relays deliver it. */
 internal fun NostrClient.giftWrap(content: String, sender: NostrIdentity, recipient: NostrIdentity): NostrEvent =
     createPrivateMessage(content, recipient.publicKeyHex, sender).single()
@@ -34,6 +37,17 @@ private object UnusedNostrPreferences : NostrPreferences {
     override fun setPowDifficulty(difficulty: Int) = unused()
     override fun getPowDifficulty(): Int = unused()
     override fun setIsMining(isMining: Boolean) = unused()
+    override fun getIsMiningFlow(): Flow<Boolean> = unused()
+}
+
+private class ProofOfWorkPreferences(private val difficulty: Int) : NostrPreferences {
+    override fun getLastUpdateMs(): Long = unused()
+    override fun setLastUpdateMs(value: Long) = unused()
+    override fun setPowEnabled(enabled: Boolean) = unused()
+    override fun getPowEnabled(): Boolean = difficulty > 0
+    override fun setPowDifficulty(difficulty: Int) = unused()
+    override fun getPowDifficulty(): Int = difficulty
+    override fun setIsMining(isMining: Boolean) = Unit
     override fun getIsMiningFlow(): Flow<Boolean> = unused()
 }
 

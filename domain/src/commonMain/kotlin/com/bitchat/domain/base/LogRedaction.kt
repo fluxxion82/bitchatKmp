@@ -22,14 +22,25 @@ object LogPolicy {
 }
 
 /**
+ * [text] with every control character replaced by `?`: line breaks, ESC and the other C0 and C1
+ * controls, DEL, and the Unicode line and paragraph separators. Text that a peer, a relay or the
+ * author of an event wrote can then sit in a log line without starting a line of its own or handing
+ * the terminal that shows the log a control sequence. Other scripts and emoji are left as they are.
+ */
+fun logSafe(text: String): String =
+    if (text.none(Char::breaksLogLine)) text else text.map { if (it.breaksLogLine()) '?' else it }.joinToString("")
+
+private fun Char.breaksLogLine(): Boolean = isISOControl() || code == 0x2028 || code == 0x2029
+
+/**
  * [body] as a log line may show it: `<N chars>`, or, with [LogPolicy.messageBodies], the text in
- * quotes, cut after [preview] characters.
+ * quotes, cut after [preview] characters and with its control characters replaced ([logSafe]).
  */
 fun logBody(body: String?, preview: Int = Int.MAX_VALUE): String = when {
     body == null -> "<null>"
     !LogPolicy.messageBodies -> "<${body.length} chars>"
-    body.length > preview -> "\"${body.take(preview)}...\" (${body.length} chars)"
-    else -> "\"$body\""
+    body.length > preview -> "\"${logSafe(body.take(preview))}...\" (${body.length} chars)"
+    else -> "\"${logSafe(body)}\""
 }
 
 /** [bytes] as a log line may show them: `<N bytes>`, or [dump] of them with [LogPolicy.messageBodies]. */
@@ -45,7 +56,7 @@ inline fun logBytes(size: Int, dump: () -> String): String =
  */
 fun logPath(path: String?): String = when {
     path == null -> "<none>"
-    LogPolicy.messageBodies -> path
+    LogPolicy.messageBodies -> logSafe(path)
     else -> "<file>"
 }
 
@@ -55,7 +66,7 @@ fun logPath(path: String?): String = when {
  */
 fun logError(error: Throwable): String {
     val name = error::class.simpleName ?: "error"
-    return if (LogPolicy.messageBodies) "$name: ${error.message}" else name
+    return if (LogPolicy.messageBodies) "$name: ${error.message?.let(::logSafe)}" else name
 }
 
 /** Prints [error]'s stack trace, which carries its message, only with [LogPolicy.messageBodies]. */

@@ -1,29 +1,31 @@
 package com.bitchat.nostr.util
 
 import com.bitchat.nostr.model.NostrEvent
-import com.bitchat.nostr.model.NostrKind
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 import kotlin.concurrent.Volatile
 import kotlin.math.roundToInt
 
 /**
- * Efficient LRU-based Nostr event deduplication system
+ * The one gate every event a relay sends passes before any subscription handler sees it: it lets
+ * an event through once, and only if the event is what it says it is.
  *
- * This class provides thread-safe deduplication of Nostr events based on their event IDs.
- * It maintains an LRU cache of up to 10,000 event IDs to prevent memory bloat while ensuring
- * duplicate events (which commonly arrive via different relays) are processed only once.
+ * It keeps an LRU of up to 10,000 event ids. [processEvent] is the only way in, and it records an
+ * id only after its event verified, so the ids held are those of genuine events already handed on,
+ * and a copy from another relay is recognised without checking a signature again.
  *
- * Features:
- * - Thread-safe concurrent access
- * - LRU eviction when capacity is exceeded
- * - Configurable capacity (default 10,000)
- * - Efficient O(1) lookup and insertion
- * - Memory-bounded to prevent unbounded growth
+ * - Thread-safe
+ * - LRU eviction when capacity is exceeded; an evicted id only costs one more verification
+ * - O(1) lookup and insertion
  */
-class NostrEventDeduplicator(
-    private val maxCapacity: Int = DEFAULT_CAPACITY
+class NostrEventDeduplicator internal constructor(
+    private val maxCapacity: Int,
+    // Always NostrEvent.isValidSignature in the app. Internal, so that only this module's tests can
+    // put something else here: one of them needs to hold several copies inside the check at once.
+    private val verifies: (NostrEvent) -> Boolean,
 ) {
+    constructor(maxCapacity: Int = DEFAULT_CAPACITY) : this(maxCapacity, NostrEvent::isValidSignature)
+
     // Hash map for O(1) lookup - maps event ID to node
     private val nodeMap = ConcurrentMap<String, LRUNode>()
 
@@ -53,62 +55,57 @@ class NostrEventDeduplicator(
     }
 
     /**
-     * Check if an event has been seen before and mark it as seen
+     * Hand [event] to [processor] once, and only if its id and signature verify.
      *
-     * @param eventId The Nostr event ID to check
-     * @return true if the event is a duplicate (already seen), false if it's new
-     */
-    fun isDuplicate(eventId: String): Boolean {
-        totalChecks++
-
-        synchronized(lruLock) {
-            val existingNode = nodeMap[eventId]
-
-            if (existingNode != null) {
-                // Event is a duplicate - move to front (most recently used)
-                moveToFront(existingNode)
-                duplicateCount++
-
-                if (duplicateCount % 100 == 0L) {
-                    // Log.v(TAG, "Duplicate event detected: $eventId (${duplicateCount} total duplicates)")
-                }
-
-                return true
-            } else {
-                // New event - add to front
-                addToFront(eventId)
-
-                // Check if we need to evict oldest entries
-                if (nodeMap.size > maxCapacity) {
-                    evictOldest()
-                }
-
-                return false
-            }
-        }
-    }
-
-    /**
-     * Process a Nostr event with deduplication
+     * A relay is not trusted: the id, key, timestamp, tags and content it sends are claims until
+     * the id is recomputed from the fields and the signature checked against the key the event
+     * names, which is what [NostrEvent.isValidSignature] does. This holds for every kind. The
+     * order is the point:
      *
-     * A gift wrap is dropped without being recorded unless its id and signature verify. Its id is
-     * otherwise only a claim: a forged copy carrying a real DM's id that got here first would have
-     * the real DM dropped as its duplicate before ChatRepo ever saw it. NostrClient rejects such a
-     * wrap anyway, so no genuine DM is lost. Other kinds are deduplicated by their claimed id as
-     * before; verifying them here would change which geohash messages are shown.
+     * 1. An id already recorded is dropped without being verified. Only verified events are
+     *    recorded, and a verified id is the hash of its event, so whatever carries that id now is
+     *    the same event again or a forgery of it, and neither is wanted. This is what keeps the
+     *    copies the other relays send from costing a signature check each.
+     * 2. Anything else is verified, and an event that fails leaves nothing behind. Were its id
+     *    recorded, a forged copy that got here first would have the real event dropped as its
+     *    duplicate.
+     * 3. Only then is the id recorded and the event handed on.
      *
      * @param event The Nostr event to process
-     * @param processor Function to call if the event is not a duplicate
-     * @return true if the event was processed (not a duplicate), false if it was deduplicated or rejected
+     * @param processor Called if the event verified and was not delivered before
+     * @return what became of the event
      */
-    fun processEvent(event: NostrEvent, processor: (NostrEvent) -> Unit): Boolean {
-        if (event.kind == NostrKind.GIFT_WRAP && !event.isValidSignature()) return false
-        return if (!isDuplicate(event.id)) {
-            processor(event)
-            true
-        } else {
-            false
+    fun processEvent(event: NostrEvent, processor: (NostrEvent) -> Unit): EventAdmission {
+        totalChecks++
+        if (isRecorded(event.id)) return EventAdmission.DUPLICATE
+        if (!verifies(event)) return EventAdmission.INVALID
+        // Two relays can deliver the same event at once and both get this far; one of them records.
+        if (!recordIfNew(event.id)) return EventAdmission.DUPLICATE
+        processor(event)
+        return EventAdmission.DELIVERED
+    }
+
+    /** Whether [eventId] is recorded; a hit counts as a use, a miss records nothing. */
+    private fun isRecorded(eventId: String): Boolean = synchronized(lruLock) {
+        val existingNode = nodeMap[eventId] ?: return@synchronized false
+        moveToFront(existingNode)
+        duplicateCount++
+        true
+    }
+
+    /** Records [eventId] unless it is recorded already, in one step. Returns whether it was new. */
+    private fun recordIfNew(eventId: String): Boolean = synchronized(lruLock) {
+        val existingNode = nodeMap[eventId]
+        if (existingNode != null) {
+            moveToFront(existingNode)
+            duplicateCount++
+            return@synchronized false
         }
+        addToFront(eventId)
+        if (nodeMap.size > maxCapacity) {
+            evictOldest()
+        }
+        true
     }
 
     /**
@@ -240,6 +237,18 @@ class NostrEventDeduplicator(
         var prev: LRUNode? = null,
         var next: LRUNode? = null
     )
+}
+
+/** What [NostrEventDeduplicator.processEvent] did with an event. */
+enum class EventAdmission {
+    /** Its id and signature verified and it had not been delivered before: the processor ran. */
+    DELIVERED,
+
+    /** An event with this id verified and was delivered earlier; this copy was not looked at. */
+    DUPLICATE,
+
+    /** Its id is not the hash of its fields, or its signature is missing or wrong. Nothing was recorded. */
+    INVALID,
 }
 
 /**

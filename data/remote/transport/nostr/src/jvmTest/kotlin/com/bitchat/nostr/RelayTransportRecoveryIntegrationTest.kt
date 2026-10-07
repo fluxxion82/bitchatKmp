@@ -13,6 +13,7 @@ import com.bitchat.domain.tor.model.TorState
 import com.bitchat.domain.tor.model.TorStatus
 import com.bitchat.nostr.model.NostrEvent
 import com.bitchat.nostr.model.NostrFilter
+import com.bitchat.nostr.model.NostrIdentity
 import com.bitchat.nostr.model.RelayInfo
 import com.bitchat.nostr.util.NostrEventDeduplicator
 import com.bitchat.tor.TorRouteSource
@@ -27,6 +28,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.json.Json
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -519,32 +521,19 @@ class RelayTransportRecoveryIntegrationTest {
     }
 
     private companion object {
-        val torRecoveryEvent = NostrEvent(
-            id = "a".repeat(64),
-            pubkey = "p".repeat(64),
-            createdAt = 1,
-            kind = 1,
-            tags = emptyList(),
-            content = "tor-route",
+        // Really signed: the relay path hands on nothing that does not verify.
+        private val author = NostrIdentity.generate()
+        val torRecoveryEvent = note("tor-route", createdAt = 1)
+        val directRecoveryEvent = note("direct-route", createdAt = 2)
+        val expectedEvent = note("recovered-over-loopback", createdAt = 1)
+        val torRecoveryEventJson = torRecoveryEvent.toJson()
+        val directRecoveryEventJson = directRecoveryEvent.toJson()
+        val expectedEventJson = expectedEvent.toJson()
+
+        private fun note(content: String, createdAt: Int) = author.signEvent(
+            NostrEvent(pubkey = author.publicKeyHex, createdAt = createdAt, kind = 1, tags = emptyList(), content = content)
         )
-        val directRecoveryEvent = NostrEvent(
-            id = "b".repeat(64),
-            pubkey = "p".repeat(64),
-            createdAt = 2,
-            kind = 1,
-            tags = emptyList(),
-            content = "direct-route",
-        )
-        const val torRecoveryEventJson = "{\"id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"pubkey\":\"pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\",\"created_at\":1,\"kind\":1,\"tags\":[],\"content\":\"tor-route\"}"
-        const val directRecoveryEventJson = "{\"id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"pubkey\":\"pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\",\"created_at\":2,\"kind\":1,\"tags\":[],\"content\":\"direct-route\"}"
-        val expectedEvent = NostrEvent(
-            id = "e".repeat(64),
-            pubkey = "p".repeat(64),
-            createdAt = 1,
-            kind = 1,
-            tags = emptyList(),
-            content = "recovered-over-loopback",
-        )
-        const val expectedEventJson = "{\"id\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"pubkey\":\"pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\",\"created_at\":1,\"kind\":1,\"tags\":[],\"content\":\"recovered-over-loopback\"}"
+
+        private fun NostrEvent.toJson() = Json.encodeToString(NostrEvent.serializer(), this)
     }
 }

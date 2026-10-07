@@ -63,6 +63,9 @@ internal fun chatRepo(
     userEventBus: UserEventBus = mockk<UserEventBus>(relaxed = true).also { every { it.events() } returns emptyFlow() },
     nostr: NostrTransport = mockk(relaxed = true),
     chatEventBus: ChatEventBus = mockk<ChatEventBus>(relaxed = true),
+    // A real relay, for tests about what a relay can make the repository show. Without one, each
+    // subscription's handler is handed out through [subscriptions] and events are fed to it directly.
+    relay: NostrRelay? = null,
 ): ChatRepo {
     val contextFacade = object : CoroutinesContextFacade {
         override val io: CoroutineContext = dispatcher
@@ -93,7 +96,7 @@ internal fun chatRepo(
         }
         configureNostrClient(it)
     }
-    val nostrRelay = mockk<NostrRelay>(relaxed = true).also {
+    val nostrRelay = relay ?: mockk<NostrRelay>(relaxed = true).also {
         every { it.getRelaysForGeohash(any()) } returns emptyList()
         every { it.subscribe(any(), any(), any(), any(), any()) } answers {
             val subscription = Subscription(firstArg(), secondArg(), thirdArg())

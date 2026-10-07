@@ -303,12 +303,15 @@ data class NostrEvent(
     }
 
     /**
-     * Validate event signature using BIP-340 Schnorr verification
+     * Whether this event is what it says it is: its id is the hash of its own fields (NIP-01) and
+     * its signature is a BIP-340 Schnorr signature of that hash by [pubkey]. Until this holds,
+     * every field is only a claim made by whoever delivered the event.
      */
     fun isValidSignature(): Boolean {
         return try {
             val signatureHex = sig ?: return false
             if (id.isEmpty() || pubkey.isEmpty()) return false
+            if (!hasOnlyEncodableText()) return false
 
             // Recalculate the event ID hash for verification
             val (calculatedId, messageHash) = calculateEventId()
@@ -321,6 +324,32 @@ data class NostrEvent(
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * Whether every string that goes into the id can be written as UTF-8 as it is.
+     *
+     * Half a surrogate pair has no UTF-8 form, and an encoder puts another character in its place
+     * rather than fail. Hashing such an event hashes a different one, the event that really has
+     * the replacement there, so that event's id and signature would vouch for both.
+     */
+    private fun hasOnlyEncodableText(): Boolean =
+        pubkey.hasNoStraySurrogate() && content.hasNoStraySurrogate() && tags.all { tag -> tag.all { it.hasNoStraySurrogate() } }
+
+    private fun String.hasNoStraySurrogate(): Boolean {
+        var index = 0
+        while (index < length) {
+            val char = this[index]
+            when {
+                char.isHighSurrogate() -> {
+                    if (index + 1 >= length || !this[index + 1].isLowSurrogate()) return false
+                    index += 2
+                }
+                char.isLowSurrogate() -> return false
+                else -> index++
+            }
+        }
+        return true
     }
 
     /**

@@ -11,9 +11,11 @@ import com.bitchat.nostr.model.NostrKind
 import com.bitchat.nostr.model.NostrResponse
 import com.bitchat.nostr.model.RelayInfo
 import com.bitchat.nostr.util.ConcurrentMap
+import com.bitchat.nostr.util.EventAdmission
 import com.bitchat.nostr.util.GeohashUtils
 import com.bitchat.nostr.util.GeohashUtils.haversineDistance
 import com.bitchat.nostr.util.NostrEventDeduplicator
+import com.bitchat.nostr.util.RejectedEventLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.InternalCoroutinesApi
@@ -37,13 +39,26 @@ private val DEFAULT_RELAYS = listOf(
 )
 
 @OptIn(InternalCoroutinesApi::class)
-class NostrRelay(
+class NostrRelay internal constructor(
     private val eventDeduplicator: NostrEventDeduplicator,
     private val wsClient: NostrWebSocketClient,
     private val relayCache: Cache<String, RelayInfo>,
-    private val relayLogSink: RelayLogSink? = null,
-    private val torProxyStatus: TorProxyStatus? = null,
+    private val relayLogSink: RelayLogSink?,
+    private val torProxyStatus: TorProxyStatus?,
+    private val scope: CoroutineScope,
+    /** Events that failed verification, counted per relay and reported at a bounded rate. */
+    private val rejectedEvents: RejectedEventLog,
 ) {
+    constructor(
+        eventDeduplicator: NostrEventDeduplicator,
+        wsClient: NostrWebSocketClient,
+        relayCache: Cache<String, RelayInfo>,
+        relayLogSink: RelayLogSink? = null,
+        torProxyStatus: TorProxyStatus? = null,
+        // Background work and handler dispatch; a test passes an unconfined scope to see both at once.
+        scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
+    ) : this(eventDeduplicator, wsClient, relayCache, relayLogSink, torProxyStatus, scope, RejectedEventLog())
+
     private val json = Json { ignoreUnknownKeys = true }
 
     private val pendingGiftWrapIDs = HashSet<String>()
@@ -65,9 +80,6 @@ class NostrRelay(
 
     private val messageQueue = mutableListOf<QueuedMessage>()
     private val messageQueueLock = SynchronizedObject()
-
-    // Coroutine scope for background operations
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // Subscription validation timer
     private var subscriptionValidationJob: Job? = null
@@ -467,26 +479,9 @@ class NostrRelay(
 
             when (response) {
                 is NostrResponse.Event -> {
-                    // Diagnostic logging - detailed event info for geohash events
-                    if (response.event.kind == 20000) {
-                        println("━━━ NOSTR RELAY RECEIVED EVENT ━━━")
-                        println("Relay: $relayUrl")
-                        println("Event ID: ${response.event.id}")
-                        println("Event kind: ${response.event.kind}")
-                        println("Sender pubkey: ${response.event.pubkey.take(16)}...")
-                        println("Full pubkey: ${response.event.pubkey}")
-                        println("Subscription: ${response.subscriptionId}")
-                        val geohashTag = response.event.tags.find { it.firstOrNull() == "g" }?.getOrNull(1)
-                        println("Geohash event - tag: $geohashTag")
-                        println("Content: ${logBody(response.event.content, 50)}")
-                        println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                    }
-
                     val relay = relaysList.find { it.url == relayUrl }
                     relay?.messagesReceived = (relay.messagesReceived) + 1
                     updateRelaysList()
-
-                    println("NostrRelay: 📥 Received event kind=${response.event.kind} from $relayUrl, subId=${response.subscriptionId}")
 
                     activeSubscriptions[response.subscriptionId]?.let { subInfo ->
                         val matches = try {
@@ -500,18 +495,18 @@ class NostrRelay(
                         }
                     }
 
-                    val wasProcessed = eventDeduplicator.processEvent(response.event) { event ->
-                        if (event.kind != NostrKind.GIFT_WRAP) {
-                            println("NostrRelay: Processing new event id=${event.id.take(16)}... kind=${event.kind}")
-                        }
+                    // An event no subscription asks for stops here, unverified and unrecorded. No
+                    // handler would see it, and a recorded id is never handed on again, so recording
+                    // it would let a relay use up a genuine event before its subscription exists.
+                    if (subscriptionsMatching(response.event).isEmpty()) return
 
-                        val matchingSubscriptions = activeSubscriptions.filter { (subId, subInfo) ->
-                            try {
-                                subInfo.filter.matches(event)
-                            } catch (e: Exception) {
-                                false
-                            }
-                        }
+                    // Until the deduplicator has verified it, an event's fields are only what this
+                    // relay claims. The filters above use them to decide whether the event is worth
+                    // verifying, nothing prints them, and no handler ever sees an event that failed.
+                    val admission = eventDeduplicator.processEvent(response.event) { event ->
+                        logVerifiedEvent(event, relayUrl, response.subscriptionId)
+
+                        val matchingSubscriptions = subscriptionsMatching(event)
 
                         println("NostrRelay: Event matches ${matchingSubscriptions.size} subscription(s)")
 
@@ -528,6 +523,9 @@ class NostrRelay(
                             }
                         }
                     }
+                    if (admission == EventAdmission.INVALID) {
+                        rejectedEvents.rejected(relayUrl)?.let(::println)
+                    }
                 }
 
                 is NostrResponse.EndOfStoredEvents -> {
@@ -539,7 +537,7 @@ class NostrRelay(
                 }
 
                 is NostrResponse.Notice -> {
-                    println("NostrRelay: ⚠️ Notice from $relayUrl: ${response.message}")
+                    println("NostrRelay: ⚠️ Notice from $relayUrl: ${logText(response.message, limit = 200)}")
                 }
 
                 is NostrResponse.Unknown -> {
@@ -550,6 +548,42 @@ class NostrRelay(
             // Failed to parse message
         }
     }
+
+    private fun subscriptionsMatching(event: NostrEvent): Map<String, SubscriptionInfo> =
+        activeSubscriptions.filter { (_, subInfo) ->
+            try {
+                subInfo.filter.matches(event)
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+    /** Diagnostics for an event that verified and is about to be delivered: once per event, whichever relay sent it first. */
+    private fun logVerifiedEvent(event: NostrEvent, relayUrl: String, subscriptionId: String) {
+        if (event.kind == NostrKind.GIFT_WRAP) return
+        if (event.kind == NostrKind.EPHEMERAL_EVENT) {
+            println("━━━ NOSTR RELAY RECEIVED EVENT ━━━")
+            println("Relay: $relayUrl")
+            println("Event ID: ${event.id}")
+            println("Event kind: ${event.kind}")
+            println("Sender pubkey: ${event.pubkey.take(16)}...")
+            println("Full pubkey: ${event.pubkey}")
+            println("Subscription: ${logText(subscriptionId)}")
+            val geohashTag = event.tags.find { it.firstOrNull() == "g" }?.getOrNull(1)
+            println("Geohash event - tag: ${logText(geohashTag)}")
+            println("Content: ${logBody(event.content, 50)}")
+            println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        }
+        println("NostrRelay: 📥 Processing new event id=${event.id.take(16)}... kind=${event.kind} from $relayUrl, subId=${logText(subscriptionId)}")
+    }
+
+    /**
+     * Text a relay or an event's author chose, as a log line may carry it: printable ASCII only and
+     * cut short, so it cannot start a line of its own or hand the terminal a control sequence. An
+     * event's id and key need none of this once it verified: they are hex or it would not have.
+     */
+    private fun logText(text: String?, limit: Int = 64): String =
+        text?.take(limit)?.map { if (it in ' '..'~') it else '?' }?.joinToString("") ?: "none"
 
     private fun handleDisconnection(relayUrl: String, error: Throwable) {
         println("NostrRelay: ❌ Disconnection from $relayUrl")
