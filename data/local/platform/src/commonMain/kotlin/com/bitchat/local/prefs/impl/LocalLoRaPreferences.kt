@@ -1,6 +1,7 @@
 package com.bitchat.local.prefs.impl
 
 import com.bitchat.domain.lora.model.LoRaProtocolType
+import com.bitchat.domain.lora.model.LoRaBandwidth
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.local.prefs.LoRaPreferences
@@ -45,6 +46,19 @@ internal class LocalLoRaPreferences(
         settings.putString(KEY_TX_POWER, power.name)
     }
 
+    override fun getBandwidth(): LoRaBandwidth {
+        val bandwidthName = settings.getString(KEY_BANDWIDTH, LoRaBandwidth.KHZ_125.name)
+        return try {
+            LoRaBandwidth.valueOf(bandwidthName)
+        } catch (e: IllegalArgumentException) {
+            LoRaBandwidth.KHZ_125
+        }
+    }
+
+    override fun setBandwidth(bandwidth: LoRaBandwidth) {
+        settings.putString(KEY_BANDWIDTH, bandwidth.name)
+    }
+
     override fun isShowLoRaPeersEnabled(): Boolean {
         return settings.getBoolean(KEY_SHOW_PEERS, true)
     }
@@ -71,6 +85,7 @@ internal class LocalLoRaPreferences(
         private const val KEY_ENABLED = "lora_enabled"
         private const val KEY_REGION = "lora_region"
         private const val KEY_TX_POWER = "lora_tx_power"
+        private const val KEY_BANDWIDTH = "lora_bandwidth"
         private const val KEY_SHOW_PEERS = "lora_show_peers"
         private const val KEY_PROTOCOL = "lora_protocol"
     }

@@ -4,6 +4,7 @@ import com.bitchat.domain.app.model.ActiveState
 import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.base.CoroutineScopeFacade
 import com.bitchat.domain.base.CoroutinesContextFacade
+import com.bitchat.domain.lora.model.LoRaBandwidth
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.domain.user.eventbus.UserEventBus
@@ -48,6 +49,7 @@ class LoRaSavedConfigTest {
             every { isLoRaEnabled() } returns false
             every { getLoRaRegion() } returns LoRaRegion.EU_868
             every { getTxPower() } returns LoRaTxPower.LOW
+            every { getBandwidth() } returns LoRaBandwidth.KHZ_500
         }
         val users = mockk<UserRepository> { coEvery { getUserState() } returns UserState.Active(ActiveState.Settings) }
         val mesh = mockk<BluetoothMeshService> { every { myPeerID } returns "0123456789abcdef" }
@@ -87,8 +89,16 @@ class LoRaSavedConfigTest {
         assertTrue(repo.switchLoRaProtocol("BITCHAT"))
         assertEquals(868_125_000L, configs.single().frequency)
         assertEquals(10, configs.single().txPower)
+        assertEquals(500_000L, configs.single().bandwidth)
         assertEquals(9, configs.single().spreadingFactor)
         assertEquals(0x12, configs.single().syncWord)
+
+        // Changing region and power afterwards keeps the saved bandwidth.
+        assertTrue(repo.reconfigureLoRa(LoRaRegion.US_915, LoRaTxPower.HIGH))
+        assertEquals(2, configs.size)
+        assertEquals(915_125_000L, configs.last().frequency)
+        assertEquals(20, configs.last().txPower)
+        assertEquals(500_000L, configs.last().bandwidth)
         manager.stop()
     }
 }

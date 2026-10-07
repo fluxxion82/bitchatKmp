@@ -50,3 +50,13 @@ Keep protocol-specific RF settings and credentials unchanged. See [MeshCore setu
 ## Probe and select
 
 Use [the read-only diagnostic workflow](../../../scripts/LORA_TESTING.md) with the app and all radio daemons stopped. Successful `0x12` reads verify SPI identification, not messaging. Then start the app and select the protocol under Settings → LoRa. That choice persists in the app user's settings and controls startup. If the old owner cannot stop or the new protocol fails initialization, the app reports failure; an explicit retry starts a fresh bounded attempt.
+
+## Bandwidth
+
+The BitChat LoRa stack defaults to 125 kHz. To change it, stop the service, add or edit `lora_bandwidth` in `~/.bitchat/settings/lora_settings.prefs`, then start the service again:
+
+```properties
+lora_bandwidth=KHZ_500
+```
+
+The supported stored values are `KHZ_125`, `KHZ_250`, and `KHZ_500`. Both devices must use the same value to hear each other; wider bandwidth shortens airtime but reduces range, while 125 kHz has the longest range.

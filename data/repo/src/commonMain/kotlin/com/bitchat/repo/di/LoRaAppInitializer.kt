@@ -29,7 +29,7 @@ import kotlinx.coroutines.launch
  * - User is in Active state
  * - A LoRa protocol adapter is available (hardware identification happens during startup)
  *
- * Uses settings from LoRaPreferences for region and TX power.
+ * Uses settings from LoRaPreferences for region, TX power and bandwidth.
  *
  * NOTE: This initializer is non-blocking - it launches LoRa setup in the background
  * and returns immediately to avoid blocking app startup.
@@ -88,7 +88,7 @@ class LoRaAppInitializer(
             syncLocalIdentity()
             if (loraTransport?.isReady == true) return@withLock
             val config = loraPreferences?.toLoRaConfiguration() ?: LoRaConfig.US_915
-            println("LoRaAppInitializer: Starting saved LoRa selection (region=${loraPreferences?.getLoRaRegion()}, txPower=${loraPreferences?.getTxPower()})")
+            println("LoRaAppInitializer: Starting saved LoRa selection (region=${loraPreferences?.getLoRaRegion()}, txPower=${loraPreferences?.getTxPower()}, bandwidth=${loraPreferences?.getBandwidth()})")
             val started = loraTransport?.start(config) ?: false
             if (started) {
                 println("LoRaAppInitializer: LoRa transport started successfully")

@@ -4,6 +4,7 @@ import com.bitchat.bluetooth.service.BluetoothMeshService
 import com.bitchat.domain.app.model.ActiveState
 import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.location.model.Channel
+import com.bitchat.domain.lora.model.LoRaBandwidth
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.domain.user.eventbus.UserEventBus
@@ -12,6 +13,7 @@ import com.bitchat.domain.user.model.UserEvent
 import com.bitchat.domain.user.repository.UserRepository
 import com.bitchat.local.prefs.LoRaPreferences
 import com.bitchat.lora.LoRaProtocol
+import com.bitchat.lora.radio.LoRaConfig
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -37,6 +39,7 @@ class LoRaAppInitializerTest {
     }
     private var enabled = true
     private var state: UserState = UserState.Active(ActiveState.Settings)
+    private var bandwidth = LoRaBandwidth.KHZ_125
 
     init {
         every { transport.isReady } returns false
@@ -47,6 +50,7 @@ class LoRaAppInitializerTest {
         every { preferences.isLoRaEnabled() } answers { enabled }
         every { preferences.getLoRaRegion() } returns LoRaRegion.US_915
         every { preferences.getTxPower() } returns LoRaTxPower.LOW
+        every { preferences.getBandwidth() } answers { bandwidth }
     }
 
     @Test
@@ -105,6 +109,21 @@ class LoRaAppInitializerTest {
         events.emit(UserEvent.StateChanged)
         runCurrent()
         coVerify(exactly = 1) { transport.start(any()) }
+    }
+
+    @Test
+    fun bootstrapUsesSavedBandwidth() = runTest {
+        bandwidth = LoRaBandwidth.KHZ_500
+        var startedConfiguration: LoRaConfig? = null
+        coEvery { transport.start(any()) } coAnswers {
+            startedConfiguration = firstArg()
+            false
+        }
+
+        LoRaAppInitializer(transport, users, preferences, bus, mesh, backgroundScope).initialize()
+
+        runCurrent()
+        assertEquals(500_000L, startedConfiguration?.bandwidth)
     }
 
     @Test

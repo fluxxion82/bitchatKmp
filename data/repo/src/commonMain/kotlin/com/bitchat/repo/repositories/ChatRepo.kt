@@ -36,6 +36,7 @@ import com.bitchat.domain.location.eventbus.LocationEventBus
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.location.model.LocationEvent
+import com.bitchat.domain.lora.model.LoRaBandwidth
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.domain.user.model.AppUser
@@ -428,11 +429,16 @@ class ChatRepo(
                 return@withContext false
             }
 
-            val config = loRaConfiguration(region, txPower)
+            val config = loRaConfiguration(
+                region,
+                txPower,
+                loraPreferences?.getBandwidth() ?: LoRaBandwidth.KHZ_125,
+            )
 
             println(
                 "📡 ChatRepo: Reconfiguring LoRa runtime (region=$region, txPower=$txPower, " +
-                    "freq=${config.frequency}, sf=${config.spreadingFactor}, sync=0x${config.syncWord.toString(16)})"
+                    "freq=${config.frequency}, bandwidth=${config.bandwidth}, sf=${config.spreadingFactor}, " +
+                    "sync=0x${config.syncWord.toString(16)})"
             )
             manager.reconfigure(config)
         }
