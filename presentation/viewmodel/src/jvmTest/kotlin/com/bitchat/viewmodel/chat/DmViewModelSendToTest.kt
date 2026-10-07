@@ -65,15 +65,18 @@ class DmViewModelSendToTest : BaseViewModelTest() {
     }
 
     @Test
-    fun `a line too long for one private message is refused at once, so the draft stays`() {
+    fun `a line too long to be sent even in parts is refused at once, so the draft stays`() {
         val viewModel = buildViewModel()
-        // One byte more than a private message carries: the repository would refuse it too, but
-        // only after the caller had cleared its editor.
-        val tooLong = "x".repeat(256)
+        // One byte more than eight private messages carry: the repository would refuse it too,
+        // but only after the caller had cleared its editor.
+        val tooLong = "x".repeat(8 * 255 + 1)
 
         for (channel in listOf(Channel.MeshDM("b0b"), Channel.NostrDM("nostr_c3c3c3c3c3c3c3c3", "npub1friend", null))) {
             assertEquals(false, viewModel.sendTo(channel, tooLong))
-            assertEquals("Not sent: a private message can be at most 255 bytes, this one is 256", viewModel.state.value.errorMessage)
+            assertEquals(
+                "Not sent: a private message is sent in at most 8 parts of 255 bytes, this one needs 9",
+                viewModel.state.value.errorMessage,
+            )
             viewModel.clearError()
         }
         instantExecutorRule.scheduler.runCurrent()
@@ -83,11 +86,11 @@ class DmViewModelSendToTest : BaseViewModelTest() {
     }
 
     @Test
-    fun `the longest private message is taken, measured in bytes after trimming`() {
+    fun `a line longer than one private message is taken whole, measured in bytes after trimming`() {
         val viewModel = buildViewModel()
         val bob = Channel.MeshDM("b0b", "bob")
-        // 85 characters of three bytes each: 255 bytes.
-        val longest = Char(0x20AC).toString().repeat(85)
+        // 680 characters of three bytes each: exactly eight messages. The repository cuts it.
+        val longest = Char(0x20AC).toString().repeat(680)
 
         assertEquals(true, viewModel.sendTo(bob, "  $longest  "))
         instantExecutorRule.scheduler.runCurrent()

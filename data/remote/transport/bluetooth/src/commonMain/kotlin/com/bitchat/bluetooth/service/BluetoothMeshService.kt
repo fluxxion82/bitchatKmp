@@ -30,18 +30,25 @@ import com.bitchat.domain.chat.model.BitchatFilePacket
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.BitchatMessageType
 import com.bitchat.domain.chat.model.DeliveryStatus
+import com.bitchat.domain.chat.model.nextSendTime
 import com.bitchat.domain.user.UNKNOWN_PEER_NICKNAME
 import com.bitchat.noise.model.NoisePayload
 import com.bitchat.noise.model.NoisePayloadType
 import com.bitchat.noise.model.PrivateMessagePacket
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.concurrent.Volatile
 import kotlin.time.Clock
 import kotlin.uuid.ExperimentalUuidApi
@@ -67,6 +74,9 @@ class BluetoothMeshService(
     private val failureClock: Clock = Clock.System,
     // How many owed handshakes of each kind are kept. A parameter so a test can fill it.
     maxOwedHandshakes: Int = HandshakeSupervisor.MAX_OWED_HANDSHAKES,
+    // How long a private message waits for the one before it to reach the links. A parameter so a
+    // test can make it short, or too long to wait out.
+    private val privateSendHandoverWaitMs: Long = PRIVATE_SEND_HANDOVER_WAIT_MS,
 ) : ConnectionEstablishedCallback {
     val myPeerID: String = cryptoSigning.getIdentityFingerprint()
 
@@ -93,6 +103,27 @@ class BluetoothMeshService(
     private val pendingAnnounces = mutableSetOf<String>()
     private val announceMutex = Mutex()
 
+    // Private messages are encrypted and dated one after another, in the order they were handed
+    // over, and those to one peer reach the links in that order: a long text is sent as several
+    // messages, and the other side either sorts them by the time on each (the upstream clients) or
+    // shows them as they arrive (this app). Only what this device's own user sends is ever queued
+    // here.
+    private val privateSends = Channel<PrivateSend>(Channel.UNLIMITED)
+
+    // For each peer, the handover of the last private message sent to it while that still runs.
+    // Touched only by the one coroutine that takes messages off privateSends.
+    private val handovers = mutableMapOf<String, Job>()
+
+    // A handover that another one waited for in vain. Read and written by the handovers themselves.
+    @Volatile
+    private var stuckHandover: Job? = null
+
+    // The time on the last encrypted packet sent, a private text or a private file alike: sender,
+    // time and type are how a receiver tells a repeated packet from a new one, so no two of them
+    // may carry the same time.
+    private val encryptedPacketTimes = SynchronizedObject()
+    private var lastEncryptedPacketAt = 0L
+
     // Deadline and retry budget for handshakes still in flight. Guarded by handshakeMutex
     // because the sweeper and initiateNoiseHandshake both run on serviceScope's dispatcher.
     private val handshakeSupervisor = HandshakeSupervisor()
@@ -116,6 +147,9 @@ class BluetoothMeshService(
         setupComponents()
         setupDelegates()
         wireConnectionService()
+        serviceScope.launch {
+            for (send in privateSends) deliverPrivateMessage(send)
+        }
 
         connectionService.setConnectionEstablishedCallback(this)
 
@@ -543,7 +577,7 @@ class BluetoothMeshService(
      * False when the message does not fit the private message encoding. That is decided here, on
      * the caller's thread, before anything is started for the message: nothing goes out in its
      * place (an empty payload would cost the session a nonce and the mesh a packet no receiver
-     * can read).
+     * can read). A message that fits is queued behind those handed over before it.
      */
     fun sendPrivateMessage(content: String, recipientPeerID: String, recipientNickname: String, messageID: String? = null): Boolean {
         noiseEncryption.markChosenByUser(recipientPeerID)
@@ -555,39 +589,79 @@ class BluetoothMeshService(
             )
             return false
         }
-        serviceScope.launch {
-            try {
-                if (!securityManager.hasEstablishedSession(recipientPeerID)) {
-                    logError(
-                        "BluetoothMeshService",
-                        "No established session with $recipientPeerID, cannot send (handshake should be initiated by ChatRepo)"
-                    )
-                    // Don't initiate handshake here - that's ChatRepo's responsibility
-                    // ChatRepo queues messages and initiates handshake once
-                    return@launch
-                }
-
-                val encryptedPayload = noiseEncryption.encrypt(recipientPeerID, messageData)
-                if (encryptedPayload == null) {
-                    logError("BluetoothMeshService", "Failed to encrypt message for $recipientPeerID")
-                    return@launch
-                }
-
-                val packet = BitchatPacket(
-                    type = MessageType.NOISE_ENCRYPTED.value,
-                    senderID = BitchatPacket.hexStringToByteArray(myPeerID),
-                    recipientID = BitchatPacket.hexStringToByteArray(recipientPeerID),
-                    timestamp = (Clock.System.now().toEpochMilliseconds()).toULong(),
-                    payload = encryptedPayload,
-                    ttl = 3u
-                )
-
-                broadcastPacket(packet)
-            } catch (e: Exception) {
-                logError("BluetoothMeshService", "Error sending private message: ${e.message}")
-            }
-        }
+        privateSends.trySend(PrivateSend(recipientPeerID, messageData))
         return true
+    }
+
+    private suspend fun deliverPrivateMessage(send: PrivateSend) {
+        try {
+            if (!securityManager.hasEstablishedSession(send.recipientPeerID)) {
+                logError(
+                    "BluetoothMeshService",
+                    "No established session with ${send.recipientPeerID}, cannot send (handshake should be initiated by ChatRepo)"
+                )
+                // Don't initiate handshake here - that's ChatRepo's responsibility
+                // ChatRepo queues messages and initiates handshake once
+                return
+            }
+
+            val encryptedPayload = noiseEncryption.encrypt(send.recipientPeerID, send.payload)
+            if (encryptedPayload == null) {
+                logError("BluetoothMeshService", "Failed to encrypt message for ${send.recipientPeerID}")
+                return
+            }
+
+            // Dated now that it is taken off the queue, not when it was put on: a receiver refuses
+            // a packet whose time is too far from its own. From here it leaves within the handover
+            // wait, however many are ahead of it.
+            val packet = BitchatPacket(
+                type = MessageType.NOISE_ENCRYPTED.value,
+                senderID = BitchatPacket.hexStringToByteArray(myPeerID),
+                recipientID = BitchatPacket.hexStringToByteArray(send.recipientPeerID),
+                timestamp = nextEncryptedPacketTime(),
+                payload = encryptedPayload,
+                ttl = 3u
+            )
+
+            // Behind the message sent to this peer before it, and behind nobody else's: the wait is
+            // the handover's own, so the next message, whoever it is for, is taken up at once.
+            handovers.values.removeAll { !it.isActive }
+            val before = handovers[send.recipientPeerID]
+            handovers[send.recipientPeerID] = serviceScope.launch {
+                if (before != null) awaitHandover(before)
+                sendPacket(packet)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logError("BluetoothMeshService", "Error sending private message: ${e.message}")
+        }
+    }
+
+    /**
+     * Waits until the private message sent to the same peer [before] this one is with the links:
+     * only between messages to one peer does the order matter. Not waited for without end, and the
+     * write is never cancelled: one platform writes to its links before it answers, and a link
+     * that does not answer must not hold up what comes behind it. While such a write still hangs,
+     * nothing waits again: that would add its delay to every message and put none of them in
+     * order.
+     */
+    private suspend fun awaitHandover(before: Job) {
+        if (stuckHandover?.isActive == true) return
+        if (withTimeoutOrNull(privateSendHandoverWaitMs) { before.join() } != null) return
+        // Several may give up at the same moment, each on its own predecessor: the one already
+        // known to hang stays the one that is watched.
+        if (stuckHandover?.isActive != true) stuckHandover = before
+    }
+
+    /** The time for the next encrypted packet: later than on the one before (see [nextSendTime]). */
+    private fun nextEncryptedPacketTime(): ULong = synchronized(encryptedPacketTimes) {
+        lastEncryptedPacketAt = nextSendTime(
+            lastEncryptedPacketAt,
+            Clock.System.now().toEpochMilliseconds(),
+            ENCRYPTED_PACKET_MAX_AHEAD_MS
+        )
+        lastEncryptedPacketAt.toULong()
     }
 
     /** Null when the message does not fit the encoding: id and content have one-byte lengths. */
@@ -1066,7 +1140,7 @@ class BluetoothMeshService(
                     type = MessageType.NOISE_ENCRYPTED.value,
                     senderID = BitchatPacket.hexStringToByteArray(myPeerID),
                     recipientID = BitchatPacket.hexStringToByteArray(recipientPeerID),
-                    timestamp = (Clock.System.now().toEpochMilliseconds()).toULong(),
+                    timestamp = nextEncryptedPacketTime(),
                     payload = encryptedPayload,
                     signature = null,
                     ttl = 3u
@@ -1121,7 +1195,17 @@ class BluetoothMeshService(
         return hash.joinToString("") { it.toHexString() }
     }
 
+    private class PrivateSend(val recipientPeerID: String, val payload: ByteArray)
+
     companion object {
+        /** How long a private message waits for the one before it, to the same peer, to reach the links. */
+        const val PRIVATE_SEND_HANDOVER_WAIT_MS = 2_000L
+
+        /**
+         * How far the time on an encrypted packet may run ahead of the clock (see [nextSendTime]).
+         * Upstream drops a packet dated more than two minutes off its own clock.
+         */
+        const val ENCRYPTED_PACKET_MAX_AHEAD_MS = 10_000L
     }
 }
 

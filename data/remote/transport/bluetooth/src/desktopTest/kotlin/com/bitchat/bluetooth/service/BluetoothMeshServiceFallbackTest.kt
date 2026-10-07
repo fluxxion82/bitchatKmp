@@ -13,6 +13,8 @@ import com.bitchat.domain.chat.model.BitchatFilePacket
 import com.bitchat.noise.model.NoisePayload
 import com.bitchat.noise.model.NoisePayloadType
 import com.bitchat.noise.model.PrivateMessagePacket
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -32,6 +34,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 class BluetoothMeshServiceFallbackTest {
 
@@ -184,6 +187,157 @@ class BluetoothMeshServiceFallbackTest {
             NoisePayload(NoisePayloadType.PRIVATE_MESSAGE, PrivateMessagePacket("longest", longest).encode()!!).encode(),
             assertNotNull(fixture.remoteNoise.decrypt(fixture.service.myPeerID, encrypted.payload)).plaintext
         )
+    }
+
+    @Test
+    fun privateMessagesLeaveInTheOrderTheyWereHandedOverEachWithALaterTime() = runTest {
+        val fixture = FallbackServiceFixture()
+        fixture.establish()
+        // A long text goes out as several messages, handed over one right after the other.
+        val texts = List(60) { "piece $it" }
+
+        texts.forEachIndexed { index, text ->
+            assertTrue(fixture.service.sendPrivateMessage(text, fixture.remoteID, "remote", "id-$index"))
+        }
+        val packets = List(texts.size) { fixture.connection.awaitEncryptedFrom(fixture.service.myPeerID) }
+
+        // In the order they reached the links: encrypted one after another, each dated later than
+        // the one before (the upstream clients sort by that time), each the message it should be.
+        assertEquals(List(texts.size) { it.toLong() }, packets.map { nonceOf(it) })
+        assertTrue(packets.zipWithNext().all { (earlier, later) -> earlier.timestamp < later.timestamp })
+        assertEquals(
+            texts.mapIndexed { index, text -> "id-$index" to text },
+            packets.map { packet ->
+                val plaintext = assertNotNull(fixture.remoteNoise.decrypt(fixture.service.myPeerID, packet.payload)).plaintext
+                val message = assertNotNull(PrivateMessagePacket.decode(assertNotNull(NoisePayload.decode(plaintext)).data))
+                message.messageID to message.content
+            }
+        )
+    }
+
+    @Test
+    fun aWriteThatHangsDoesNotHoldUpTheMessagesBehindItAndIsNotCancelled() = runTest {
+        val fixture = FallbackServiceFixture(privateSendHandoverWaitMs = 300)
+        fixture.establish()
+        val release = CompletableDeferred<Unit>()
+        fixture.connection.holdNextBroadcast = release
+
+        fixture.service.sendPrivateMessage("stuck", fixture.remoteID, "remote", "first")
+        fixture.service.sendPrivateMessage("behind it", fixture.remoteID, "remote", "second")
+
+        // The second is not waited for longer than the handover wait; the first is still held.
+        val second = fixture.connection.awaitEncryptedFrom(fixture.service.myPeerID)
+        assertEquals(1L, nonceOf(second))
+
+        // And the held write was left alone: once the link lets go, it goes out.
+        release.complete(Unit)
+        assertEquals(0L, nonceOf(fixture.connection.awaitEncryptedFrom(fixture.service.myPeerID)))
+    }
+
+    @Test
+    fun aLinkThatHangsCostsMessagesSentTogetherOneWaitBetweenThem() = runTest {
+        val fixture = FallbackServiceFixture(privateSendHandoverWaitMs = 1_000)
+        fixture.establish()
+        // A link that answers no write at all: every packet handed to it hangs, not just one.
+        fixture.connection.holdEveryBroadcast = CompletableDeferred()
+        val before = fixture.connection.broadcastAttempts
+
+        val started = TimeSource.Monotonic.markNow()
+        repeat(5) { index -> fixture.service.sendPrivateMessage("piece $index", fixture.remoteID, "remote", "id-$index") }
+        eventually("all five to be handed to the links") { fixture.connection.broadcastAttempts == before + 5 }
+
+        // One wait of a second, which they share. A wait for each would be four seconds.
+        assertTrue(started.elapsedNow() < 3_500.milliseconds, "took ${started.elapsedNow()}")
+    }
+
+    @Test
+    fun whileAWriteHangsNothingWaitsBehindItAgain() = runTest {
+        val fixture = FallbackServiceFixture(privateSendHandoverWaitMs = 2_000)
+        fixture.establish()
+        fixture.connection.holdEveryBroadcast = CompletableDeferred()
+        val before = fixture.connection.broadcastAttempts
+        fixture.service.sendPrivateMessage("stuck", fixture.remoteID, "remote", "first")
+        fixture.service.sendPrivateMessage("waits once", fixture.remoteID, "remote", "second")
+        eventually("the second to stop waiting for the first") { fixture.connection.broadcastAttempts == before + 2 }
+
+        // The write that was waited for in vain still hangs: a message sent now does not wait.
+        val started = TimeSource.Monotonic.markNow()
+        fixture.service.sendPrivateMessage("does not wait", fixture.remoteID, "remote", "third")
+        eventually("the third to be handed to the links") { fixture.connection.broadcastAttempts == before + 3 }
+
+        assertTrue(started.elapsedNow() < 1_000.milliseconds, "took ${started.elapsedNow()}")
+    }
+
+    @Test
+    fun aMessageIsNotHeldUpForAHandoverToSomebodyElse() = runTest {
+        // A wait nobody could sit out: were the second peer's message held for the first peer's
+        // write, or behind the message that does wait for it, it would not arrive in this test's
+        // lifetime.
+        val fixture = FallbackServiceFixture(privateSendHandoverWaitMs = 600_000)
+        fixture.establish()
+        val other = FallbackRemote("3")
+        fixture.establish(other)
+        val release = CompletableDeferred<Unit>()
+        fixture.connection.holdOnlyFor = fixture.remoteID
+        fixture.connection.holdNextBroadcast = release
+
+        fixture.service.sendPrivateMessage("stuck", fixture.remoteID, "remote", "first")
+        fixture.service.sendPrivateMessage("waits behind it", fixture.remoteID, "remote", "second")
+        fixture.service.sendPrivateMessage("for someone else", other.id, "other", "third")
+
+        val arrived = fixture.connection.awaitEncryptedFrom(fixture.service.myPeerID)
+        assertContentEquals(other.id.hexToBytes(), arrived.recipientID)
+
+        release.complete(Unit)
+        val toFirstPeer = List(2) { fixture.connection.awaitEncryptedFrom(fixture.service.myPeerID) }
+        assertTrue(toFirstPeer.all { it.recipientID.contentEquals(fixture.remoteID.hexToBytes()) })
+        assertEquals(listOf(0L, 1L), toFirstPeer.map { nonceOf(it) })
+    }
+
+    @Test
+    fun messagesToOnePeerKeepTheirOrderWhenOneForAnotherPeerComesBetweenThem() = runTest {
+        // A wait nobody could sit out, so only the order the service keeps decides what follows.
+        val fixture = FallbackServiceFixture(privateSendHandoverWaitMs = 600_000)
+        fixture.establish()
+        val other = FallbackRemote("3")
+        fixture.establish(other)
+        // The first message to the first peer is slow to reach its link.
+        val release = CompletableDeferred<Unit>()
+        fixture.connection.holdOnlyFor = fixture.remoteID
+        fixture.connection.holdOnlyNonce = 0
+        fixture.connection.holdNextBroadcast = release
+
+        fixture.service.sendPrivateMessage("first", fixture.remoteID, "remote", "a1")
+        fixture.service.sendPrivateMessage("for someone else", other.id, "other", "b1")
+        fixture.service.sendPrivateMessage("second", fixture.remoteID, "remote", "a2")
+
+        // The other peer's message is held up by neither.
+        assertContentEquals(other.id.hexToBytes(), fixture.connection.awaitEncryptedFrom(fixture.service.myPeerID).recipientID)
+        // Time for the second message to overtake the first, were it not waiting behind it.
+        withContext(Dispatchers.Default) { delay(300) }
+        release.complete(Unit)
+
+        val toFirstPeer = List(2) { fixture.connection.awaitEncryptedFrom(fixture.service.myPeerID) }
+        assertTrue(toFirstPeer.all { it.recipientID.contentEquals(fixture.remoteID.hexToBytes()) })
+        assertEquals(listOf(0L, 1L), toFirstPeer.map { nonceOf(it) })
+    }
+
+    @Test
+    fun aPrivateFileNeverCarriesTheTimeOfAPrivateText() = runTest {
+        // Sender, time and type are how a receiver tells a repeated packet from a new one, and a
+        // text and a file are the same type on the air. Texts sent in a burst are dated ahead of
+        // the clock, one millisecond apart: a file dated by the clock alone would land on one.
+        val fixture = FallbackServiceFixture()
+        fixture.establish()
+        val file = BitchatFilePacket(fileName = "note.txt", fileSize = 3, mimeType = "text/plain", content = byteArrayOf(1, 2, 3))
+
+        repeat(40) { round ->
+            repeat(5) { index -> fixture.service.sendPrivateMessage("piece $round/$index", fixture.remoteID, "remote", "id-$round-$index") }
+            fixture.service.sendFilePrivate(fixture.remoteID, file)
+        }
+        val times = List(40 * 6) { fixture.connection.awaitEncryptedFrom(fixture.service.myPeerID).timestamp }
+
+        assertEquals(times.size, times.distinct().size)
     }
 
     @Test
@@ -390,7 +544,17 @@ private class SettableClock : Clock {
     fun advanceBy(deltaMillis: Long) { millis += deltaMillis }
 }
 
-private class FallbackServiceFixture(maxOwedHandshakes: Int = HandshakeSupervisor.MAX_OWED_HANDSHAKES) {
+/** Another peer than the fixture's own remote one, with a session of its own to establish. */
+private class FallbackRemote(seedDigit: String) {
+    val crypto = CryptoSigningFacade(seedDigit.repeat(64))
+    val id: String = crypto.getIdentityFingerprint()
+    val noise = NoiseEncryptionFacade(id)
+}
+
+private class FallbackServiceFixture(
+    maxOwedHandshakes: Int = HandshakeSupervisor.MAX_OWED_HANDSHAKES,
+    privateSendHandoverWaitMs: Long = BluetoothMeshService.PRIVATE_SEND_HANDOVER_WAIT_MS,
+) {
     val connection = FallbackRecordingConnectionService()
     private val localCrypto: CryptoSigningFacade
     val remoteCrypto: CryptoSigningFacade
@@ -419,7 +583,8 @@ private class FallbackServiceFixture(maxOwedHandshakes: Int = HandshakeSuperviso
             advertisingService = FallbackNoOpAdvertisingService,
             cryptoSigning = localCrypto,
             failureClock = failureClock,
-            maxOwedHandshakes = maxOwedHandshakes
+            maxOwedHandshakes = maxOwedHandshakes,
+            privateSendHandoverWaitMs = privateSendHandoverWaitMs
         )
         service.delegate = delegate
         remoteID = remoteCrypto.getIdentityFingerprint()
@@ -435,6 +600,18 @@ private class FallbackServiceFixture(maxOwedHandshakes: Int = HandshakeSuperviso
         ))
         deliver(MessageType.NOISE_HANDSHAKE, message3)
         eventually("initial session") { service.hasEstablishedSession(remoteID) }
+    }
+
+    suspend fun establish(other: FallbackRemote) {
+        val address = "address-of-${other.id}"
+        val message1 = other.noise.initiateHandshake(service.myPeerID, other.crypto.getNoisePrivateKey(), other.crypto.getNoisePublicKey())
+        deliver(MessageType.NOISE_HANDSHAKE, message1, address = address, sender = other.id)
+        val message2 = connection.awaitHandshakeFrom(service.myPeerID)
+        val message3 = response(other.noise.processHandshake(
+            service.myPeerID, message2.payload, other.crypto.getNoisePrivateKey(), other.crypto.getNoisePublicKey()
+        ))
+        deliver(MessageType.NOISE_HANDSHAKE, message3, address = address, sender = other.id)
+        eventually("session with the other peer") { service.hasEstablishedSession(other.id) }
     }
 
     suspend fun announce(address: String = "remote-address") {
@@ -459,15 +636,40 @@ private class FallbackServiceFixture(maxOwedHandshakes: Int = HandshakeSuperviso
 private class FallbackRecordingConnectionService : BluetoothConnectionService {
     private val outgoing = Channel<ByteArray>(Channel.UNLIMITED)
     var deliverPackets = true
-    @Volatile var broadcastAttempts = 0
+    // Counted by handovers that run side by side.
+    private val attempts = AtomicInteger()
+    val broadcastAttempts: Int get() = attempts.get()
     override suspend fun connectToDevice(deviceAddress: String) = Unit
     override suspend fun confirmDevice() = Unit
     override suspend fun isDeviceConnecting(deviceAddress: String) = false
     override suspend fun disconnectDeviceByAddress(deviceAddress: String) = Unit
     override suspend fun clearConnections() = Unit
+    /**
+     * When set, the next encrypted packet (for [holdOnlyFor] and sent under [holdOnlyNonce], when
+     * those are set too) waits for it before it is written: a link that does not answer.
+     */
+    @Volatile var holdNextBroadcast: CompletableDeferred<Unit>? = null
+    @Volatile var holdOnlyFor: String? = null
+    @Volatile var holdOnlyNonce: Long? = null
+
+    /** While set, every encrypted packet waits for it: a link that answers no write at all. */
+    @Volatile var holdEveryBroadcast: CompletableDeferred<Unit>? = null
     override suspend fun broadcastPacket(packetData: ByteArray): Boolean {
-        broadcastAttempts += 1
+        attempts.incrementAndGet()
         if (!deliverPackets) return false
+        val packet = BinaryProtocol.decode(packetData)
+        val recipient = holdOnlyFor
+        val nonce = holdOnlyNonce
+        if (packet?.type == MessageType.NOISE_ENCRYPTED.value &&
+            (recipient == null || packet.recipientID.contentEquals(recipient.hexToBytes())) &&
+            (nonce == null || nonceOf(packet) == nonce)
+        ) {
+            holdNextBroadcast?.let { hold ->
+                holdNextBroadcast = null
+                hold.await()
+            }
+            holdEveryBroadcast?.await()
+        }
         outgoing.send(packetData)
         return true
     }
@@ -578,3 +780,7 @@ private fun response(result: NoiseEncryptionFacade.HandshakeResult): ByteArray =
     NoiseEncryptionFacade.HandshakeResult.Ignored, NoiseEncryptionFacade.HandshakeResult.RejectedIdentity -> error("expected response, got $result")
 }
 private fun String.hexToBytes() = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+/** The Noise nonce an encrypted packet was sent under: the four bytes before its ciphertext. */
+private fun nonceOf(packet: BitchatPacket): Long =
+    packet.payload.take(4).fold(0L) { nonce, byte -> (nonce shl 8) or (byte.toLong() and 0xFF) }

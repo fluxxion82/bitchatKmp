@@ -3,6 +3,7 @@ package com.bitchat.nostr
 import com.bitchat.api.dto.chat.ReadReceipt
 import com.bitchat.noise.model.NoisePayloadType
 import com.bitchat.nostr.model.NostrIdentity
+import com.bitchat.nostr.util.RumorClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -17,6 +18,7 @@ class NostrTransport(
     val nostrRelay: NostrRelay,
 ) {
     private val transportScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val rumorClock = RumorClock()
 
     fun sendPrivateMessage(
         content: String,
@@ -25,6 +27,8 @@ class NostrTransport(
         messageID: String,
         recipientNickname: String = ""
     ) {
+        // Taken here, in the order the messages are handed over: the sends below run side by side.
+        val sentAt = rumorClock.next()
         transportScope.launch {
             try {
                 if (recipientNostrPubkey.isEmpty() || recipientPeerID.isEmpty()) {
@@ -68,7 +72,8 @@ class NostrTransport(
                 val giftWraps = nostrClient.createPrivateMessage(
                     content = embedded,
                     recipientPubkey = recipientHex,
-                    senderIdentity = senderIdentity
+                    senderIdentity = senderIdentity,
+                    createdAt = sentAt
                 )
 
                 giftWraps.forEach { event ->
@@ -351,6 +356,7 @@ class NostrTransport(
             return
         }
 
+        val sentAt = rumorClock.next()
         transportScope.launch {
             try {
                 // Log.d(TAG, "GeoDM: send PM -> recip=${toRecipientHex.take(8)}... mid=${messageID.take(8)}... from=${fromIdentity.publicKeyHex.take(8)}... geohash=$sourceGeohash")
@@ -368,7 +374,8 @@ class NostrTransport(
                 val giftWraps = nostrClient.createPrivateMessage(
                     content = embedded,
                     recipientPubkey = toRecipientHex,
-                    senderIdentity = fromIdentity
+                    senderIdentity = fromIdentity,
+                    createdAt = sentAt
                 )
 
                 giftWraps.forEach { event ->

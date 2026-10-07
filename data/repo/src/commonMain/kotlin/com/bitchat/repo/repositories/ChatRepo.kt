@@ -153,7 +153,11 @@ class ChatRepo(
     private val receivedFileBudget: ReceivedFileBudget = ReceivedFileBudget(),
     private val messageLimits: MessageLimits = MessageLimits(),
 ) : ChatRepository, BluetoothMeshDelegate {
+    // Private texts waiting for a session, per peer, oldest first. Queueing, sending what is
+    // queued and the decision to send a text without queueing it all happen under outboxLock: a
+    // text never goes out ahead of one that was written before it.
     private val outbox = mutableMapOf<String, MutableList<Triple<String, String, String>>>()
+    private val outboxLock = SynchronizedObject()
 
     private val channelKeys = mutableMapOf<String, ByteArray>()
 
@@ -1511,6 +1515,9 @@ class ChatRepo(
      * [route] is the DM this line was sent in, when the caller knows it (sendMessage does). Without
      * it the active chat is read here, which may already be another conversation by the time this
      * runs: a line typed in one DM must not go out through another.
+     *
+     * A text longer than one private message carries goes out as several, in order, each shown
+     * and sent as a message of its own: that is what the other side receives.
      */
     private suspend fun sendPrivate(
         content: String,
@@ -1524,7 +1531,26 @@ class ChatRepo(
             is AppUser.ActiveAnonymous -> user.name
             AppUser.Anonymous -> "anon"
         }
+        // Read once: every piece of one text takes the same way out.
+        val currentChannel = route ?: userPreferences.getUserState()
+            ?.let { it as? UserState.Active }
+            ?.activeState?.let { it as? ActiveState.Chat }
+            ?.channel
 
+        val pieces = if (isSentAsFile(messageType)) listOf(content) else PrivateMessageText.split(content)
+        for (piece in pieces) {
+            sendPrivatePiece(piece, toPeerID, recipientNickname, messageType, senderName, currentChannel)
+        }
+    }
+
+    private suspend fun sendPrivatePiece(
+        content: String,
+        toPeerID: String,
+        recipientNickname: String,
+        messageType: BitchatMessageType,
+        senderName: String,
+        currentChannel: Channel?,
+    ) {
         val messageId = Uuid.random().toString().uppercase()
         val localMessage = BitchatMessage(
             id = messageId,
@@ -1542,11 +1568,6 @@ class ChatRepo(
         val meshNameClaim = meshNameHandedBack(recipientNickname, toPeerID) ?: claimedMeshName(toPeerID)
         synchronized(privateChatsLock) { writtenPrivateChats.add(toPeerID) }
         addPrivateMessage(toPeerID, localMessage, markUnread = false, sendReadReceipt = false, meshNameClaim = meshNameClaim)
-
-        val currentChannel = route ?: userPreferences.getUserState()
-            ?.let { it as? UserState.Active }
-            ?.activeState?.let { it as? ActiveState.Chat }
-            ?.channel
 
         when (currentChannel) {
             is Channel.MeshDM -> {
@@ -1609,15 +1630,30 @@ class ChatRepo(
                         }
 
                         else -> {
-                            mesh.sendPrivateMessage(content, toPeerID, recipientNickname, messageId)
+                            // Behind what is still queued for this peer, never past it: a session
+                            // that came up a moment ago may not have had its queue sent yet.
+                            val waitsInQueue = synchronized(outboxLock) {
+                                val queued = outbox[toPeerID]
+                                if (queued.isNullOrEmpty()) {
+                                    mesh.sendPrivateMessage(content, toPeerID, recipientNickname, messageId)
+                                    false
+                                } else {
+                                    queued.add(Triple(content, recipientNickname, messageId))
+                                    true
+                                }
+                            }
+                            if (waitsInQueue) flushOutboxFor(toPeerID)
                         }
                     }
                 } else {
                     // Queue and initiate handshake
                     println("📦 Queuing to outbox, initiating handshake")
-                    val q = outbox.getOrPut(toPeerID) { mutableListOf() }
-                    q.add(Triple(content, recipientNickname, messageId))
-                    println("📦 Outbox size for $toPeerID: ${q.size}")
+                    val queuedNow = synchronized(outboxLock) {
+                        val q = outbox.getOrPut(toPeerID) { mutableListOf() }
+                        q.add(Triple(content, recipientNickname, messageId))
+                        q.size
+                    }
+                    println("📦 Outbox size for $toPeerID: $queuedNow")
                     // This call is safe while a handshake is in flight (the service sends nothing new then), and
                     // marks the peer as chosen by the user by taking the in-flight handshake over as theirs.
                     mesh.initiateNoiseHandshake(toPeerID)
@@ -2070,14 +2106,18 @@ class ChatRepo(
     }
 
     /**
-     * A private text that the private message encoding cannot carry is refused here, before it is
-     * shown, queued or handed to a transport: no transport can send it, and none reports that.
-     * An image or a voice note carries a path as content and travels as a file.
+     * A private text too long to be sent, even as several messages, is refused here, before any of
+     * it is shown, queued or handed to a transport: no transport can send it, and none reports
+     * that.
      */
     private fun requireSendablePrivately(content: String, messageType: BitchatMessageType) {
-        if (messageType == BitchatMessageType.Image || messageType == BitchatMessageType.Audio) return
+        if (isSentAsFile(messageType)) return
         PrivateMessageText.refusal(content)?.let { throw IllegalArgumentException(it) }
     }
+
+    /** An image or a voice note carries a path as content and travels as a file, not as that text. */
+    private fun isSentAsFile(messageType: BitchatMessageType): Boolean =
+        messageType == BitchatMessageType.Image || messageType == BitchatMessageType.Audio
 
     /**
      * [openedAs] is the name the user opened a mesh chat under (its channel's), when there is one: a chat
@@ -2136,9 +2176,13 @@ class ChatRepo(
         return null
     }
 
-    private fun flushOutboxFor(peerID: String) {
-        val queued = outbox[peerID] ?: return
-        if (queued.isEmpty()) return
+    /**
+     * Sends what is queued for [peerID], oldest first, and stops at the first text that cannot go
+     * yet: nothing queued behind it may overtake it.
+     */
+    private fun flushOutboxFor(peerID: String): Unit = synchronized(outboxLock) {
+        val queued = outbox[peerID] ?: return@synchronized
+        if (queued.isEmpty()) return@synchronized
 
         println("🚀 Flushing outbox for $peerID: ${queued.size} messages")
 
@@ -2155,26 +2199,24 @@ class ChatRepo(
                     continue
                 }
             }
-            val canNostr = canSendViaNostr(peerID)
+            val recipientNpub = if (!hasMesh && canSendViaNostr(peerID)) resolveNostrPublicKey(peerID) else null
             if (hasMesh) {
                 println("   → Sending queued message via mesh: $messageID")
                 mesh.sendPrivateMessage(content, peerID, nickname, messageID)
                 iterator.remove()
-            } else if (canNostr) {
-                val recipientNpub = resolveNostrPublicKey(peerID)
-                val recipientPeerIDForEmbed = findPeerIDForNostrPubkey(recipientNpub ?: "") ?: peerID
-
-                if (recipientNpub != null) {
-                    println("   → Sending queued message via Nostr: $messageID")
-                    nostr.sendPrivateMessage(
-                        content = content,
-                        recipientNostrPubkey = recipientNpub,
-                        recipientPeerID = recipientPeerIDForEmbed,
-                        messageID = messageID,
-                        recipientNickname = nickname
-                    )
-                    iterator.remove()
-                }
+            } else if (recipientNpub != null) {
+                val recipientPeerIDForEmbed = findPeerIDForNostrPubkey(recipientNpub) ?: peerID
+                println("   → Sending queued message via Nostr: $messageID")
+                nostr.sendPrivateMessage(
+                    content = content,
+                    recipientNostrPubkey = recipientNpub,
+                    recipientPeerID = recipientPeerIDForEmbed,
+                    messageID = messageID,
+                    recipientNickname = nickname
+                )
+                iterator.remove()
+            } else {
+                break
             }
         }
         if (queued.isEmpty()) {
@@ -2184,7 +2226,7 @@ class ChatRepo(
     }
 
     suspend fun flushAllOutbox() = withContext(coroutinesContextFacade.io) {
-        outbox.keys.toList().forEach { flushOutboxFor(it) }
+        synchronized(outboxLock) { outbox.keys.toList() }.forEach { flushOutboxFor(it) }
     }
 
     private fun canSendViaNostr(peerID: String): Boolean {
@@ -3157,7 +3199,7 @@ class ChatRepo(
     }
 
     override suspend fun clearData() = withContext(coroutinesContextFacade.io) {
-        outbox.clear()
+        synchronized(outboxLock) { outbox.clear() }
         channelKeys.clear()
         geohashMessagesFlows.clear()
         activeGeohashSubscriptions.clear()

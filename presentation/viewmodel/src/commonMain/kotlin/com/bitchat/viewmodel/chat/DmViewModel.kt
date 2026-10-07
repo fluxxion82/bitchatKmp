@@ -72,10 +72,10 @@ class DmViewModel(
      * The destination is never looked up later (the active chat can change in between, and a DM
      * line must not go to whatever chat is active by then), so this is the only way to send.
      * Anything but a mesh or Nostr DM (null, the mesh, a location or named channel, any Meshtastic
-     * channel) is refused at once with an error and nothing is sent, and so is a line too long for
-     * a private message: the repository refuses that one too, but only once the caller has cleared
-     * its editor. Returns whether the line was taken, so the caller keeps its draft when it was
-     * not. Leaves [DmState.messageInput] alone.
+     * channel) is refused at once with an error and nothing is sent, and so is a line too long to be
+     * sent even as several private messages: the repository refuses that one too, but only once
+     * the caller has cleared its editor. Returns whether the line was taken, so the caller keeps
+     * its draft when it was not. Leaves [DmState.messageInput] alone.
      */
     fun sendTo(channel: Channel?, text: String): Boolean {
         val content = text.trim()

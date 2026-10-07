@@ -48,14 +48,16 @@ class NostrClient(
     fun createPrivateMessage(
         content: String,
         recipientPubkey: String,
-        senderIdentity: NostrIdentity
+        senderIdentity: NostrIdentity,
+        // The time the other side reads as when the message was sent, and sorts by.
+        createdAt: Int = Clock.System.now().epochSeconds.toInt(),
     ): List<NostrEvent> {
         // // Log.d(TAG, "Creating private message for recipient: ${recipientPubkey.take(16)}...")
 
         // 1. Create the rumor (unsigned kind 14) with p-tag
         val rumorBase = NostrEvent(
             pubkey = senderIdentity.publicKeyHex,
-            createdAt = (Clock.System.now().epochSeconds).toInt(),
+            createdAt = createdAt,
             kind = NostrKind.DIRECT_MESSAGE,
             tags = listOf(listOf("p", recipientPubkey)),
             content = content

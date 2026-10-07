@@ -29,6 +29,15 @@ class PrivateMessageSenderTest {
     private val sender = NostrIdentity.generate()
 
     @Test
+    fun `a message carries the time it is given, which is what the other side sorts by`() {
+        val wrap = client.createPrivateMessage("bitchat1:hello", recipient.publicKeyHex, sender, createdAt = 1_791_000_123).single()
+
+        val (_, _, timestamp) = assertNotNull(client.decryptPrivateMessage(wrap, recipient))
+
+        assertEquals(1_791_000_123, timestamp)
+    }
+
+    @Test
     fun `a genuine message round-trips and names the seal signer as sender`() {
         val wrap = client.createPrivateMessage("bitchat1:hello", recipient.publicKeyHex, sender).single()
 
