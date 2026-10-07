@@ -230,6 +230,18 @@ class ChatRepoPrivateMessageSizeTest {
     }
 
     @Test
+    fun aConversationThroughARelayIsNotCutForTheRadioWhateverTheMeshSaysOfItsPeer() = withRepo { repo, mesh, nostr ->
+        // The mesh service would cut a text for this peer id to what one LoRa frame carries.
+        every { mesh.privateTextLimitFor(any()) } returns 141
+        val longest = Char(0x20AC).toString().repeat(85)
+
+        repo.sendMessage(longest, Channel.NostrDM(NOSTR_CHAT, "npub1friend", null), "me", BitchatMessageType.Message)
+
+        assertEquals(listOf(longest), repo.getPrivateChats().getValue(NOSTR_CHAT).map { it.content })
+        verify(exactly = 1) { nostr.sendPrivateMessage(longest, "npub1friend", NOSTR_CHAT, any(), any()) }
+    }
+
+    @Test
     fun everyPieceIsOneTheEncodingCarries() {
         // The rule lives in the domain and the encoding in the transports: neither may move alone.
         val id = "0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0"
@@ -288,6 +300,11 @@ class ChatRepoPrivateMessageSizeTest {
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val mesh = mockk<BluetoothMeshService>(relaxed = true)
+        // A relaxed mock would answer 0: these peers are reached over Bluetooth, where a message carries 255 bytes.
+        every { mesh.privateTextLimitFor(any()) } returns PrivateMessageText.MAX_BYTES
+        every { mesh.sendFilePrivate(any(), any()) } returns true
+        // And false, which the real service says only of a message it cannot take.
+        every { mesh.sendPrivateMessage(any(), any(), any(), any()) } returns true
         val nostr = mockk<NostrTransport>(relaxed = true)
         try {
             val repo = chatRepo(scope, dispatcher, mutableListOf(), mesh = mesh, nostr = nostr, userPreferences = userPreferences)

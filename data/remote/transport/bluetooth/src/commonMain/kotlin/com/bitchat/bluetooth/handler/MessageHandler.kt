@@ -112,13 +112,13 @@ class MessageHandler(
         )) {
             is NoiseEncryptionFacade.HandshakeResult.Response -> {
                 println("🔐 NOISE_HANDSHAKE: Generated response packet (${result.message.size} bytes)")
-                delegate?.onHandshakeResponse(peerID, result.message)
+                delegate?.onHandshakeResponse(peerID, result.message, link, final = false)
             }
 
             is NoiseEncryptionFacade.HandshakeResult.Established -> {
                 result.response?.let { responsePacket ->
                     println("🔐 NOISE_HANDSHAKE: Generated response packet (${responsePacket.size} bytes)")
-                    delegate?.onHandshakeResponse(peerID, responsePacket)
+                    delegate?.onHandshakeResponse(peerID, responsePacket, link, final = true)
                 }
                 println("✅ NOISE_HANDSHAKE: Session established with $peerID")
                 delegate?.onSessionEstablished(peerID)
@@ -380,7 +380,7 @@ interface MessageHandlerDelegate {
     fun onAuthenticatedDelivered(peerID: String, messageId: String)
     fun onAuthenticatedRead(peerID: String, messageId: String)
     fun onHandshakeReceived(peerID: String)
-    fun onHandshakeResponse(peerID: String, responsePacket: ByteArray)
+    fun onHandshakeResponse(peerID: String, responsePacket: ByteArray, link: String, final: Boolean)
     fun onSessionEstablished(peerID: String)
 
     /**

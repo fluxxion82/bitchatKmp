@@ -1,6 +1,9 @@
 package com.bitchat.lora
 
 import com.bitchat.lora.radio.LoRaConfig
+import com.bitchat.transport.MeshRadioLink
+import com.bitchat.transport.RadioPurpose
+import com.bitchat.transport.RadioSendResult
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -64,6 +67,11 @@ class LoRaProtocolManager(
     override val isReady get() = readySession && active.isReady
     override val supportsRadioConfiguration get() = active.supportsRadioConfiguration
     override val peerIdsAreMeshIds get() = active.peerIdsAreMeshIds
+    override val meshPacketLink: MeshRadioLink = object : MeshRadioLink {
+        override fun hears(peerID: String): Boolean = active.meshPacketLink?.hears(peerID) == true
+        override suspend fun send(packet: ByteArray, peerID: String, purpose: RadioPurpose): RadioSendResult =
+            active.meshPacketLink?.send(packet, peerID, purpose) ?: RadioSendResult.FAILED
+    }
 
     /** Initialization only, before any start, stop or switch request. */
     fun setActiveType(type: LoRaProtocolType) {

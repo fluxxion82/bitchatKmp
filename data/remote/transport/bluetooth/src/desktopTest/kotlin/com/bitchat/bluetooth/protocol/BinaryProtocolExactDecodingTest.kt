@@ -4,8 +4,29 @@ import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertEquals
+import kotlin.test.assertContentEquals
 
 class BinaryProtocolExactDecodingTest {
+    @Test
+    fun exactEncodingRoundTripsAndIsAdmittedFromTheRadio() {
+        val packet = packet(payload = byteArrayOf(1, 2, 3))
+        val encoded = requireNotNull(BinaryProtocol.encodeExact(packet))
+
+        val decoded = requireNotNull(BinaryProtocol.decodeExact(encoded))
+        assertEquals(packet.version, decoded.version)
+        assertEquals(packet.type, decoded.type)
+        assertEquals(packet.ttl, decoded.ttl)
+        assertEquals(packet.timestamp, decoded.timestamp)
+        assertContentEquals(packet.senderID, decoded.senderID)
+        assertContentEquals(requireNotNull(packet.recipientID), requireNotNull(decoded.recipientID))
+        assertContentEquals(packet.payload, decoded.payload)
+        assertTrue(encoded.size <= MAX_LORA_PACKET_BYTES)
+        assertTrue(admitFromLoRa(encoded, "1112131415161718") is LoRaIngressResult.Accepted)
+        assertNull(BinaryProtocol.encodeExact(packet.copy(version = 2u)))
+        assertNull(BinaryProtocol.encodeExact(packet.copy(signature = ByteArray(64))))
+        assertNull(BinaryProtocol.encodeExact(packet.copy(payload = ByteArray(0))))
+    }
     @Test
     fun onlyOneUnpaddedUnsignedUncompressedPacketDecodesExactly() {
         val packet = packet(payload = byteArrayOf(1, 2, 3))

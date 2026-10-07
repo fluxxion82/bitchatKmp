@@ -13,14 +13,23 @@ import com.bitchat.bluetooth.protocol.MessageType
 import com.bitchat.bluetooth.protocol.MessagePadding
 import com.bitchat.bluetooth.protocol.SpecialRecipients
 import com.bitchat.domain.chat.model.BitchatFilePacket
+import com.bitchat.domain.chat.model.PrivateMessageText
 import com.bitchat.noise.model.NoisePayload
 import com.bitchat.noise.model.NoisePayloadType
 import com.bitchat.noise.model.PrivateMessagePacket
+import com.bitchat.transport.MeshRadioLink
+import com.bitchat.transport.RadioPurpose
+import com.bitchat.transport.RadioSendResult
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -35,8 +44,10 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
 class BluetoothMeshServiceLoRaIngressTest {
@@ -115,6 +126,787 @@ class BluetoothMeshServiceLoRaIngressTest {
         fixture.service.onLoRaPacketReceived(exactPacket(fixture.service.myPeerID, fixture.service.myPeerID))
 
         fixture.service.assertNoLoRaIngressState(fixture.service.myPeerID)
+    }
+}
+
+/**
+ * Two devices that hear each other on the radio and have no Bluetooth link, unless a test gives them
+ * one: whatever one hands to its radio link arrives at the other's radio ingress.
+ */
+class BluetoothMeshServiceRadioLinkTest {
+    private val messageId = "0".repeat(36)
+
+    @Test
+    fun aPeerHeardOnlyOnTheRadioGetsItsHandshakeThereInThreeExactPackets() = runTest {
+        val pair = RadioPair()
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+        pair.awaitSessions()
+
+        assertEquals(
+            listOf(
+                pair.a.id to RadioPurpose.HandshakeOpening(byUser = true),
+                pair.b.id to RadioPurpose.HandshakeAnswer,
+                pair.a.id to RadioPurpose.HandshakeFinal,
+            ),
+            pair.radio.sent.map { it.from to it.purpose },
+        )
+        pair.radio.sent.forEach { assertRadioForm(it, MessageType.NOISE_HANDSHAKE) }
+        assertEquals(0, pair.a.connection.broadcastAttempts)
+        assertEquals(0, pair.b.connection.broadcastAttempts)
+    }
+
+    @Test
+    fun aPrivateMessageToSuchAPeerGoesOverTheRadioAsOneExactPacket() = runTest {
+        val pair = RadioPair().established()
+        assertTrue(pair.a.service.sendPrivateMessage("hello", pair.b.id, "b", messageId))
+        eventually("the message to arrive") { pair.b.delegate.messages.toList() == listOf(messageId to "hello") }
+
+        val sent = pair.radio.sent.single { it.purpose == RadioPurpose.PrivateMessage }
+        assertEquals(pair.a.id, sent.from)
+        assertRadioForm(sent, MessageType.NOISE_ENCRYPTED)
+        assertEquals(0, pair.a.connection.broadcastAttempts)
+    }
+
+    @Test
+    fun anAnswerGoesBackOverTheRadioEvenToAPeerThatIsAlsoOnTheMesh() = runTest {
+        val pair = RadioPair()
+        pair.b.announceTo(pair.a)
+        // b does not see a on the mesh, so its opening comes over the radio.
+        pair.b.service.initiateNoiseHandshake(pair.a.id)
+        pair.awaitSessions()
+
+        assertEquals(RadioPurpose.HandshakeAnswer, pair.radio.sent.single { it.from == pair.a.id }.purpose)
+        pair.a.connection.assertNoHandshakeFrom(pair.a.id)
+    }
+
+    @Test
+    fun anAnswerToAnOpeningThatCameOverBluetoothGoesOverBluetoothEvenToAPeerHeardOnTheRadio() = runTest {
+        val pair = RadioPair()
+        pair.a.announceTo(pair.b)
+        // b sees a on the mesh, so its opening goes out over Bluetooth; handed to a as if a link carried it.
+        pair.b.service.initiateNoiseHandshake(pair.a.id)
+        val opening = pair.b.connection.awaitHandshakeFrom(pair.b.id)
+        pair.a.service.onPacketReceived(requireNotNull(BinaryProtocol.encode(opening)), "address-of-b")
+
+        assertNotNull(pair.a.connection.awaitHandshakeFrom(pair.a.id))
+        assertTrue(pair.radio.sent.isEmpty())
+    }
+
+    @Test
+    fun whatThisDeviceStartsGoesOverBluetoothWheneverTheMeshHasThePeer() = runTest {
+        val pair = RadioPair()
+        pair.b.announceTo(pair.a)
+        assertFalse(pair.a.service.reachesByRadio(pair.b.id))
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+
+        assertNotNull(pair.a.connection.awaitHandshakeFrom(pair.a.id))
+        assertTrue(pair.radio.sent.isEmpty())
+        assertEquals(PrivateMessageText.MAX_BYTES, pair.a.service.privateTextLimitFor(pair.b.id))
+    }
+
+    @Test
+    fun aSessionMadeOverBluetoothIsNotUsedOverTheRadioOnAHeartbeatsWord() = runTest {
+        // The session comes about over Bluetooth, before either device has a radio.
+        val pair = RadioPair(joined = false)
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+        pair.carryHandshakeOverBluetooth(from = pair.a, to = pair.b)
+        pair.carryHandshakeOverBluetooth(from = pair.b, to = pair.a)
+        pair.carryHandshakeOverBluetooth(from = pair.a, to = pair.b)
+        pair.awaitSessions()
+
+        // Now each hears the other on the radio (or someone who says so), and neither is on the other's mesh.
+        pair.join()
+        assertFalse(pair.a.service.reachesByRadio(pair.b.id))
+        assertEquals(PrivateMessageText.MAX_BYTES, pair.a.service.privateTextLimitFor(pair.b.id))
+        // The repository hands such a peer nothing (it is not reachable). Should a message for it
+        // arrive here all the same, it goes nowhere and says so: not over the radio in that session,
+        // and not to Bluetooth links that are not this peer's.
+        val writesBefore = pair.a.connection.broadcastAttempts
+        assertTrue(pair.a.service.sendPrivateMessage("hello", pair.b.id, "b", messageId))
+        eventually("the message to be reported as not sent") {
+            pair.a.delegate.failures.toList() == listOf(messageId to BluetoothMeshService.OUT_OF_REACH)
+        }
+        assertTrue(pair.radio.sent.isEmpty())
+        assertEquals(writesBefore, pair.a.connection.broadcastAttempts)
+
+        // Once the mesh has the peer, the session made over Bluetooth is used over Bluetooth.
+        pair.b.announceTo(pair.a)
+        assertTrue(pair.a.service.sendPrivateMessage("hello again", pair.b.id, "b", "2".repeat(36)))
+        assertNotNull(pair.a.connection.awaitEncryptedFrom(pair.a.id))
+        assertTrue(pair.radio.sent.isEmpty())
+    }
+
+    @Test
+    fun aSessionMadeAgainOverBluetoothIsNoLongerARadioSession() = runTest {
+        val pair = RadioPair().established()
+        assertTrue(pair.a.service.reachesByRadio(pair.b.id))
+        // b comes to see a on the mesh, loses trust in the session and makes a new one, over Bluetooth.
+        pair.a.announceTo(pair.b)
+        repeat(3) { round ->
+            pair.b.service.onLoRaPacketReceived(
+                exactPacket(pair.a.id, pair.b.id, MessageType.NOISE_ENCRYPTED, ByteArray(40) { (it + round).toByte() })
+            )
+        }
+        val onTheRadioBefore = pair.radio.sent.size
+        pair.carryHandshakeOverBluetooth(from = pair.b, to = pair.a)
+        pair.carryHandshakeOverBluetooth(from = pair.a, to = pair.b)
+        pair.carryHandshakeOverBluetooth(from = pair.b, to = pair.a)
+
+        eventually("the session made over Bluetooth to replace the radio one") { !pair.a.service.reachesByRadio(pair.b.id) }
+        assertEquals(onTheRadioBefore, pair.radio.sent.size)
+        assertEquals(PrivateMessageText.MAX_BYTES, pair.a.service.privateTextLimitFor(pair.b.id))
+    }
+
+    @Test
+    fun whatWasEncryptedInASessionMadeOverBluetoothIsNeverOfferedToTheRadio() = runTest {
+        val pair = RadioPair().established()
+        // b has a on its mesh and loses trust in the session: it opens a new handshake over
+        // Bluetooth, which waits on b's links until it is carried over.
+        pair.a.announceTo(pair.b)
+        repeat(3) { round ->
+            pair.b.service.onLoRaPacketReceived(
+                exactPacket(pair.a.id, pair.b.id, MessageType.NOISE_ENCRYPTED, ByteArray(40) { (it + round).toByte() })
+            )
+        }
+        // a's mesh never has b. When a's message is about to be encrypted, a looks at its way out
+        // to b: the session is the one made over the radio. Before that look is over, and so before
+        // the message is encrypted, the handshake over Bluetooth completes and its session stands.
+        val looks = AtomicInteger()
+        pair.radio.stillHeard = { owner, _ ->
+            if (owner == pair.a.id && looks.incrementAndGet() == 2) {
+                runBlocking {
+                    pair.carryHandshakeOverBluetooth(from = pair.b, to = pair.a)
+                    pair.carryHandshakeOverBluetooth(from = pair.a, to = pair.b)
+                    pair.carryHandshakeOverBluetooth(from = pair.b, to = pair.a)
+                    eventually("the session made over Bluetooth to stand") { !pair.a.service.reachesByRadio(pair.b.id) }
+                }
+            }
+            true
+        }
+        val offeredBefore = pair.radio.sent.count { it.purpose == RadioPurpose.PrivateMessage }
+        assertTrue(pair.a.service.sendPrivateMessage("hello", pair.b.id, "b", messageId))
+
+        // The look said radio, the radio still hears b, and yet nothing of it goes there.
+        eventually("the message to be reported as not sent") {
+            pair.a.delegate.failures.toList() == listOf(messageId to BluetoothMeshService.OUT_OF_REACH)
+        }
+        assertEquals(offeredBefore, pair.radio.sent.count { it.purpose == RadioPurpose.PrivateMessage })
+    }
+
+    @Test
+    fun aHandshakeStartedAgainBecauseOfAForgedPacketIsNotPaidByTheUserAgain() = runTest {
+        val pair = RadioPair()
+        // b never hears a's opening, so the user's handshake stays in flight.
+        pair.radio.passOn = { false }
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+        eventually("the user's opening to be recorded") { pair.a.service.handshakeSupervisorSize() == 1 }
+        withContext(Dispatchers.Default) { delay(HandshakeRefreshPolicy.HANDSHAKE_RESTART_GRACE_MS + 300) }
+
+        // Any packet under b's id from an address a has not seen b on, readable or not: no key is
+        // needed for it, and it makes a start the handshake again.
+        val forged = BitchatPacket(
+            type = MessageType.NOISE_ENCRYPTED.value, senderID = pair.b.id.hexToBytes(),
+            recipientID = "0f0e0d0c0b0a0908".hexToBytes(), timestamp = 7u, payload = ByteArray(40) { it.toByte() }, ttl = 1u,
+        )
+        pair.a.service.onPacketReceived(requireNotNull(BinaryProtocol.encode(forged)), "an-address-never-seen")
+
+        eventually("the handshake to be started again") { pair.radio.sent.size == 2 }
+        assertEquals(
+            listOf(RadioPurpose.HandshakeOpening(byUser = true), RadioPurpose.HandshakeOpening(byUser = false)),
+            pair.radio.sent.map { it.purpose },
+        )
+    }
+
+    @Test
+    fun aRadioMessageWaitingForTheAirGoesOverBluetoothOnceTheMeshHasThePeer() = runTest {
+        val pair = RadioPair(radioRetryMs = 20).established()
+        pair.radio.answer = { sent ->
+            if (sent.purpose == RadioPurpose.PrivateMessage) RadioSendResult.NO_TIME_ON_AIR else RadioSendResult.SENT
+        }
+        fun offers() = pair.radio.sent.filter { it.purpose == RadioPurpose.PrivateMessage }
+        assertTrue(pair.a.service.sendPrivateMessage("hello", pair.b.id, "b", messageId))
+        eventually("it to be offered to the radio") { offers().isNotEmpty() }
+
+        pair.b.announceTo(pair.a)
+        val overBluetooth = pair.a.connection.awaitEncryptedFrom(pair.a.id)
+        // The very message that was waiting, not another encryption of it.
+        assertContentEquals(assertNotNull(BinaryProtocol.decodeExact(offers().last().bytes)).payload, overBluetooth.payload)
+        val offered = offers().size
+        never("another offer to the radio", forMillis = 200) { offers().size != offered }
+        assertTrue(pair.a.delegate.failures.isEmpty())
+    }
+
+    @Test
+    fun aRadioMessageWaitsForTheRadioMessageBeforeItWhateverWentOverBluetoothInBetween() = runTest {
+        val pair = RadioPair().established()
+        fun offers() = pair.radio.sent.count { it.purpose == RadioPurpose.PrivateMessage }
+        // The first is inside the radio and stays there.
+        val gate = CompletableDeferred<Unit>()
+        pair.radio.holdPrivateMessages = gate
+        assertTrue(pair.a.service.sendPrivateMessage("first", pair.b.id, "b", "1".repeat(36)))
+        eventually("the first to be with the radio") { offers() == 1 }
+
+        // The mesh has b for a moment: a message goes over Bluetooth, behind nothing.
+        pair.b.announceTo(pair.a)
+        assertTrue(pair.a.service.sendPrivateMessage("in between", pair.b.id, "b", "2".repeat(36)))
+        assertNotNull(pair.a.connection.awaitEncryptedFrom(pair.a.id))
+        pair.b.leave(pair.a)
+
+        // Over the radio again: behind the first, which is still there.
+        assertTrue(pair.a.service.sendPrivateMessage("second", pair.b.id, "b", "3".repeat(36)))
+        never("the second to be offered while the first is with the radio", forMillis = 300) { offers() != 1 }
+        gate.complete(Unit)
+        eventually("both to arrive") { pair.b.delegate.messages.size == 2 }
+        assertEquals(listOf("first", "second"), pair.b.delegate.messages.map { it.second })
+    }
+
+    @Test
+    fun noMoreThanSixteenMessagesWaitForTheRadioAndEachIsGivenUpByItsOwnClock() = runTest {
+        val pair = RadioPair(radioRetryMs = 20, radioGiveUpMs = 500).established()
+        pair.radio.answer = { sent ->
+            if (sent.purpose == RadioPurpose.PrivateMessage) RadioSendResult.NO_TIME_ON_AIR else RadioSendResult.SENT
+        }
+        val started = TimeSource.Monotonic.markNow()
+        repeat(17) { index ->
+            assertTrue(pair.a.service.sendPrivateMessage("message $index", pair.b.id, "b", "id-$index".padEnd(36, '0')))
+        }
+
+        // The seventeenth has no place to wait and is told so at once...
+        eventually("the one too many to be refused") { pair.a.delegate.failures.isNotEmpty() }
+        assertEquals("id-16".padEnd(36, '0') to "too many messages are waiting for the radio", pair.a.delegate.failures.first())
+        // ...and the sixteen are each given up 500 ms after they were handed over: together, not one
+        // after another (that would take eight seconds).
+        eventually("the sixteen to be given up") { pair.a.delegate.failures.size == 17 }
+        assertTrue(started.elapsedNow() < 4.seconds, "took ${started.elapsedNow()}")
+        assertEquals(List(16) { "no time on air for it" }, pair.a.delegate.failures.drop(1).map { it.second })
+        assertTrue(pair.b.delegate.messages.isEmpty())
+    }
+
+    @Test
+    fun aWaitingRadioMessageWhosePeerIsNoLongerHeardIsReportedAndNotHandedToTheBluetoothLinks() = runTest {
+        val pair = RadioPair(radioRetryMs = 20).established()
+        pair.radio.answer = { sent ->
+            if (sent.purpose == RadioPurpose.PrivateMessage) RadioSendResult.NO_TIME_ON_AIR else RadioSendResult.SENT
+        }
+        assertTrue(pair.a.service.sendPrivateMessage("hello", pair.b.id, "b", messageId))
+        eventually("it to be offered to the radio") { pair.radio.sent.any { it.purpose == RadioPurpose.PrivateMessage } }
+
+        // b's heartbeat runs out. The mesh never had b: the links there are, which would take the
+        // write, are not b's, and the message is not left standing as sent on their word.
+        pair.radio.unheard += pair.b.id
+        eventually("the message to be reported as not sent") {
+            pair.a.delegate.failures.toList() == listOf(messageId to BluetoothMeshService.OUT_OF_REACH)
+        }
+        assertEquals(0, pair.a.connection.broadcastAttempts)
+    }
+
+    @Test
+    fun aWaitingRadioMessageThatNoLinkTakesOnceTheMeshHasThePeerIsReportedAsFailed() = runTest {
+        val pair = RadioPair(radioRetryMs = 20).established()
+        pair.radio.answer = { sent ->
+            if (sent.purpose == RadioPurpose.PrivateMessage) RadioSendResult.NO_TIME_ON_AIR else RadioSendResult.SENT
+        }
+        assertTrue(pair.a.service.sendPrivateMessage("hello", pair.b.id, "b", messageId))
+        eventually("it to be offered to the radio") { pair.radio.sent.any { it.purpose == RadioPurpose.PrivateMessage } }
+
+        pair.a.connection.deliverPackets = false
+        pair.b.announceTo(pair.a)
+        eventually("the message to be reported as not sent") {
+            pair.a.delegate.failures.toList() == listOf(messageId to "no link carried it")
+        }
+    }
+
+    @Test
+    fun aBluetoothWriteThatNeverAnswersHoldsUpNothingThatWaitsForTheRadio() = runTest {
+        val pair = RadioPair(radioRetryMs = 20).established()
+        pair.radio.answer = { sent ->
+            if (sent.purpose == RadioPurpose.PrivateMessage) RadioSendResult.NO_TIME_ON_AIR else RadioSendResult.SENT
+        }
+        fun offers() = pair.radio.sent.count { it.purpose == RadioPurpose.PrivateMessage }
+        assertTrue(pair.a.service.sendPrivateMessage("first", pair.b.id, "b", "1".repeat(36)))
+        assertTrue(pair.a.service.sendPrivateMessage("second", pair.b.id, "b", "2".repeat(36)))
+        eventually("the first to be offered to the radio") { offers() >= 1 }
+
+        // The mesh has b now, so both leave for the Bluetooth links, whose write never answers.
+        pair.a.connection.holdEveryBroadcast = CompletableDeferred()
+        pair.b.announceTo(pair.a)
+        val offered = offers()
+        never("another offer to the radio while the mesh has the peer", forMillis = 200) { offers() != offered }
+
+        // b is on the radio only again: a third message is not stuck behind those two.
+        pair.b.leave(pair.a)
+        pair.radio.answer = { RadioSendResult.SENT }
+        assertTrue(pair.a.service.sendPrivateMessage("third", pair.b.id, "b", "3".repeat(36)))
+        eventually("the third to arrive over the radio") { pair.b.delegate.messages.map { it.second } == listOf("third") }
+    }
+
+    @Test
+    fun aRadioMessageDoesNotWaitBehindAnotherLongerThanItMayWaitAtAll() = runTest {
+        val pair = RadioPair(radioGiveUpMs = 300).established()
+        // The first goes into the radio and never comes out.
+        pair.radio.holdPrivateMessages = CompletableDeferred()
+        assertTrue(pair.a.service.sendPrivateMessage("first", pair.b.id, "b", "1".repeat(36)))
+        assertTrue(pair.a.service.sendPrivateMessage("second", pair.b.id, "b", "2".repeat(36)))
+
+        eventually("the second to be given up") {
+            pair.a.delegate.failures.toList() == listOf("2".repeat(36) to "no time on air for it")
+        }
+        assertEquals(1, pair.radio.sent.count { it.purpose == RadioPurpose.PrivateMessage })
+    }
+
+    @Test
+    fun aRadioMessageStaysBehindEveryEarlierOneThatHasNotEndedWhenThoseBetweenThemGaveUp() = runTest {
+        val pair = RadioPair(radioGiveUpMs = 1_000).established()
+        fun offers() = pair.radio.sent.count { it.purpose == RadioPurpose.PrivateMessage }
+        val gaveUp = "no time on air for it"
+        // The first is inside the radio and stays there.
+        val gate = CompletableDeferred<Unit>()
+        pair.radio.holdPrivateMessages = gate
+        assertTrue(pair.a.service.sendPrivateMessage("first", pair.b.id, "b", "1".repeat(36)))
+        eventually("the first to be with the radio") { offers() == 1 }
+
+        // The second waits behind it, and the third, handed over a little later, behind both: when
+        // the second gives up, the third still has the first ahead of it and gives up in its turn.
+        assertTrue(pair.a.service.sendPrivateMessage("second", pair.b.id, "b", "2".repeat(36)))
+        withContext(Dispatchers.Default) { delay(300) }
+        assertTrue(pair.a.service.sendPrivateMessage("third", pair.b.id, "b", "3".repeat(36)))
+        eventually("the second and the third to be given up, or one of them to be offered") {
+            pair.a.delegate.failures.size == 2 || offers() != 1
+        }
+        assertEquals(1, offers())
+        assertEquals(listOf("2".repeat(36) to gaveUp, "3".repeat(36) to gaveUp), pair.a.delegate.failures.toList())
+
+        // So has the fourth, though all it followed are gone.
+        assertTrue(pair.a.service.sendPrivateMessage("fourth", pair.b.id, "b", "4".repeat(36)))
+        never("the fourth to be offered while the first is with the radio", forMillis = 250) { offers() != 1 }
+        gate.complete(Unit)
+        eventually("the first and the fourth to arrive") { pair.b.delegate.messages.size == 2 }
+        assertEquals(listOf("first", "fourth"), pair.b.delegate.messages.map { it.second })
+    }
+
+    @Test
+    fun theTimeAMessageSpentBehindAnotherCountsTowardsTheTimeItMayWait() = runTest {
+        val pair = RadioPair(radioRetryMs = 50, radioGiveUpMs = 2_000).established()
+        // The first message goes into the radio and stays there for a while; whatever follows it
+        // gets no time on air.
+        val first = AtomicReference<ByteArray?>(null)
+        pair.radio.answer = { sent ->
+            when {
+                sent.purpose != RadioPurpose.PrivateMessage -> RadioSendResult.SENT
+                first.compareAndSet(null, sent.bytes) || first.get() === sent.bytes -> RadioSendResult.SENT
+                else -> RadioSendResult.NO_TIME_ON_AIR
+            }
+        }
+        val gate = CompletableDeferred<Unit>()
+        pair.radio.holdPrivateMessages = gate
+        fun offersOfTheSecond() = pair.radio.sent.count { it.purpose == RadioPurpose.PrivateMessage && it.bytes !== first.get() }
+        assertTrue(pair.a.service.sendPrivateMessage("first", pair.b.id, "b", "1".repeat(36)))
+        eventually("the first to be with the radio") { first.get() != null }
+        assertTrue(pair.a.service.sendPrivateMessage("second", pair.b.id, "b", "2".repeat(36)))
+
+        // Three quarters of what the second may wait are gone before its turn comes.
+        withContext(Dispatchers.Default) { delay(1_500) }
+        assertEquals(0, offersOfTheSecond())
+        gate.complete(Unit)
+        eventually("the second to be given up") {
+            pair.a.delegate.failures.toList() == listOf("2".repeat(36) to "no time on air for it")
+        }
+        // The quarter that was left is some ten offers; a clock started at its turn would have
+        // allowed forty.
+        val offers = offersOfTheSecond()
+        assertTrue(offers in 1..24, "offered $offers times")
+    }
+
+    @Test
+    fun aRadioMessageDoesNotWaitForOneToSomebodyElse() = runTest {
+        val pair = RadioPair().established()
+        val c = RadioDevice("3", BluetoothMeshService.RADIO_RETRY_MS, BluetoothMeshService.RADIO_GIVE_UP_MS)
+        pair.radio.join(c.service)
+        pair.a.service.initiateNoiseHandshake(c.id)
+        eventually("a session with the third device") {
+            pair.a.service.hasEstablishedSession(c.id) && c.service.hasEstablishedSession(pair.a.id)
+        }
+        // What is for b goes into the radio and stays there.
+        pair.radio.holdPrivateMessages = CompletableDeferred()
+        pair.radio.holdOnlyMessagesTo = pair.b.id
+        assertTrue(pair.a.service.sendPrivateMessage("for b", pair.b.id, "b", "1".repeat(36)))
+        eventually("it to be with the radio") { pair.radio.sent.any { it.purpose == RadioPurpose.PrivateMessage } }
+
+        assertTrue(pair.a.service.sendPrivateMessage("for c", c.id, "c", "2".repeat(36)))
+        eventually("the message for the other peer to arrive") { c.delegate.messages.map { it.second } == listOf("for c") }
+    }
+
+    @Test
+    fun aMessageThatHasLeftNoLongerTakesAPlaceAmongThoseWaiting() = runTest {
+        val pair = RadioPair().established()
+        repeat(20) { index ->
+            assertTrue(pair.a.service.sendPrivateMessage("message $index", pair.b.id, "b", "id-$index".padEnd(36, '0')))
+            eventually("message $index to arrive or be refused") {
+                pair.b.delegate.messages.size == index + 1 || pair.a.delegate.failures.isNotEmpty()
+            }
+            assertTrue(pair.a.delegate.failures.isEmpty(), "refused: ${pair.a.delegate.failures}")
+        }
+    }
+
+    @Test
+    fun aMessageWhosePeerTheRadioStopsHearingBeforeItIsEncryptedIsReportedAndUsesNoNumberOfTheSession() = runTest {
+        // Handed over because the radio heard the peer, which the mesh never had: by the time the
+        // message is to be encrypted (the second look) the radio hears it no longer.
+        val pair = RadioPair().established()
+        pair.radio.unheardFromLook(2, pair.a, pair.b)
+        assertTrue(pair.a.service.sendPrivateMessage("lost", pair.b.id, "b", messageId))
+        eventually("the message to be reported as not sent") {
+            pair.a.delegate.failures.toList() == listOf(messageId to BluetoothMeshService.OUT_OF_REACH)
+        }
+        assertEquals(0, pair.a.connection.broadcastAttempts)
+
+        // Heard again: the next message carries the session's first number, the lost one took none.
+        pair.radio.stillHeard = { _, _ -> true }
+        assertTrue(pair.a.service.sendPrivateMessage("next", pair.b.id, "b", "2".repeat(36)))
+        eventually("the next message to be offered") { pair.radio.sent.any { it.purpose == RadioPurpose.PrivateMessage } }
+        val offered = pair.radio.sent.single { it.purpose == RadioPurpose.PrivateMessage }
+        assertEquals(0L, nonceOf(assertNotNull(BinaryProtocol.decodeExact(offered.bytes))))
+    }
+
+    @Test
+    fun aMessageWhosePeerTheRadioStopsHearingOnceItIsEncryptedIsReportedAndOfferedToNoLink() = runTest {
+        // The third look is the one before the first offer.
+        val pair = RadioPair().established()
+        pair.radio.unheardFromLook(3, pair.a, pair.b)
+        assertTrue(pair.a.service.sendPrivateMessage("hello", pair.b.id, "b", messageId))
+
+        eventually("the message to be reported as not sent") {
+            pair.a.delegate.failures.toList() == listOf(messageId to BluetoothMeshService.OUT_OF_REACH)
+        }
+        assertTrue(pair.radio.sent.none { it.purpose == RadioPurpose.PrivateMessage })
+        assertEquals(0, pair.a.connection.broadcastAttempts)
+    }
+
+    @Test
+    fun aMessageWhoseSessionIsGoneWhenItIsToBeEncryptedIsReportedAsFailed() = runTest {
+        val pair = RadioPair().established()
+        pair.a.service.clearAllEncryptionData()
+        assertTrue(pair.a.service.sendPrivateMessage("hello", pair.b.id, "b", messageId))
+
+        eventually("the message to be reported as not sent") {
+            pair.a.delegate.failures.toList() == listOf(messageId to "no session with the peer any more")
+        }
+        assertTrue(pair.radio.sent.none { it.purpose == RadioPurpose.PrivateMessage })
+    }
+
+    @Test
+    fun aRadioThatFailsIsReportedForTheMessage() = runTest {
+        val pair = RadioPair().established()
+        pair.radio.answer = { sent ->
+            if (sent.purpose == RadioPurpose.PrivateMessage) RadioSendResult.FAILED else RadioSendResult.SENT
+        }
+        assertTrue(pair.a.service.sendPrivateMessage("hello", pair.b.id, "b", messageId))
+        eventually("the failure to be reported") { pair.a.delegate.failures.toList() == listOf(messageId to "the radio failed") }
+        assertEquals(1, pair.radio.sent.count { it.purpose == RadioPurpose.PrivateMessage })
+    }
+
+    @Test
+    fun aPeerTheRadioDoesNotHearIsNotSentToOverIt() = runTest {
+        val pair = RadioPair()
+        val stranger = "0f0e0d0c0b0a0908"
+        assertFalse(pair.a.service.reachesByRadio(stranger))
+        assertEquals(PrivateMessageText.MAX_BYTES, pair.a.service.privateTextLimitFor(stranger))
+        pair.a.service.initiateNoiseHandshake(stranger)
+
+        eventually("the handshake to be owed for want of a link") { pair.a.service.handshakesOwedCount() == 1 }
+        assertTrue(pair.radio.sent.isEmpty())
+    }
+
+    @Test
+    fun aMessageRefusedForWantOfTimeOnAirIsOfferedAgainUnchangedAndTheNextOneWaitsBehindIt() = runTest {
+        val pair = RadioPair(radioRetryMs = 20).established()
+        val refusals = AtomicInteger()
+        pair.radio.answer = { sent ->
+            if (sent.purpose == RadioPurpose.PrivateMessage && refusals.getAndIncrement() < 2) {
+                RadioSendResult.NO_TIME_ON_AIR
+            } else {
+                RadioSendResult.SENT
+            }
+        }
+        assertTrue(pair.a.service.sendPrivateMessage("first", pair.b.id, "b", "1".repeat(36)))
+        assertTrue(pair.a.service.sendPrivateMessage("second", pair.b.id, "b", "2".repeat(36)))
+        eventually("both messages to arrive") { pair.b.delegate.messages.size == 2 }
+
+        assertEquals(listOf("first", "second"), pair.b.delegate.messages.map { it.second })
+        val offers = pair.radio.sent.filter { it.purpose == RadioPurpose.PrivateMessage }.map { it.bytes }
+        assertEquals(4, offers.size)
+        assertContentEquals(offers[0], offers[1])
+        assertContentEquals(offers[0], offers[2])
+        assertFalse(offers[2].contentEquals(offers[3]))
+    }
+
+    @Test
+    fun aMessageThatNeverGetsTimeOnAirIsGivenUpAfterTheBoundAndReportedAsFailed() = runTest {
+        val pair = RadioPair(radioRetryMs = 20, radioGiveUpMs = 200).established()
+        pair.radio.answer = { sent ->
+            if (sent.purpose == RadioPurpose.PrivateMessage) RadioSendResult.NO_TIME_ON_AIR else RadioSendResult.SENT
+        }
+        assertTrue(pair.a.service.sendPrivateMessage("never", pair.b.id, "b", messageId))
+        fun offers() = pair.radio.sent.count { it.purpose == RadioPurpose.PrivateMessage }
+        eventually("it to be offered more than once") { offers() >= 2 }
+        eventually("it to be given up") { pair.a.delegate.failures.toList() == listOf(messageId to "no time on air for it") }
+        val offered = offers()
+        never("it to be offered after it was given up", forMillis = 300) { offers() != offered }
+        assertTrue(pair.b.delegate.messages.isEmpty())
+    }
+
+    @Test
+    fun theTimeAMessageMayWaitIsMeasuredByAClockThatOnlyGoesForward() = runTest {
+        // Not by the time of day, which can be set back while a message waits: the three minutes are
+        // three minutes of this clock, which a test moves by hand.
+        val clock = SteppedTimeSource()
+        val pair = RadioPair(radioRetryMs = 20, radioWaitClock = clock).established()
+        pair.radio.answer = { sent ->
+            if (sent.purpose == RadioPurpose.PrivateMessage) RadioSendResult.NO_TIME_ON_AIR else RadioSendResult.SENT
+        }
+        fun offers() = pair.radio.sent.count { it.purpose == RadioPurpose.PrivateMessage }
+        assertTrue(pair.a.service.sendPrivateMessage("waiting", pair.b.id, "b", messageId))
+        eventually("it to be offered") { offers() >= 1 }
+
+        // A second short of the bound it is still offered, however long that takes by any other clock...
+        clock.advance(BluetoothMeshService.RADIO_GIVE_UP_MS.milliseconds - 1.seconds)
+        val offered = offers()
+        eventually("it to be offered again") { offers() >= offered + 3 }
+        assertTrue(pair.a.delegate.failures.isEmpty())
+        // ...and at the bound it is given up at its next offer.
+        clock.advance(1.seconds)
+        eventually("it to be given up") { pair.a.delegate.failures.toList() == listOf(messageId to "no time on air for it") }
+    }
+
+    @Test
+    fun anOpeningRefusedForWantOfTimeOnAirLeavesTheHandshakeOwedAndCountsNoAttempt() = runTest {
+        val pair = RadioPair()
+        pair.radio.answer = { RadioSendResult.NO_TIME_ON_AIR }
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+
+        eventually("the handshake to be owed") { pair.a.service.handshakesOwedCount() == 1 }
+        eventually("the candidate to be given up") { !pair.a.service.isHandshakeInFlight(pair.b.id) }
+        assertEquals(0, pair.a.service.handshakeSupervisorSize())
+        assertFalse(pair.b.service.hasNoiseCandidate(pair.a.id))
+    }
+
+    @Test
+    fun aTextTooLongForOneFrameIsRefusedBeforeAnythingIsEncrypted() = runTest {
+        val pair = RadioPair().established()
+        assertEquals(141, pair.a.service.privateTextLimitFor(pair.b.id))
+        fun privatePackets() = pair.radio.sent.filter { it.purpose == RadioPurpose.PrivateMessage }
+            .map { assertNotNull(BinaryProtocol.decodeExact(it.bytes)) }
+
+        assertTrue(pair.a.service.sendPrivateMessage("before", pair.b.id, "b", messageId))
+        eventually("the first message") { privatePackets().size == 1 }
+        assertFalse(pair.a.service.sendPrivateMessage("x".repeat(142), pair.b.id, "b", messageId))
+        // The longest text that fits fills the frame to its last byte...
+        assertTrue(pair.a.service.sendPrivateMessage("x".repeat(141), pair.b.id, "b", messageId))
+        eventually("the second message") { privatePackets().size == 2 }
+        assertEquals(MAX_LORA_PACKET_BYTES, pair.radio.sent.last { it.purpose == RadioPurpose.PrivateMessage }.bytes.size)
+        // ...and carries the very next number of the session: the refused one took none.
+        val (first, second) = privatePackets()
+        assertEquals(nonceOf(first) + 1, nonceOf(second))
+        eventually("both to arrive") { pair.b.delegate.messages.size == 2 }
+    }
+
+    @Test
+    fun aRecoveryCausedByWhatTheRadioBroughtIsNeverAnOpeningOfTheUsers() = runTest {
+        val pair = RadioPair().established()
+        // Three packets under b's id that a cannot read: a gives the session up and opens again.
+        repeat(3) { round ->
+            pair.a.service.onLoRaPacketReceived(
+                exactPacket(pair.b.id, pair.a.id, MessageType.NOISE_ENCRYPTED, ByteArray(40) { (it + round).toByte() })
+            )
+        }
+        eventually("a to open a handshake by itself") {
+            pair.radio.sent.any { it.from == pair.a.id && it.purpose == RadioPurpose.HandshakeOpening(byUser = false) }
+        }
+        assertEquals(
+            1,
+            pair.radio.sent.count { it.from == pair.a.id && it.purpose == RadioPurpose.HandshakeOpening(byUser = true) },
+        )
+    }
+
+    @Test
+    fun aHandshakeAnsweredBeforeItsOpeningIsReportedSentLeavesNothingOwed() = runTest {
+        // Over the radio the opening is reported sent only once it has left the air, and by then
+        // the other side may have answered and the session may stand.
+        val pair = RadioPair()
+        pair.radio.holdOpeningsUntilAnswered = true
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+        pair.awaitSessions()
+
+        eventually("the owed record to go") { pair.a.service.handshakesOwedCount() == 0 }
+        never("an owed record or an attempt to come back", forMillis = 400) {
+            pair.a.service.handshakesOwedCount() != 0 || pair.a.service.automaticHandshakesOwedCount() != 0 ||
+                pair.a.service.handshakeSupervisorSize() != 0
+        }
+    }
+
+    @Test
+    fun aFileIsNeverSentOverTheRadio() = runTest {
+        val pair = RadioPair().established()
+        val before = pair.radio.sent.size
+        // And the caller is told that nothing was started for it.
+        assertFalse(pair.a.service.sendFilePrivate(pair.b.id, BitchatFilePacket("note.txt", 3, "text/plain", byteArrayOf(1, 2, 3))))
+
+        never("a file on the radio", forMillis = 300) { pair.radio.sent.size != before }
+        assertEquals(0, pair.a.connection.broadcastAttempts)
+    }
+
+    private fun assertRadioForm(sent: FakeRadio.Sent, type: MessageType) {
+        assertTrue(sent.bytes.size <= MAX_LORA_PACKET_BYTES)
+        val packet = assertNotNull(BinaryProtocol.decodeExact(sent.bytes), "not the exact form the radio side accepts")
+        assertEquals(type.value, packet.type)
+        assertEquals(0.toUByte(), packet.ttl)
+        assertNull(packet.signature)
+        assertContentEquals(sent.from.hexToBytes(), packet.senderID)
+        assertContentEquals(sent.to.hexToBytes(), packet.recipientID)
+    }
+}
+
+private class RadioPair(
+    radioRetryMs: Long = BluetoothMeshService.RADIO_RETRY_MS,
+    radioGiveUpMs: Long = BluetoothMeshService.RADIO_GIVE_UP_MS,
+    joined: Boolean = true,
+    radioWaitClock: TimeSource = TimeSource.Monotonic,
+) {
+    val radio = FakeRadio()
+    val a = RadioDevice("1", radioRetryMs, radioGiveUpMs, radioWaitClock)
+    val b = RadioDevice("2", radioRetryMs, radioGiveUpMs, radioWaitClock)
+
+    init {
+        if (joined) join()
+    }
+
+    /** From now on the two hear each other on the radio. */
+    fun join() {
+        radio.join(a.service)
+        radio.join(b.service)
+    }
+
+    /** Takes the next handshake packet [from] put on its Bluetooth links and hands it to [to] as if a link had carried it. */
+    suspend fun carryHandshakeOverBluetooth(from: RadioDevice, to: RadioDevice) {
+        val packet = from.connection.awaitHandshakeFrom(from.id)
+        to.service.onPacketReceived(requireNotNull(BinaryProtocol.encode(packet)), "address-of-${from.id}")
+    }
+
+    suspend fun awaitSessions() = eventually("a session on both sides") {
+        a.service.hasEstablishedSession(b.id) && b.service.hasEstablishedSession(a.id)
+    }
+
+    suspend fun established(): RadioPair {
+        a.service.initiateNoiseHandshake(b.id)
+        awaitSessions()
+        return this
+    }
+}
+
+private class RadioDevice(
+    seedDigit: String,
+    radioRetryMs: Long,
+    radioGiveUpMs: Long,
+    radioWaitClock: TimeSource = TimeSource.Monotonic,
+) {
+    val crypto = CryptoSigningFacade(seedDigit.repeat(64))
+    val connection = FallbackRecordingConnectionService()
+    val delegate = FallbackDelegate()
+    val service = BluetoothMeshService(
+        scanningService = FallbackNoOpScanningService,
+        connectionService = connection,
+        gattServerService = FallbackNoOpGattServerService,
+        advertisingService = FallbackNoOpAdvertisingService,
+        cryptoSigning = crypto,
+        radioRetryMs = radioRetryMs,
+        radioGiveUpMs = radioGiveUpMs,
+        radioWaitClock = radioWaitClock,
+    ).also { it.delegate = delegate }
+    val id: String get() = service.myPeerID
+
+    /** Makes [other] see this device as a connected mesh peer: its announcement arrives there over Bluetooth. */
+    suspend fun announceTo(other: RadioDevice) {
+        val payload = requireNotNull(IdentityAnnouncement("peer", crypto.getNoisePublicKey(), crypto.getSigningPublicKey()).encode())
+        val packet = BitchatPacket(
+            type = MessageType.ANNOUNCE.value, senderID = id.hexToBytes(), recipientID = SpecialRecipients.BROADCAST,
+            timestamp = 1u, payload = payload, ttl = 1u,
+        )
+        other.service.onPacketReceived(requireNotNull(BinaryProtocol.encode(packet)), "address-of-$id")
+        eventually("the announced peer to be connected") { other.service.getPeerInfo(id)?.isConnected == true }
+    }
+
+    /** Takes this device off [other]'s mesh again: its leave arrives there over Bluetooth. */
+    suspend fun leave(other: RadioDevice) {
+        val packet = BitchatPacket(
+            type = MessageType.LEAVE.value, senderID = id.hexToBytes(), recipientID = SpecialRecipients.BROADCAST,
+            timestamp = 2u, payload = byteArrayOf(1), ttl = 1u,
+        )
+        other.service.onPacketReceived(requireNotNull(BinaryProtocol.encode(packet)), "address-of-$id")
+        eventually("the peer to be gone from the mesh") { other.service.getPeerInfo(id)?.isConnected != true }
+    }
+}
+
+/** The radio between the devices that joined it: records what each hands over and passes it on. */
+private class FakeRadio {
+    class Sent(val from: String, val to: String, val purpose: RadioPurpose, val bytes: ByteArray)
+
+    val sent = CopyOnWriteArrayList<Sent>()
+    private val devices = ConcurrentHashMap<String, BluetoothMeshService>()
+
+    /** What the radio answers; only SENT is passed on to the other device. */
+    @Volatile var answer: (Sent) -> RadioSendResult = { RadioSendResult.SENT }
+
+    /** An opening is reported sent only once its sender has a session: the answer overtook the report. */
+    @Volatile var holdOpeningsUntilAnswered = false
+
+    /** Whether a frame the radio sent reaches the other device at all. */
+    @Volatile var passOn: (Sent) -> Boolean = { true }
+
+    /** Devices that have joined and are no longer heard. */
+    val unheard: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** Asked on top of that, each time a device looks: whether [owner] still hears [peerID]. */
+    @Volatile var stillHeard: (owner: String, peerID: String) -> Boolean = { _, _ -> true }
+
+    /**
+     * [device] looks at its way out to [peer] when a private message is handed over (the first look),
+     * when it is encrypted (the second) and before every offer to the radio (the third is the first
+     * of those). From look number [look] on, [peer] is not heard.
+     */
+    fun unheardFromLook(look: Int, device: RadioDevice, peer: RadioDevice) {
+        val looks = AtomicInteger()
+        stillHeard = { owner, peerID -> owner != device.id || peerID != peer.id || looks.incrementAndGet() < look }
+    }
+
+    /** While set and not completed, a private message stays inside the radio. */
+    @Volatile var holdPrivateMessages: CompletableDeferred<Unit>? = null
+
+    /** When set, only the private messages for this device are held. */
+    @Volatile var holdOnlyMessagesTo: String? = null
+
+    fun join(service: BluetoothMeshService) {
+        val owner = service.myPeerID
+        devices[owner] = service
+        service.radioLink = object : MeshRadioLink {
+            override fun hears(peerID: String) =
+                peerID.lowercase() != owner && devices.containsKey(peerID.lowercase()) && peerID.lowercase() !in unheard &&
+                    stillHeard(owner, peerID.lowercase())
+
+            override suspend fun send(packet: ByteArray, peerID: String, purpose: RadioPurpose): RadioSendResult {
+                val record = Sent(owner, peerID.lowercase(), purpose, packet)
+                sent += record
+                val result = answer(record)
+                if (result != RadioSendResult.SENT) return result
+                if (purpose == RadioPurpose.PrivateMessage && (holdOnlyMessagesTo ?: record.to) == record.to) {
+                    holdPrivateMessages?.await()
+                }
+                if (passOn(record)) devices[record.to]?.onLoRaPacketReceived(packet)
+                if (holdOpeningsUntilAnswered && purpose is RadioPurpose.HandshakeOpening) {
+                    eventually("the opening to be answered") { service.hasEstablishedSession(record.to) }
+                }
+                return result
+            }
+        }
     }
 }
 
@@ -272,6 +1064,19 @@ class BluetoothMeshServiceFallbackTest {
     }
 
     @Test
+    fun withoutARadioAMessageGoesToTheBluetoothLinksWhateverTheMeshKnowsOfItsPeer() = runTest {
+        // As it always did: this fixture's remote peer never announced itself, so the mesh does not
+        // have it, and there is no radio that could be the reason the message was handed over.
+        val fixture = FallbackServiceFixture()
+        fixture.establish()
+        assertNull(fixture.service.getPeerInfo(fixture.remoteID))
+        assertTrue(fixture.service.sendPrivateMessage("hello", fixture.remoteID, "remote", "id-1"))
+
+        assertNotNull(fixture.connection.awaitEncryptedFrom(fixture.service.myPeerID))
+        assertTrue(fixture.delegate.failures.isEmpty())
+    }
+
+    @Test
     fun privateMessagesLeaveInTheOrderTheyWereHandedOverEachWithALaterTime() = runTest {
         val fixture = FallbackServiceFixture()
         fixture.establish()
@@ -415,7 +1220,7 @@ class BluetoothMeshServiceFallbackTest {
 
         repeat(40) { round ->
             repeat(5) { index -> fixture.service.sendPrivateMessage("piece $round/$index", fixture.remoteID, "remote", "id-$round-$index") }
-            fixture.service.sendFilePrivate(fixture.remoteID, file)
+            assertTrue(fixture.service.sendFilePrivate(fixture.remoteID, file))
         }
         val times = List(40 * 6) { fixture.connection.awaitEncryptedFrom(fixture.service.myPeerID).timestamp }
 
@@ -620,6 +1425,18 @@ class BluetoothMeshServiceFallbackTest {
     }
 }
 
+/** A clock that only goes forward, and only when a test says so. */
+private class SteppedTimeSource : TimeSource {
+    private val now = AtomicLong()
+    fun advance(by: Duration) {
+        now.addAndGet(by.inWholeMilliseconds)
+    }
+    override fun markNow(): TimeMark = object : TimeMark {
+        private val start = now.get()
+        override fun elapsedNow(): Duration = (now.get() - start).milliseconds
+    }
+}
+
 private class SettableClock : Clock {
     @Volatile private var millis = Clock.System.now().toEpochMilliseconds()
     override fun now(): Instant = Instant.fromEpochMilliseconds(millis)
@@ -810,6 +1627,11 @@ private class FallbackRecordingConnectionService : BluetoothConnectionService {
 
 private class FallbackDelegate : BluetoothMeshDelegate {
     val messages = mutableListOf<Pair<String, String>>()
+    /** Message id and reason of every private message reported as not sent. */
+    val failures = CopyOnWriteArrayList<Pair<String, String>>()
+    override fun didFailToSendPrivateMessage(messageID: String, recipientPeerID: String, reason: String) {
+        failures += messageID to reason
+    }
     override fun didReceiveMessage(message: com.bitchat.domain.chat.model.BitchatMessage) = Unit
     override fun didReceiveAuthenticatedPrivateMessage(message: com.bitchat.domain.chat.model.BitchatMessage) {
         messages += message.id to message.content

@@ -10,9 +10,6 @@ object PrivateMessageText {
     const val MAX_BYTES: Int = 255
     const val MAX_PARTS: Int = 8
 
-    /** A piece ends after a space only where that leaves it at least this full. */
-    private const val MIN_BYTES_AT_A_SPACE = MAX_BYTES / 2
-
     private const val ZERO_WIDTH_JOINER = 0x200D
 
     /**
@@ -23,11 +20,11 @@ object PrivateMessageText {
     private val CONTROL_PREFIXES = listOf("[FAVORITED]", "[UNFAVORITED]")
 
     /** Why [content] cannot be sent as a private message, or null when it can. */
-    fun refusal(content: String): String? {
-        val pieces = split(content)
+    fun refusal(content: String, maxBytes: Int = MAX_BYTES): String? {
+        val pieces = split(content, maxBytes)
         return when {
             pieces.size > MAX_PARTS ->
-                "a private message is sent in at most $MAX_PARTS parts of $MAX_BYTES bytes, this one needs ${pieces.size}"
+                "a private message is sent in at most $MAX_PARTS parts of $maxBytes bytes, this one needs ${pieces.size}"
             pieces.drop(1).any { readsAsControlMessage(it, 0) } ->
                 "this private message cannot be sent in parts: one of them would start with ${CONTROL_PREFIXES.first { it in content }}"
             else -> null
@@ -48,22 +45,24 @@ object PrivateMessageText {
      * elsewhere. Where nothing but blank space precedes it for a whole message, no cut helps, and
      * [refusal] says so.
      */
-    fun split(content: String): List<String> {
+    fun split(content: String, maxBytes: Int = MAX_BYTES): List<String> {
+        // A character can take four bytes: a limit below that could hold no character at all.
+        require(maxBytes >= 4) { "A message carries at least one character" }
         // Measured as the encoding measures it: what one message carries goes out as that message.
-        if (content.encodeToByteArray().size <= MAX_BYTES) return listOf(content)
-        val atSpaces = cut(content, atSpaces = true)
-        return if (atSpaces.size <= MAX_PARTS) atSpaces else cut(content, atSpaces = false)
+        if (content.encodeToByteArray().size <= maxBytes) return listOf(content)
+        val atSpaces = cut(content, atSpaces = true, maxBytes)
+        return if (atSpaces.size <= MAX_PARTS) atSpaces else cut(content, atSpaces = false, maxBytes)
     }
 
-    private fun cut(content: String, atSpaces: Boolean): List<String> {
+    private fun cut(content: String, atSpaces: Boolean, maxBytes: Int): List<String> {
         val pieces = ArrayList<String>()
         var start = 0
         while (start < content.length) {
-            val limit = limitFrom(content, start)
+            val limit = limitFrom(content, start, maxBytes)
             var end = limit
             if (limit < content.length) {
                 val last = lastWholeCut(content, start, limit)
-                end = if (atSpaces) cutAfterSpace(content, start, last) ?: last else last
+                end = if (atSpaces) cutAfterSpace(content, start, last, maxBytes / 2) ?: last else last
                 if (readsAsControlMessage(content, end)) end = lastCutLeavingNoControlMessage(content, start, last) ?: end
             }
             pieces += content.substring(start, end)
@@ -73,13 +72,13 @@ object PrivateMessageText {
     }
 
     /** The end of the longest run of whole code points from [start] that fits one message. */
-    private fun limitFrom(content: String, start: Int): Int {
+    private fun limitFrom(content: String, start: Int, maxBytes: Int): Int {
         var index = start
         var bytes = 0
         while (index < content.length) {
             val units = unitsAt(content, index)
             val size = utf8Size(content[index], units)
-            if (bytes + size > MAX_BYTES) break
+            if (bytes + size > maxBytes) break
             bytes += size
             index += units
         }
@@ -100,12 +99,12 @@ object PrivateMessageText {
      * The cut after the last space of the piece [start] until [end], when the piece would
      * otherwise end inside a word and is still at least half full there.
      */
-    private fun cutAfterSpace(content: String, start: Int, end: Int): Int? {
+    private fun cutAfterSpace(content: String, start: Int, end: Int, minBytesAtASpace: Int): Int? {
         if (content[end].isWhitespace() || content[end - 1].isWhitespace()) return null
         var index = end - 1
         while (index > start) {
             if (content[index - 1].isWhitespace() && !takesApart(content, index)) {
-                return if (utf8Size(content, start, index) >= MIN_BYTES_AT_A_SPACE) index else null
+                return if (utf8Size(content, start, index) >= minBytesAtASpace) index else null
             }
             index--
         }

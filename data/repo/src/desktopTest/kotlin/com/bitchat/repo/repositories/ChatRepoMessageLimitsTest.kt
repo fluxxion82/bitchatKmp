@@ -3,6 +3,7 @@ package com.bitchat.repo.repositories
 import com.bitchat.bluetooth.model.PeerInfo
 import com.bitchat.bluetooth.service.BluetoothMeshService
 import com.bitchat.domain.chat.model.BitchatMessage
+import com.bitchat.domain.chat.model.PrivateMessageText
 import com.bitchat.domain.chat.model.BitchatMessageType
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.cache.impl.InMemoryCache
@@ -597,6 +598,11 @@ class ChatRepoMessageLimitsTest {
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val mesh = mockk<BluetoothMeshService>(relaxed = true)
+        // A relaxed mock would answer 0: these peers are reached over Bluetooth, where a message carries 255 bytes.
+        every { mesh.privateTextLimitFor(any()) } returns PrivateMessageText.MAX_BYTES
+        every { mesh.sendFilePrivate(any(), any()) } returns true
+        // And false, which the real service says only of a message it cannot take.
+        every { mesh.sendPrivateMessage(any(), any(), any(), any()) } returns true
         try {
             block(chatRepo(scope, dispatcher, mutableListOf(), mesh = mesh, messageLimits = limits), mesh)
         } finally {

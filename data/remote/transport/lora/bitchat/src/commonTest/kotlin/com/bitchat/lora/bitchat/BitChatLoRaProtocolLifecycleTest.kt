@@ -7,6 +7,8 @@ import com.bitchat.lora.bitchat.protocol.MeshPacketFrame
 import com.bitchat.lora.bitchat.protocol.HeartbeatPayload
 import com.bitchat.lora.radio.LoRaConfig
 import com.bitchat.lora.radio.LoRaEvent
+import com.bitchat.transport.RadioPurpose
+import com.bitchat.transport.RadioSendResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -44,6 +46,36 @@ class BitChatLoRaProtocolLifecycleTest {
         override fun startReceiving() { starts++ }
         override fun send(data: ByteArray): Boolean { sent += data; sentAt += clock(); return isReady }
         override suspend fun shutdown() { stopGate?.await(); isReady = false; shutdowns++ }
+    }
+
+    @Test
+    fun meshRadioLinkHearsPeerIdsWithoutCaseAndFramesAUsersOpening() = protocolTest {
+        val radio = Radio { testScheduler.currentTime }
+        val protocol = protocol(radio, testScheduler)
+        assertTrue(protocol.start(LoRaConfig.US_915))
+        val peer = "AbCdEf0123456789"
+        radio.events.emit(LoRaEvent.PacketReceived(
+            LoRaFrame(9u, 0u, 1u, LoRaFrame.FLAG_HEARTBEAT, HeartbeatPayload(peer, "Remote").toBytes()).toBytes(), -50, 5f
+        ))
+        runCurrent()
+
+        val link = protocol.meshPacketLink
+        assertTrue(link.hears(peer.lowercase()))
+        assertFalse(link.hears("0000000000000000"))
+        val packet = byteArrayOf(1, 2, 3)
+        val sending = async { link.send(packet, peer, RadioPurpose.HandshakeOpening(byUser = true)) }
+        advanceTimeBy(2_000)
+        runCurrent()
+
+        assertEquals(RadioSendResult.SENT, sending.await())
+        assertContentEquals(packet, radio.sent.mapNotNull(MeshPacketFrame::decode).single())
+        assertEquals(1, (link as BitChatMeshRadioLink).keptHolds())
+
+        // Stopped: the radio fails at once (nobody is to wait for time on air that will not come),
+        // and nothing is kept for a handshake whose hold went with the transmitter.
+        protocol.stop()
+        assertEquals(RadioSendResult.FAILED, link.send(packet, peer, RadioPurpose.PrivateMessage))
+        assertEquals(0, link.keptHolds())
     }
 
     @Test

@@ -49,6 +49,12 @@ class NoiseEncryptionFacade(
         var users = 0
         /** Only this peer's lock reads or mutates these slots. */
         var established: NoiseSession? = null
+        /**
+         * The link the last message of [established]'s handshake arrived on. Written with it, in the
+         * one place a session becomes the established one, and only ever read beside it: what a
+         * session may be used for depends on where it was made, and the two must not be seen apart.
+         */
+        var establishedLink: String = ""
         var candidate: NoiseSession? = null
         /** Validated predecessor used only to read during recovery. */
         var fallback: NoiseSession? = null
@@ -198,6 +204,17 @@ class NoiseEncryptionFacade(
     }
 
     /**
+     * The link the established session's handshake completed on; null when there is no established
+     * session. One look under the peer's lock: a session and where it was made are never seen apart.
+     */
+    fun establishedSessionLink(peerID: String, now: Long = currentTimeMillis()): String? {
+        return withPeerLock(peerID) { state ->
+            retireExpiredFallback(state, now)
+            state.established?.takeIf { it.isEstablished() }?.let { state.establishedLink }
+        }
+    }
+
+    /**
      * True while the FIRST handshake with [peerID] has been started and has not completed or failed.
      *
      * A renegotiation running beside an established session is deliberately not "handshaking": the
@@ -274,7 +291,8 @@ class NoiseEncryptionFacade(
         message: ByteArray,
         localStaticPrivateKey: ByteArray,
         localStaticPublicKey: ByteArray,
-        now: Long
+        now: Long,
+        link: String
     ): HandshakeResult? {
         val isOpening = message.size == NoiseConstants.XX_MESSAGE_1_SIZE
         val pending = state.candidate
@@ -284,7 +302,7 @@ class NoiseEncryptionFacade(
         if (state.established?.isEstablished() != true) return null
 
         if (pending != null && !isOpening) {
-            return advanceRenegotiation(peerID, state, pending, message, now)
+            return advanceRenegotiation(peerID, state, pending, message, now, link)
         }
 
         if (!isOpening) {
@@ -302,7 +320,7 @@ class NoiseEncryptionFacade(
             localStaticPublicKey = localStaticPublicKey
         )
         setCandidate(state, session, initiated = false, destroyPrevious = true)
-        return advanceRenegotiation(peerID, state, session, message, now)
+        return advanceRenegotiation(peerID, state, session, message, now, link)
     }
 
     /** Feed [message] to a renegotiation, promoting it if it completes and dropping it if it fails. */
@@ -311,7 +329,8 @@ class NoiseEncryptionFacade(
         state: PeerLock,
         session: NoiseSession,
         message: ByteArray,
-        now: Long
+        now: Long,
+        link: String
     ): HandshakeResult {
         val response = try {
             session.processHandshakeMessage(message)
@@ -322,7 +341,7 @@ class NoiseEncryptionFacade(
         }
 
         if (session.isEstablished()) {
-            return validateAndPromote(peerID, state, session, response, now)
+            return validateAndPromote(peerID, state, session, response, now, link)
         }
         return response?.let(HandshakeResult::Response) ?: HandshakeResult.Ignored
     }
@@ -380,7 +399,7 @@ class NoiseEncryptionFacade(
             // MessageHandler into the per-peer actor loop in PacketProcessor and kill that coroutine,
             // after which every packet from this peer is swallowed by a channel with no consumer.
             // Nothing about the call site guarantees it cannot throw, so it is covered.
-            renegotiation(peerID, state, message, localStaticPrivateKey, localStaticPublicKey, now)
+            renegotiation(peerID, state, message, localStaticPrivateKey, localStaticPublicKey, now, link)
                 ?.let { return@withPeerLock it }
 
             val collision = collisionVerdict(peerID, state, message, now)
@@ -418,7 +437,7 @@ class NoiseEncryptionFacade(
 
                 val response = session.processHandshakeMessage(message)
                 if (session.isEstablished()) {
-                    validateAndPromote(peerID, state, session, response, now)
+                    validateAndPromote(peerID, state, session, response, now, link)
                 } else {
                     response?.let(HandshakeResult::Response) ?: HandshakeResult.Ignored
                 }
@@ -482,14 +501,25 @@ class NoiseEncryptionFacade(
     /** Test hook: runs after a session has been picked to go and before its peer's lock is taken. */
     internal var beforePushingOut: ((String) -> Unit)? = null
 
-    fun encrypt(peerID: String, data: ByteArray, now: Long = currentTimeMillis()): ByteArray? {
+    fun encrypt(peerID: String, data: ByteArray, now: Long = currentTimeMillis()): ByteArray? =
+        encryptNamingLink(peerID, data, now)?.bytes
+
+    /** What [encryptNamingLink] made, and the link the handshake of the session it was made in completed on. */
+    class Encrypted(val bytes: ByteArray, val sessionLink: String)
+
+    /**
+     * [encrypt], which also says where the session it used was made: read under the same lock as
+     * the session, so the answer is about the very session these bytes belong to, whatever replaces
+     * it a moment later.
+     */
+    fun encryptNamingLink(peerID: String, data: ByteArray, now: Long = currentTimeMillis()): Encrypted? {
         return withPeerLock(peerID) { state ->
             retireExpiredFallback(state, now)
             val encrypted = state.established
                 ?.takeIf { it.isEstablished() }
                 ?.encrypt(data)
             if (encrypted != null) touchSession(peerID)
-            encrypted
+            encrypted?.let { Encrypted(it, state.establishedLink) }
         }
     }
 
@@ -623,7 +653,8 @@ class NoiseEncryptionFacade(
         state: PeerLock,
         candidate: NoiseSession,
         response: ByteArray?,
-        now: Long
+        now: Long,
+        link: String
     ): HandshakeResult {
         val remoteStaticKey = candidate.getRemoteStaticPublicKey()
         val rawID = remoteStaticKey?.hexPrefix()
@@ -647,6 +678,7 @@ class NoiseEncryptionFacade(
             state.fallback = previousEstablished
         }
         state.established = candidate
+        state.establishedLink = link
         state.fallbackEstablishedAt = state.fallback?.let { now }
         touchSession(peerID)
         println("[NoiseEncryptionFacade] Noise identity validated for $peerID; session established")

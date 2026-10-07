@@ -75,6 +75,32 @@ class ChatRepoOversizedFileSendTest {
         chatRepo.sendMessage(file.toString(), Channel.MeshDM("peer"), "me", BitchatMessageType.Audio)
 
         verify(exactly = 1) { mesh.sendFilePrivate("peer", match { it.content.size == limit }) }
+        assertEquals(DeliveryStatus.Sent, chatRepo.getPrivateChats().getValue("peer").single().deliveryStatus)
+    }
+
+    @Test
+    fun aPrivateVoiceNoteTheMeshServiceStartsNothingForIsShownAsNotSent() = withChatRepo { chatRepo, mesh, directory ->
+        chatRepo.assertShownAsNotSentWhenTheServiceRefuses(mesh, audioFile(directory, 16), BitchatMessageType.Audio)
+    }
+
+    @Test
+    fun aPrivateImageTheMeshServiceStartsNothingForIsShownAsNotSent() = withChatRepo { chatRepo, mesh, directory ->
+        // Small enough to be sent as it is, whatever is in it.
+        val picture = directory.resolve("picture.png").also { it.writeBytes(ByteArray(16) { 1 }) }
+        chatRepo.assertShownAsNotSentWhenTheServiceRefuses(mesh, picture, BitchatMessageType.Image)
+    }
+
+    /** The mesh had the peer when the repository looked; when the service looked, its way out was the radio. */
+    private suspend fun ChatRepo.assertShownAsNotSentWhenTheServiceRefuses(mesh: BluetoothMeshService, file: Path, type: BitchatMessageType) {
+        every { mesh.getPeerInfo("peer") } returns mockk<PeerInfo>(relaxed = true).also { every { it.isConnected } returns true }
+        every { mesh.hasEstablishedSession("peer") } returns true
+        every { mesh.sendFilePrivate("peer", any()) } returns false
+
+        sendMessage(file.toString(), Channel.MeshDM("peer"), "me", type)
+
+        verify(exactly = 1) { mesh.sendFilePrivate("peer", any()) }
+        val status = assertIs<DeliveryStatus.Failed>(getPrivateChats().getValue("peer").single().deliveryStatus)
+        assertEquals("not sent over LoRa", status.reason)
     }
 
     private fun audioFile(directory: Path, size: Int): Path =
@@ -85,6 +111,8 @@ class ChatRepoOversizedFileSendTest {
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val mesh = mockk<BluetoothMeshService>(relaxed = true)
+        // And false, which the real service says only of a file it starts nothing for.
+        every { mesh.sendFilePrivate(any(), any()) } returns true
         try {
             block(chatRepo(scope, dispatcher, mutableListOf(), mesh = mesh), mesh, directory)
         } finally {

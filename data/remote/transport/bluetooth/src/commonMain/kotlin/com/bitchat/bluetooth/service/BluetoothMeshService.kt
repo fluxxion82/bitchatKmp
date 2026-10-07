@@ -22,6 +22,8 @@ import com.bitchat.bluetooth.protocol.BitchatPacket
 import com.bitchat.bluetooth.protocol.IdentityAnnouncement
 import com.bitchat.bluetooth.protocol.MessageType
 import com.bitchat.bluetooth.protocol.LORA_LINK
+import com.bitchat.bluetooth.protocol.MAX_LORA_PACKET_BYTES
+import com.bitchat.bluetooth.protocol.LORA_PRIVATE_TEXT_BYTES
 import com.bitchat.bluetooth.protocol.LoRaIngressResult
 import com.bitchat.bluetooth.protocol.SpecialRecipients
 import com.bitchat.bluetooth.protocol.admitFromLoRa
@@ -33,11 +35,15 @@ import com.bitchat.domain.chat.model.BitchatFilePacket
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.BitchatMessageType
 import com.bitchat.domain.chat.model.DeliveryStatus
+import com.bitchat.domain.chat.model.PrivateMessageText
 import com.bitchat.domain.chat.model.nextSendTime
 import com.bitchat.domain.user.UNKNOWN_PEER_NICKNAME
 import com.bitchat.noise.model.NoisePayload
 import com.bitchat.noise.model.NoisePayloadType
 import com.bitchat.noise.model.PrivateMessagePacket
+import com.bitchat.transport.MeshRadioLink
+import com.bitchat.transport.RadioPurpose
+import com.bitchat.transport.RadioSendResult
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.CancellationException
@@ -48,12 +54,16 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.concurrent.Volatile
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -80,6 +90,11 @@ class BluetoothMeshService(
     // How long a private message waits for the one before it to reach the links. A parameter so a
     // test can make it short, or too long to wait out.
     private val privateSendHandoverWaitMs: Long = PRIVATE_SEND_HANDOVER_WAIT_MS,
+    private val radioRetryMs: Long = RADIO_RETRY_MS,
+    private val radioGiveUpMs: Long = RADIO_GIVE_UP_MS,
+    // What the wait for the radio is measured with: a clock that only goes forward, whatever is done
+    // to the device's time of day (a board without a battery clock has its own set after it starts).
+    private val radioWaitClock: TimeSource = TimeSource.Monotonic,
 ) : ConnectionEstablishedCallback {
     val myPeerID: String = cryptoSigning.getIdentityFingerprint()
 
@@ -104,6 +119,60 @@ class BluetoothMeshService(
 
     var delegate: BluetoothMeshDelegate? = null
 
+    /** The LoRa radio as a second way to a peer. Set by the repository; null where there is no radio. */
+    @Volatile
+    var radioLink: MeshRadioLink? = null
+
+    /**
+     * Whether what this device starts for [peerID] would go over the radio: the mesh does not have
+     * the peer, the radio hears it, and either there is no session yet (the handshake will show
+     * whether the key holder is there) or the session was itself made over the radio. A session made
+     * over Bluetooth is not used over the radio on a heartbeat's word: a forged heartbeat would
+     * otherwise turn what is written to an absent peer into frames nobody receives.
+     */
+    fun reachesByRadio(peerID: String): Boolean = goesByRadio(peerID, arrivedOn = null)
+
+    /**
+     * Whether a packet for [peerID] goes out over the radio. An answer ([arrivedOn] is the link its
+     * cause came in on) goes back the way its cause came. What this device starts goes over
+     * Bluetooth whenever the mesh has the peer, as it always did; see [reachesByRadio] for the rest.
+     */
+    private fun goesByRadio(peerID: String, arrivedOn: String?): Boolean {
+        if (radioLink == null) return false
+        if (arrivedOn != null) return arrivedOn == LORA_LINK
+        // A heartbeat only says that someone claiming an id is in range; a handshake that completed
+        // over the radio shows its key holder was. Where a session was made is kept with the session
+        // and read with it in one look: there is no moment at which a session made over Bluetooth
+        // has taken the place of one made over the radio and still counts as that one.
+        val made = noiseEncryption.establishedSessionLink(peerID)
+        return (made == null || made == LORA_LINK) && radioReaches(peerID)
+    }
+
+    /** Whether the radio is [peerID]'s way out as far as the links go: the mesh does not have it and the radio hears it. */
+    private fun radioReaches(peerID: String): Boolean {
+        val link = radioLink ?: return false
+        return !meshHas(peerID) && link.hears(peerID)
+    }
+
+    /** Whether the mesh has [peerID] as a connected peer: the condition under which a private message is handed to the Bluetooth links. */
+    private fun meshHas(peerID: String): Boolean = peerManager.getPeer(peerID)?.isConnected == true
+
+    /**
+     * Whether a private message for [peerID] that does not go over the radio has no way out at all:
+     * on a device with a radio, the Bluetooth links are for the peers the mesh has. A message for
+     * anybody else was handed over because the radio reached its peer; when the radio no longer does,
+     * it is said not to have gone. Handing it to whatever links there are would leave it standing as
+     * sent on the word of a link layer that cannot tell whether anything took it.
+     */
+    private fun isOutOfReach(peerID: String): Boolean = radioLink != null && !meshHas(peerID)
+
+    /**
+     * [packet] as the radio carries it: never relayed (TTL 0), unsigned, neither padded nor
+     * compressed. Whether it fits a frame is the radio link's to say.
+     */
+    private fun radioBytes(packet: BitchatPacket): ByteArray? =
+        BinaryProtocol.encodeExact(packet.copy(ttl = 0u, signature = null))
+
     private var isActive = false
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -120,6 +189,14 @@ class BluetoothMeshService(
     // For each peer, the handover of the last private message sent to it while that still runs.
     // Touched only by the one coroutine that takes messages off privateSends.
     private val handovers = mutableMapOf<String, Job>()
+
+    // What goes over the radio is kept apart: every radio handover that still runs, whoever it is
+    // for, oldest first. What waits for the radio is bounded by it, and a radio message waits for
+    // all of those to its own peer, however many went over Bluetooth in between; a Bluetooth message
+    // never waits for one that is waiting for time on air. Touched only by that same coroutine.
+    private val waitingForRadio = mutableListOf<RadioHandover>()
+
+    private class RadioHandover(val peerID: String, val job: Job)
 
     // A handover that another one waited for in vain. Read and written by the handovers themselves.
     @Volatile
@@ -365,9 +442,9 @@ class BluetoothMeshService(
                 logInfo("BluetoothMeshService", "Noise handshake received from $peerID")
             }
 
-            override fun onHandshakeResponse(peerID: String, responsePacket: ByteArray) {
+            override fun onHandshakeResponse(peerID: String, responsePacket: ByteArray, link: String, final: Boolean) {
                 logInfo("BluetoothMeshService", "Sending handshake response to $peerID")
-                sendNoiseHandshakePacket(peerID, responsePacket)
+                this@BluetoothMeshService.onHandshakeResponse(peerID, responsePacket, link, final)
             }
 
             override fun onSessionUnusable(peerID: String) {
@@ -631,9 +708,19 @@ class BluetoothMeshService(
             )
             return false
         }
-        privateSends.trySend(PrivateSend(recipientPeerID, messageData))
+        // Refused here when it is known already that it would take the radio and not fit a frame; the
+        // way out is decided again when the message is encrypted, and what does not fit then is
+        // reported as failed.
+        if (goesByRadio(recipientPeerID, arrivedOn = null) && !fitsARadioFrame(messageData)) return false
+        privateSends.trySend(PrivateSend(recipientPeerID, messageData, messageID))
         return true
     }
+
+    /** A Noise message adds 20 bytes (its number and its tag) and an addressed packet 30 of header and ids. */
+    private fun fitsARadioFrame(plaintext: ByteArray): Boolean = plaintext.size + 20 + 30 <= MAX_LORA_PACKET_BYTES
+
+    fun privateTextLimitFor(peerID: String): Int =
+        if (goesByRadio(peerID, arrivedOn = null)) LORA_PRIVATE_TEXT_BYTES else PrivateMessageText.MAX_BYTES
 
     private suspend fun deliverPrivateMessage(send: PrivateSend) {
         try {
@@ -644,14 +731,41 @@ class BluetoothMeshService(
                 )
                 // Don't initiate handshake here - that's ChatRepo's responsibility
                 // ChatRepo queues messages and initiates handshake once
+                failed(send, "no session with the peer any more")
                 return
             }
 
-            val encryptedPayload = noiseEncryption.encrypt(send.recipientPeerID, send.payload)
-            if (encryptedPayload == null) {
-                logError("BluetoothMeshService", "Failed to encrypt message for ${send.recipientPeerID}")
+            // The way out is decided here, with the session the message is about to be encrypted in,
+            // not when the message was handed over: the session can have been made again over another
+            // link in between, and one made over Bluetooth is not used over the radio.
+            val byRadio = goesByRadio(send.recipientPeerID, arrivedOn = null)
+            if (!byRadio && isOutOfReach(send.recipientPeerID)) {
+                failed(send, OUT_OF_REACH)
                 return
             }
+            if (byRadio) {
+                // Before a number of the session is used for it.
+                waitingForRadio.removeAll { !it.job.isActive }
+                val refusal = when {
+                    !fitsARadioFrame(send.payload) -> "too long for one LoRa frame"
+                    waitingForRadio.size >= MAX_WAITING_RADIO_MESSAGES -> "too many messages are waiting for the radio"
+                    else -> null
+                }
+                if (refusal != null) {
+                    failed(send, refusal)
+                    return
+                }
+            }
+
+            val encrypted = noiseEncryption.encryptNamingLink(send.recipientPeerID, send.payload)
+            if (encrypted == null) {
+                failed(send, "it could not be encrypted")
+                return
+            }
+            val encryptedPayload = encrypted.bytes
+            // Said by the encryption itself, of the session it used: the look above was at a session
+            // that may have been replaced since.
+            val madeOverRadio = encrypted.sessionLink == LORA_LINK
 
             // Dated now that it is taken off the queue, not when it was put on: a receiver refuses
             // a packet whose time is too far from its own. From here it leaves within the handover
@@ -665,6 +779,33 @@ class BluetoothMeshService(
                 ttl = 3u
             )
 
+            if (byRadio) {
+                // Behind every radio message to this peer that has not ended, not only the one before
+                // it: that one may give up waiting and end while an earlier one is still with the
+                // radio. Whether the radio is still the way out is looked at before every offer, the
+                // first one too: had the session been made again over Bluetooth while this message
+                // was encrypted, it leaves for the Bluetooth links from there.
+                val ahead = waitingForRadio.filter { it.peerID == send.recipientPeerID }.map { it.job }
+                val handedOver = radioWaitClock.markNow()
+                val handover = serviceScope.launch {
+                    // For as long as this one may wait at all and no longer: whatever keeps them,
+                    // this one ends too. (A coroutine's timeout does not follow the time of day.)
+                    if (withTimeoutOrNull(radioGiveUpMs) { ahead.joinAll() } == null) {
+                        failed(send, "no time on air for it")
+                        return@launch
+                    }
+                    try {
+                        sendOverRadioUntilSent(packet, send, handedOver, madeOverRadio)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        failed(send, "an error")
+                    }
+                }
+                waitingForRadio += RadioHandover(send.recipientPeerID, handover)
+                return
+            }
+
             // Behind the message sent to this peer before it, and behind nobody else's: the wait is
             // the handover's own, so the next message, whoever it is for, is taken up at once.
             handovers.values.removeAll { !it.isActive }
@@ -677,6 +818,66 @@ class BluetoothMeshService(
             throw e
         } catch (e: Exception) {
             logError("BluetoothMeshService", "Error sending private message: ${e.message}")
+            failed(send, "an error")
+        }
+    }
+
+    /**
+     * Tells the delegate that a private message handed to this service has not gone out. Every message
+     * taken off the queue is handed to the Bluetooth links (only without a radio, or for a peer the
+     * mesh has: as it always was), leaves the air, or ends here.
+     */
+    private fun failed(send: PrivateSend, reason: String) {
+        logError("BluetoothMeshService", "Private message to ${send.recipientPeerID} not sent: $reason")
+        send.messageID?.let { delegate?.didFailToSendPrivateMessage(it, send.recipientPeerID, reason) }
+    }
+
+    /**
+     * Offers [packet] to the radio until it has gone out. Without time on air left it is offered
+     * again, the same bytes, every [radioRetryMs]. Given up, and reported as failed, [radioGiveUpMs]
+     * after the message was handed over ([handedOver]: the wait behind the messages before it
+     * counts), or at once when the radio itself fails. Nothing is offered that was not encrypted in
+     * a session made over the radio ([madeOverRadio]: the encryption's own word, of the session it
+     * used, whatever session has taken its place since). Should that not be so, or should the radio
+     * stop reaching this peer while it waits, the same packet goes to
+     * the Bluetooth links when the mesh has the peer by then, as any private message for such a peer
+     * does (and is reported as failed when they say none of them took it), and is reported as failed
+     * otherwise (the peer is no longer heard, or the session was made again over Bluetooth while the
+     * mesh does not have the peer).
+     */
+    private suspend fun sendOverRadioUntilSent(packet: BitchatPacket, send: PrivateSend, handedOver: TimeMark, madeOverRadio: Boolean) {
+        val peerID = send.recipientPeerID
+        val bytes = radioBytes(packet)
+        if (bytes == null) {
+            failed(send, "too long for one LoRa frame")
+            return
+        }
+        while (true) {
+            if (!madeOverRadio || !radioReaches(peerID)) {
+                if (isOutOfReach(peerID)) {
+                    failed(send, OUT_OF_REACH)
+                    return
+                }
+                // The mesh has the peer now. On its own: a Bluetooth write that never answers must
+                // hold up nothing that waits for the radio. And when the links say that none of them
+                // took it, the message has gone nowhere.
+                serviceScope.launch { if (!sendPacket(packet)) failed(send, "no link carried it") }
+                return
+            }
+            when (radioLink?.send(bytes, peerID, RadioPurpose.PrivateMessage)) {
+                RadioSendResult.SENT -> return
+                RadioSendResult.NO_TIME_ON_AIR -> {
+                    if (handedOver.elapsedNow() >= radioGiveUpMs.milliseconds) {
+                        failed(send, "no time on air for it")
+                        return
+                    }
+                    delay(radioRetryMs)
+                }
+                RadioSendResult.FAILED, null -> {
+                    failed(send, "the radio failed")
+                    return
+                }
+            }
         }
     }
 
@@ -912,7 +1113,7 @@ class BluetoothMeshService(
      */
     fun initiateNoiseHandshake(peerID: String) {
         noiseEncryption.markChosenByUser(peerID)
-        startHandshake(peerID, byUser = true)
+        startHandshake(peerID, byUser = true, paidByUser = true)
     }
 
     internal fun sessionIsChosenByUser(peerID: String): Boolean = noiseEncryption.isChosenByUser(peerID)
@@ -920,8 +1121,9 @@ class BluetoothMeshService(
     /**
      * [byUser] says who wanted this handshake: the user (a private message was sent to the peer) or
      * this node by itself (a recovery, a retry). It only decides which kind of owed entry is kept.
+     * [paidByUser] is true only for the call the user's own action makes: see [openOverRadio].
      */
-    private fun startHandshake(peerID: String, byUser: Boolean) {
+    private fun startHandshake(peerID: String, byUser: Boolean, paidByUser: Boolean = false) {
         serviceScope.launch {
             try {
                 // Get Noise static keys from crypto signing facade
@@ -963,6 +1165,11 @@ class BluetoothMeshService(
                     ttl = 3u
                 )
 
+                if (goesByRadio(peerID, arrivedOn = null)) {
+                    openOverRadio(peerID, packet, byUser, paidByUser)
+                    return@launch
+                }
+
                 // An attempt only counts once a link has actually carried it. Counting a send
                 // into nothing burned the budget while the peer could not possibly answer, and by
                 // the time a link existed the peer had none left.
@@ -993,6 +1200,38 @@ class BluetoothMeshService(
 
             } catch (e: Exception) {
                 logError("BluetoothMeshService", "Error initiating handshake: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Sends the opening of the handshake just started with [peerID] over the radio.
+     *
+     * [paidByUser]: only an opening the user has just asked for is paid from what belongs to the
+     * user. A retry or a restart, whoever the handshake is owed to, is something a received packet
+     * can bring about, and is paid like anything else this device starts by itself.
+     *
+     * The radio reports a frame only once it has left the air. By then the peer may have answered,
+     * the sweeper may have given the attempt up and another may have begun, so what is recorded or
+     * undone afterwards is recorded or undone only for the attempt this opening belongs to, known by
+     * the moment it began.
+     */
+    private suspend fun openOverRadio(peerID: String, packet: BitchatPacket, byUser: Boolean, paidByUser: Boolean) {
+        val attempt = noiseEncryption.handshakesInFlight()[peerID]
+        val result = radioBytes(packet)?.let { bytes ->
+            radioLink?.send(bytes, peerID, RadioPurpose.HandshakeOpening(byUser = paidByUser))
+        }
+        handshakeMutex.withLock {
+            if (attempt == null || noiseEncryption.handshakesInFlight()[peerID] != attempt) return
+            if (result == RadioSendResult.SENT) {
+                val now = Clock.System.now().toEpochMilliseconds()
+                handshakeSupervisor.recordAttempt(peerID, now)
+                recordStartedAt(peerID, now)
+                rememberOwed(peerID, byUser)
+            } else {
+                logInfo("BluetoothMeshService", "The radio did not carry a handshake to $peerID ($result)")
+                noiseEncryption.abandonHandshake(peerID)
+                rememberOwed(peerID, byUser)
             }
         }
     }
@@ -1041,6 +1280,27 @@ class BluetoothMeshService(
             } catch (e: Exception) {
                 logError("BluetoothMeshService", "Error sending handshake response: ${e.message}")
             }
+        }
+    }
+
+    private fun onHandshakeResponse(peerID: String, handshakeData: ByteArray, link: String, final: Boolean) {
+        if (!goesByRadio(peerID, link)) {
+            sendNoiseHandshakePacket(peerID, handshakeData)
+            return
+        }
+        serviceScope.launch {
+            val packet = BitchatPacket(
+                type = MessageType.NOISE_HANDSHAKE.value,
+                senderID = BitchatPacket.hexStringToByteArray(myPeerID),
+                recipientID = BitchatPacket.hexStringToByteArray(peerID),
+                timestamp = Clock.System.now().toEpochMilliseconds().toULong(),
+                payload = handshakeData,
+                ttl = 0u,
+            )
+            val result = radioBytes(packet)?.let { bytes ->
+                radioLink?.send(bytes, peerID, if (final) RadioPurpose.HandshakeFinal else RadioPurpose.HandshakeAnswer)
+            } ?: RadioSendResult.FAILED
+            if (result != RadioSendResult.SENT) logError("BluetoothMeshService", "Radio handshake response to $peerID: $result")
         }
     }
 
@@ -1146,8 +1406,16 @@ class BluetoothMeshService(
         }
     }
 
-    fun sendFilePrivate(recipientPeerID: String, file: BitchatFilePacket) {
+    /**
+     * False when nothing is started for the file because this peer's way out is the radio, which
+     * carries no files: said here, on the caller's thread, so that the caller can say so in turn.
+     */
+    fun sendFilePrivate(recipientPeerID: String, file: BitchatFilePacket): Boolean {
         noiseEncryption.markChosenByUser(recipientPeerID)
+        if (goesByRadio(recipientPeerID, arrivedOn = null)) {
+            logInfo("BluetoothMeshService", "Private file to $recipientPeerID is not sent over LoRa")
+            return false
+        }
         serviceScope.launch {
             try {
                 if (!securityManager.hasEstablishedSession(recipientPeerID)) {
@@ -1203,6 +1471,7 @@ class BluetoothMeshService(
                 logError("BluetoothMeshService", "Error sending private file: ${e.message}")
             }
         }
+        return true
     }
 
     fun sendMessage(content: String, mentions: List<String> = emptyList()) {
@@ -1245,11 +1514,17 @@ class BluetoothMeshService(
         return hash.joinToString("") { it.toHexString() }
     }
 
-    private class PrivateSend(val recipientPeerID: String, val payload: ByteArray)
+    private class PrivateSend(val recipientPeerID: String, val payload: ByteArray, val messageID: String?)
 
     companion object {
         /** How long a private message waits for the one before it, to the same peer, to reach the links. */
         const val PRIVATE_SEND_HANDOVER_WAIT_MS = 2_000L
+        const val RADIO_RETRY_MS = 1_000L
+        const val RADIO_GIVE_UP_MS = 180_000L
+
+        /** Private messages that may wait for the radio at one time; one more is reported as failed. */
+        const val MAX_WAITING_RADIO_MESSAGES = 16
+        const val OUT_OF_REACH = "the peer is out of reach"
 
         /**
          * How far the time on an encrypted packet may run ahead of the clock (see [nextSendTime]).
@@ -1274,4 +1549,11 @@ interface BluetoothMeshDelegate {
     suspend fun onSessionEstablished(peerID: String)
     fun didReceivePublicFile(peerID: String, filePacket: BitchatFilePacket)
     fun didReceiveAuthenticatedPrivateFile(peerID: String, filePacket: BitchatFilePacket)
+
+    /**
+     * A private message this service had accepted ([messageID] as given to `sendPrivateMessage`) will
+     * not go out after all: it was meant for the radio and did not fit, got no time on air, or the
+     * radio failed.
+     */
+    fun didFailToSendPrivateMessage(messageID: String, recipientPeerID: String, reason: String) = Unit
 }

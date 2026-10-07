@@ -127,6 +127,39 @@ object BinaryProtocol {
         }
     }
 
+    /** Encodes the one exact packet shape accepted from the radio, without traffic padding. */
+    fun encodeExact(packet: BitchatPacket): ByteArray? {
+        if (
+            packet.version != 1.toUByte() || packet.signature != null || packet.payload.isEmpty() ||
+            packet.payload.size > UShort.MAX_VALUE.toInt() || packet.senderID.size != SENDER_ID_SIZE ||
+            (packet.recipientID != null && packet.recipientID.size != RECIPIENT_ID_SIZE)
+        ) return null
+        return try {
+            val recipientBytes = if (packet.recipientID != null) RECIPIENT_ID_SIZE else 0
+            val buffer = ByteArray(HEADER_SIZE_V1 + SENDER_ID_SIZE + recipientBytes + packet.payload.size)
+            var offset = 0
+            buffer[offset++] = packet.version.toByte()
+            buffer[offset++] = packet.type.toByte()
+            buffer[offset++] = packet.ttl.toByte()
+            val timestamp = packet.timestamp
+            for (shift in 56 downTo 0 step 8) buffer[offset++] = (timestamp shr shift).toByte()
+            var flags: UByte = 0u
+            if (packet.recipientID != null) flags = flags or Flags.HAS_RECIPIENT
+            buffer[offset++] = flags.toByte()
+            val size = packet.payload.size
+            buffer[offset++] = (size shr 8).toByte()
+            buffer[offset++] = size.toByte()
+            packet.senderID.copyInto(buffer, offset)
+            offset += SENDER_ID_SIZE
+            packet.recipientID?.copyInto(buffer, offset)?.also { offset += RECIPIENT_ID_SIZE }
+            packet.payload.copyInto(buffer, offset)
+            buffer
+        } catch (e: Exception) {
+            logError("BinaryProtocol", "Error encoding exact packet type ${packet.type}: ${e.message}")
+            null
+        }
+    }
+
     fun decode(data: ByteArray): BitchatPacket? {
         // Try decode as-is first (robust when padding wasn't applied)
         decodeCore(data)?.let { return it }

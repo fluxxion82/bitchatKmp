@@ -120,6 +120,16 @@ internal class LoRaTransmitter(
         mutex.withLock { queue.release(hold) }
     }
 
+    /** What is spent or set aside of [ledger] right now, for tests. */
+    internal suspend fun takenMicros(ledger: Ledger): Long = mutex.withLock {
+        queue.countedMicros(ledger, clockMillis()) + queue.reservedMicros(ledger)
+    }
+
+    /** What is spent or set aside for [cause] right now, for tests. */
+    internal suspend fun takenMicros(cause: Cause): Long = mutex.withLock {
+        queue.countedMicros(cause, clockMillis()) + queue.reservedMicros(cause)
+    }
+
     private suspend fun work() {
         try {
             while (true) {

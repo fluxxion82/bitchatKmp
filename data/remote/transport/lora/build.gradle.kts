@@ -48,7 +48,8 @@ kotlin {
     sourceSets {
         val commonMain by getting {
             dependencies {
-                implementation(project(":data:remote:transport"))
+                // api: LoRaProtocol names MeshRadioLink, so every stack that implements it sees the type.
+                api(project(":data:remote:transport"))
                 implementation(project(":data:cache"))
 
                 implementation(libs.koin.core)

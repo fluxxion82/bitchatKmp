@@ -235,7 +235,7 @@ class MessageHandlerPendingBoundsTest {
         var response: ByteArray? = null
         val privateMessages = mutableListOf<String>()
         val unusable = mutableListOf<String>()
-        override fun onHandshakeResponse(peerID: String, responsePacket: ByteArray) { response = responsePacket }
+        override fun onHandshakeResponse(peerID: String, responsePacket: ByteArray, link: String, final: Boolean) { response = responsePacket }
         override fun onAuthenticatedPrivateMessage(peerID: String, messageId: String, content: String) { privateMessages += content }
         override fun onSessionUnusable(peerID: String) { unusable += peerID }
         override fun onPeerAnnounced(peerID: String, nickname: String) = Unit

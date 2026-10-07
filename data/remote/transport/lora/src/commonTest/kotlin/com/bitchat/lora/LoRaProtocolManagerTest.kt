@@ -14,6 +14,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import com.bitchat.transport.MeshRadioLink
+import com.bitchat.transport.RadioPurpose
+import com.bitchat.transport.RadioSendResult
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class LoRaProtocolManagerTest {
@@ -34,6 +37,8 @@ class LoRaProtocolManagerTest {
         var readyOnStart = true
         override var supportsRadioConfiguration = true
         var onStart: suspend () -> Unit = {}
+        var link: MeshRadioLink? = null
+        override val meshPacketLink get() = link
         override suspend fun start(config: LoRaConfig): Boolean {
             configs += config
             onStart()
@@ -63,6 +68,20 @@ class LoRaProtocolManagerTest {
         assertFalse(f.manager.peerIdsAreMeshIds)
         assertTrue(f.manager.switchProtocol(LoRaProtocolType.MESHTASTIC))
         assertFalse(f.manager.peerIdsAreMeshIds)
+    }
+
+    @Test fun meshPacketLinkFollowsTheActiveProtocolAtEachCall() = runTest {
+        val f = Fixture(backgroundScope)
+        val bitLink = object : MeshRadioLink {
+            override fun hears(peerID: String) = peerID == "bit"
+            override suspend fun send(packet: ByteArray, peerID: String, purpose: RadioPurpose) = RadioSendResult.SENT
+        }
+        f.bit.link = bitLink
+        assertTrue(f.manager.meshPacketLink.hears("bit"))
+        assertEquals(RadioSendResult.SENT, f.manager.meshPacketLink.send(byteArrayOf(1), "bit", RadioPurpose.PrivateMessage))
+        f.manager.switchProtocol(LoRaProtocolType.MESHCORE)
+        assertFalse(f.manager.meshPacketLink.hears("bit"))
+        assertEquals(RadioSendResult.FAILED, f.manager.meshPacketLink.send(byteArrayOf(1), "bit", RadioPurpose.PrivateMessage))
     }
 
     @Test fun stopFailurePreventsNextProtocolFromStarting() = runTest {

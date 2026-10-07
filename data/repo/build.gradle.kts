@@ -47,6 +47,7 @@ kotlin {
                 implementation(project(":data:local:platform"))
                 implementation(project(":data:remote:transport:nostr"))
                 implementation(project(":data:remote:transport:lora"))
+                implementation(project(":data:remote:transport"))
                 implementation(project(":data:mediautils"))
 
                 implementation(libs.koin.core)

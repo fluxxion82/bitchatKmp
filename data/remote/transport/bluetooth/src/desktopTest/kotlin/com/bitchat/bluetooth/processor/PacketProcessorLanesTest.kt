@@ -226,7 +226,7 @@ class PacketProcessorLanesTest {
         override fun onAuthenticatedDelivered(peerID: String, messageId: String) = Unit
         override fun onAuthenticatedRead(peerID: String, messageId: String) = Unit
         override fun onHandshakeReceived(peerID: String) = Unit
-        override fun onHandshakeResponse(peerID: String, responsePacket: ByteArray) { handshakeResponses += responsePacket }
+        override fun onHandshakeResponse(peerID: String, responsePacket: ByteArray, link: String, final: Boolean) { handshakeResponses += responsePacket }
         override fun onSessionEstablished(peerID: String) = Unit
         override fun onSessionUnusable(peerID: String) = Unit
         override fun onSessionNotShared(peerID: String) = Unit

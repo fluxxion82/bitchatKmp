@@ -86,6 +86,9 @@ internal class TransmitQueue {
         }
         pruneCharges(nowMillis)
         expireHolds(nowMillis)
+        // The only way a later local handshake message may exist is out of the reservation the
+        // user's opening made for this peer; remote traffic cannot take the user's ledger.
+        if (hold == null && requests.any { it.kind.fromHoldOnly }) return null
         if (requests.any { it.frame.size !in 1..LoRaFrame.MAX_FRAME_SIZE }) return null
         val airtimes = requests.map { config.airtimeMicros(it.frame.size) }
 

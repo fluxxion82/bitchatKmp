@@ -37,6 +37,20 @@ class TransmitQueueTest {
         assertNotNull(next(now).send, "nothing to send at $now").also { transmitted(it, end) }
 
     @Test
+    fun laterMessagesOfALocalHandshakeOnlyLeaveAHold() {
+        val queue = queue()
+        val kinds = listOf(
+            TransmitKind.LOCAL_HANDSHAKE_OPENING,
+            TransmitKind.LOCAL_HANDSHAKE_ANSWER,
+            TransmitKind.LOCAL_HANDSHAKE_FINAL,
+        )
+        kinds.forEach { kind -> assertNull(queue.offer(listOf(request(kind = kind)), 0)) }
+
+        val hold = assertNotNull(queue.hold(config.airtimeMicros(22) * 3, 3, 0, 15_000))
+        kinds.forEach { kind -> assertNotNull(queue.offer(listOf(request(kind = kind)), 0, hold)) }
+    }
+
+    @Test
     fun everyLimitFollowsTheBandwidthAndThreeFullFramesAMinuteFitAtEach() {
         val wide = queue(LoRaConfig(bandwidth = 500_000L))
         val narrow = queue()
@@ -207,10 +221,12 @@ class TransmitQueueTest {
     fun withinALedgerPriorityDecidesAndThenTheOrderOfAdmission() {
         val queue = queue()
         val public = queue.offer(listOf(request(1, TransmitKind.PUBLIC_MESSAGE)), 0)!!.single()
-        val opening = queue.offer(listOf(request(1, TransmitKind.LOCAL_HANDSHAKE_OPENING)), 0)!!.single()
+        val openingHold = assertNotNull(queue.hold(config.airtimeMicros(1), 1, 0, 15_000))
+        val opening = queue.offer(listOf(request(1, TransmitKind.LOCAL_HANDSHAKE_OPENING)), 0, openingHold)!!.single()
         val firstMessage = queue.offer(listOf(request(1, TransmitKind.PRIVATE_MESSAGE)), 0)!!.single()
         val secondMessage = queue.offer(listOf(request(1, TransmitKind.PRIVATE_MESSAGE)), 0)!!.single()
-        val final = queue.offer(listOf(request(1, TransmitKind.LOCAL_HANDSHAKE_FINAL)), 0)!!.single()
+        val finalHold = assertNotNull(queue.hold(config.airtimeMicros(1), 1, 0, 15_000))
+        val final = queue.offer(listOf(request(1, TransmitKind.LOCAL_HANDSHAKE_FINAL)), 0, finalHold)!!.single()
         assertEquals(listOf(final, firstMessage, secondMessage, opening, public), List(5) { queue.send(0) })
     }
 

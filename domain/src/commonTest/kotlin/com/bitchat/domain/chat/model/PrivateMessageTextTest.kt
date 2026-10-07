@@ -3,10 +3,35 @@ package com.bitchat.domain.chat.model
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PrivateMessageTextTest {
+
+    @Test
+    fun aPieceEndsAfterASpaceWhereThatLeavesItHalfFullOfTheLimitInUse() {
+        // 101 bytes up to and including the space: more than half of 141, less than half of 255.
+        val content = "a".repeat(100) + " " + "b".repeat(100)
+        assertEquals(listOf("a".repeat(100) + " ", "b".repeat(100)), PrivateMessageText.split(content, maxBytes = 141))
+    }
+
+    @Test
+    fun aLimitThatCouldNotHoldEveryCharacterIsRefused() {
+        assertFailsWith<IllegalArgumentException> { PrivateMessageText.split("abc", maxBytes = 3) }
+        assertEquals(listOf("ab", "cd"), PrivateMessageText.split("abcd", maxBytes = 4).let { listOf(it.joinToString("").take(2), it.joinToString("").drop(2)) })
+        assertEquals(listOf("😀", "😀"), PrivateMessageText.split("😀😀", maxBytes = 4))
+    }
+
+    @Test
+    fun aRadioSizedLimitKeepsEveryPieceWithinThatLimit() {
+        val content = ("small words make a message that needs more than one packet ").repeat(12)
+        val pieces = PrivateMessageText.split(content, maxBytes = 141)
+
+        assertEquals(content, pieces.joinToString(""))
+        assertTrue(pieces.all { bytes(it) <= 141 })
+        assertNull(PrivateMessageText.refusal(content, maxBytes = 141))
+    }
 
     @Test
     fun whatFitsOneMessageIsLeftAsItIs() {

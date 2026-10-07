@@ -83,6 +83,7 @@ kotlin {
                 implementation(project(":data:cache"))
                 implementation(project(":data:crypto"))
                 implementation(project(":data:noise"))
+                implementation(project(":data:remote:transport"))
                 implementation(project(":data:local:platform"))
 
                 implementation(libs.koin.core)

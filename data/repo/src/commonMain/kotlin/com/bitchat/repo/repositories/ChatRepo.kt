@@ -312,10 +312,14 @@ class ChatRepo(
 
         // Listen for incoming LoRa packets
         lora?.let { loraTransport ->
+            mesh.radioLink = loraTransport.meshPacketLink
             coroutineScopeFacade.applicationScope.launch {
                 loraTransport.incomingMessages.collect { packetBytes ->
                     handleLoRaPacket(packetBytes)
                 }
+            }
+            coroutineScopeFacade.applicationScope.launch {
+                loraTransport.incomingMeshPackets.collect { mesh.onLoRaPacketReceived(it) }
             }
         }
 
@@ -1436,6 +1440,8 @@ class ChatRepo(
     private fun fileTooLargeReason(): String =
         "file is larger than ${BitchatFilePacket.MAX_CONTENT_BYTES / 1024} KiB"
 
+    private fun notSentOverLoRaReason(): String = "not sent over LoRa"
+
     private fun maybeSendDeliveryAck(messageId: String, peerID: String) {
         if (!sentDeliveryAckIds.add(messageId)) return
         coroutineScopeFacade.nostrScope.launch {
@@ -1534,18 +1540,21 @@ class ChatRepo(
         messageType: BitchatMessageType,
         route: Channel? = null,
     ): Unit = withContext(coroutinesContextFacade.io) {
-        requireSendablePrivately(content, messageType)
-        val senderName = when (val user = userPreferences.getAppUser()) {
-            is AppUser.ActiveAnonymous -> user.name
-            AppUser.Anonymous -> "anon"
-        }
         // Read once: every piece of one text takes the same way out.
         val currentChannel = route ?: userPreferences.getUserState()
             ?.let { it as? UserState.Active }
             ?.activeState?.let { it as? ActiveState.Chat }
             ?.channel
+        // One message over the radio carries less than one over Bluetooth; read once for the whole
+        // text, and only for a mesh conversation: what goes through a relay is not cut for the radio.
+        val textLimit = if (currentChannel is Channel.MeshDM) mesh.privateTextLimitFor(toPeerID) else PrivateMessageText.MAX_BYTES
+        requireSendablePrivately(content, messageType, textLimit)
+        val senderName = when (val user = userPreferences.getAppUser()) {
+            is AppUser.ActiveAnonymous -> user.name
+            AppUser.Anonymous -> "anon"
+        }
 
-        val pieces = if (isSentAsFile(messageType)) listOf(content) else PrivateMessageText.split(content)
+        val pieces = if (isSentAsFile(messageType)) listOf(content) else PrivateMessageText.split(content, textLimit)
         for (piece in pieces) {
             sendPrivatePiece(piece, toPeerID, recipientNickname, messageType, senderName, currentChannel)
         }
@@ -1579,12 +1588,15 @@ class ChatRepo(
 
         when (currentChannel) {
             is Channel.MeshDM -> {
-                val hasMesh = mesh.getPeerInfo(toPeerID)?.isConnected == true
+                val connectedOnMesh = mesh.getPeerInfo(toPeerID)?.isConnected == true
+                val hasMesh = reachesOverMesh(toPeerID)
                 val hasEstablished = mesh.hasEstablishedSession(toPeerID)
 
                 println("🔍 sendPrivate [MeshDM]: toPeerID=$toPeerID, hasMesh=$hasMesh, hasEstablished=$hasEstablished")
 
-                if (hasMesh && hasEstablished) {
+                if (!connectedOnMesh && mesh.reachesByRadio(toPeerID) && isSentAsFile(messageType)) {
+                    updateDeliveryStatus(toPeerID, messageId, DeliveryStatus.Failed(notSentOverLoRaReason()))
+                } else if (hasMesh && hasEstablished) {
                     println("✅ Sending via mesh (established session)")
 
                     when (messageType) {
@@ -1606,7 +1618,7 @@ class ChatRepo(
                                 if (preparedImage.bytes.size > BitchatFilePacket.MAX_CONTENT_BYTES) {
                                     updateDeliveryStatus(toPeerID, messageId, DeliveryStatus.Failed(fileTooLargeReason()))
                                 } else {
-                                    mesh.sendFilePrivate(toPeerID, filePacket)
+                                    handFileToMesh(toPeerID, filePacket, messageId)
                                     println("📎 ChatRepo: Private compressed image sent to $toPeerID: ${logPath(preparedImage.fileName)} (${preparedImage.bytes.size} bytes, ${preparedImage.mimeType})")
                                 }
                             } else {
@@ -1629,7 +1641,7 @@ class ChatRepo(
                                 if (fileBytes.size > BitchatFilePacket.MAX_CONTENT_BYTES) {
                                     updateDeliveryStatus(toPeerID, messageId, DeliveryStatus.Failed(fileTooLargeReason()))
                                 } else {
-                                    mesh.sendFilePrivate(toPeerID, filePacket)
+                                    handFileToMesh(toPeerID, filePacket, messageId)
                                     println("📎 ChatRepo: Private audio file sent to $toPeerID: ${logPath(fileName)} (${fileBytes.size} bytes)")
                                 }
                             } else {
@@ -1643,7 +1655,7 @@ class ChatRepo(
                             val waitsInQueue = synchronized(outboxLock) {
                                 val queued = outbox[toPeerID]
                                 if (queued.isNullOrEmpty()) {
-                                    mesh.sendPrivateMessage(content, toPeerID, recipientNickname, messageId)
+                                    handToMesh(content, toPeerID, recipientNickname, messageId)
                                     false
                                 } else {
                                     queued.add(Triple(content, recipientNickname, messageId))
@@ -2084,7 +2096,8 @@ class ChatRepo(
             }
 
             is Channel.MeshDM -> {
-                requireSendablePrivately(content, messageType)
+                // Before the chat is opened: a text refused for what the peer's link carries leaves nothing behind.
+                requireSendablePrivately(content, messageType, mesh.privateTextLimitFor(channel.peerID))
                 initializePrivateDMIfNeeded(channel.peerID, openedAs = channel.displayName)
                 sendPrivate(
                     content = content,
@@ -2118,9 +2131,13 @@ class ChatRepo(
      * it is shown, queued or handed to a transport: no transport can send it, and none reports
      * that.
      */
-    private fun requireSendablePrivately(content: String, messageType: BitchatMessageType) {
+    private fun requireSendablePrivately(
+        content: String,
+        messageType: BitchatMessageType,
+        maxBytes: Int = PrivateMessageText.MAX_BYTES,
+    ) {
         if (isSentAsFile(messageType)) return
-        PrivateMessageText.refusal(content)?.let { throw IllegalArgumentException(it) }
+        PrivateMessageText.refusal(content, maxBytes)?.let { throw IllegalArgumentException(it) }
     }
 
     /** An image or a voice note carries a path as content and travels as a file, not as that text. */
@@ -2197,12 +2214,12 @@ class ChatRepo(
         val iterator = queued.iterator()
         while (iterator.hasNext()) {
             val (content, nickname, messageID) = iterator.next()
-            val hasMesh = mesh.getPeerInfo(peerID)?.isConnected == true && mesh.hasEstablishedSession(peerID)
+            val hasMesh = reachesOverMesh(peerID) && mesh.hasEstablishedSession(peerID)
             if (!hasMesh && peerID.length == 64 && peerID.matches(Regex("^[0-9a-fA-F]+$"))) {
                 val meshPeer = resolveMeshPeerForNoiseHex(peerID)
                 if (meshPeer != null && mesh.getPeerInfo(meshPeer)?.isConnected == true && mesh.hasEstablishedSession(meshPeer)) {
                     println("   → Sending queued message via mesh peer: $messageID")
-                    mesh.sendPrivateMessage(content, meshPeer, nickname, messageID)
+                    handToMesh(content, meshPeer, nickname, messageID, chatKey = peerID)
                     iterator.remove()
                     continue
                 }
@@ -2210,7 +2227,7 @@ class ChatRepo(
             val recipientNpub = if (!hasMesh && canSendViaNostr(peerID)) resolveNostrPublicKey(peerID) else null
             if (hasMesh) {
                 println("   → Sending queued message via mesh: $messageID")
-                mesh.sendPrivateMessage(content, peerID, nickname, messageID)
+                handToMesh(content, peerID, nickname, messageID)
                 iterator.remove()
             } else if (recipientNpub != null) {
                 val recipientPeerIDForEmbed = findPeerIDForNostrPubkey(recipientNpub) ?: peerID
@@ -2236,6 +2253,32 @@ class ChatRepo(
     suspend fun flushAllOutbox() = withContext(coroutinesContextFacade.io) {
         synchronized(outboxLock) { outbox.keys.toList() }.forEach { flushOutboxFor(it) }
     }
+
+    /**
+     * Hands a private text to the mesh service. It refuses what its way out for this peer cannot
+     * carry (a text cut for Bluetooth when the peer has since become reachable over the radio only):
+     * the row then says so, instead of standing as sent when nothing was.
+     */
+    private fun handToMesh(content: String, toPeerID: String, nickname: String, messageID: String?, chatKey: String = toPeerID) {
+        if (mesh.sendPrivateMessage(content, toPeerID, nickname, messageID)) return
+        if (messageID != null) updateDeliveryStatus(chatKey, messageID, DeliveryStatus.Failed("too long for the link it would take: send it again"))
+    }
+
+    /**
+     * Hands a private file to the mesh service, which starts nothing for a peer whose way out has
+     * become the radio since this was looked at: the row then says so.
+     */
+    private fun handFileToMesh(toPeerID: String, file: BitchatFilePacket, messageID: String) {
+        if (mesh.sendFilePrivate(toPeerID, file)) return
+        updateDeliveryStatus(toPeerID, messageID, DeliveryStatus.Failed(notSentOverLoRaReason()))
+    }
+
+    override fun didFailToSendPrivateMessage(messageID: String, recipientPeerID: String, reason: String) {
+        updateDeliveryStatus(recipientPeerID, messageID, DeliveryStatus.Failed(reason))
+    }
+
+    private fun reachesOverMesh(peerID: String): Boolean =
+        mesh.getPeerInfo(peerID)?.isConnected == true || mesh.reachesByRadio(peerID)
 
     private fun canSendViaNostr(peerID: String): Boolean {
         return try {

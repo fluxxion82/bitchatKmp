@@ -731,7 +731,7 @@ class MessageHandlerPrivateIngressTest {
         }
 
         override fun onHandshakeReceived(peerID: String) = Unit
-        override fun onHandshakeResponse(peerID: String, responsePacket: ByteArray) {
+        override fun onHandshakeResponse(peerID: String, responsePacket: ByteArray, link: String, final: Boolean) {
             handshakeResponses += peerID to responsePacket
         }
         override fun onSessionEstablished(peerID: String) {

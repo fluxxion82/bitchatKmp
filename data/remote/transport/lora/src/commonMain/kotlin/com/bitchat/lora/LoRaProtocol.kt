@@ -1,6 +1,7 @@
 package com.bitchat.lora
 
 import com.bitchat.lora.radio.LoRaConfig
+import com.bitchat.transport.MeshRadioLink
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
@@ -42,6 +43,9 @@ interface LoRaProtocol {
 
     /** Whole mesh packets received in packet frames; only the BitChat stack has them. */
     val incomingMeshPackets: Flow<ByteArray> get() = emptyFlow()
+
+    /** The BitChat stack can carry addressed mesh packets over its radio frames. */
+    val meshPacketLink: MeshRadioLink? get() = null
 
     /**
      * Whether the protocol transport is ready to send/receive.

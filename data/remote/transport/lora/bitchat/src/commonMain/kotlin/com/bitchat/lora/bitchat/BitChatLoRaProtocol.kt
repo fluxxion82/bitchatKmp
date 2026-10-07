@@ -16,6 +16,7 @@ import com.bitchat.lora.bitchat.transmit.LoRaTransmitter
 import com.bitchat.lora.bitchat.transmit.TransmitKind
 import com.bitchat.lora.radio.LoRaConfig
 import com.bitchat.lora.radio.LoRaEvent
+import com.bitchat.transport.MeshRadioLink
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
@@ -37,6 +38,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.concurrent.Volatile
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.time.TimeSource
@@ -90,10 +92,15 @@ class BitChatLoRaProtocol internal constructor(
 
     private var scope: CoroutineScope? = null
     private val transmitter = LoRaTransmitter(radio, clockMillis, jitter)
+    // Read by whoever sends a mesh packet, written by start and stop.
+    @Volatile
+    private var meshConfig: LoRaConfig? = null
 
     // Peer tracking
     private val _peers = MutableStateFlow<List<LoRaPeer>>(emptyList())
     override val peers: StateFlow<List<LoRaPeer>> = _peers.asStateFlow()
+    private val radioMeshLink = BitChatMeshRadioLink(transmitter, { _peers.value }, { meshConfig })
+    override val meshPacketLink: MeshRadioLink get() = radioMeshLink
 
     // Incoming messages (non-heartbeat packets)
     private val _incomingMessages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
@@ -143,6 +150,7 @@ class BitChatLoRaProtocol internal constructor(
 
         scope = CoroutineScope(dispatcher + SupervisorJob())
         transmitter.start(config, requireNotNull(scope))
+        meshConfig = config
         // Attach before enabling RX so packets from the new session cannot be missed.
         scope?.launch(start = CoroutineStart.UNDISPATCHED) {
             radio.events.collect { event ->
@@ -164,6 +172,8 @@ class BitChatLoRaProtocol internal constructor(
         LoRaLogger.i(LoRaTags.TRANSPORT, "Stopping LoRa transport")
         val oldScope = scope
         scope = null
+        meshConfig = null
+        radioMeshLink.dropHolds()
         transmitter.stop()
         oldScope?.coroutineContext?.get(Job)?.cancelAndJoin()
         heartbeatJob = null
@@ -220,16 +230,6 @@ class BitChatLoRaProtocol internal constructor(
     }
 
     /**
-     * Send a private message.
-     *
-     * @param packetBytes Serialized BitchatPacket for a private message
-     */
-    suspend fun sendPrivateMessage(packetBytes: ByteArray) {
-        LoRaLogger.d(LoRaTags.TRANSPORT, "Sending private message: ${packetBytes.size} bytes")
-        sendWithFlags(packetBytes, LoRaFrame.FLAG_DIRECT)
-    }
-
-    /**
      * Send a channel message.
      *
      * @param packetBytes Serialized BitchatPacket for a channel message
@@ -237,16 +237,6 @@ class BitChatLoRaProtocol internal constructor(
     suspend fun sendChannelMessage(packetBytes: ByteArray) {
         LoRaLogger.d(LoRaTags.TRANSPORT, "Sending channel message: ${packetBytes.size} bytes")
         send(packetBytes)
-    }
-
-    /**
-     * Send a delivery acknowledgment.
-     *
-     * @param packetBytes Serialized BitchatPacket for a delivery ack
-     */
-    suspend fun sendDeliveryAck(packetBytes: ByteArray) {
-        LoRaLogger.d(LoRaTags.TRANSPORT, "Sending delivery ack: ${packetBytes.size} bytes")
-        sendWithFlags(packetBytes, LoRaFrame.FLAG_ACK)
     }
 
     /**
