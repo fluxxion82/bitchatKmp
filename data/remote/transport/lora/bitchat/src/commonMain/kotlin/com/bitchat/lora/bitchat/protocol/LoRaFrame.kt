@@ -115,6 +115,9 @@ data class LoRaFrame(
         /** Frame is an acknowledgment response */
         const val FLAG_ACK: UByte = 0x08u
 
+        /** Marks a frame that carries one whole mesh packet and is never fragmented. */
+        const val FLAG_PACKET: UByte = 0x10u
+
         /**
          * Deserialize a LoRaFrame from raw bytes.
          *

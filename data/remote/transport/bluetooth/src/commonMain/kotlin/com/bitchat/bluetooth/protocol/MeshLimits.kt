@@ -8,6 +8,9 @@ package com.bitchat.bluetooth.protocol
  */
 const val MAX_MESH_FRAME_BYTES: Int = 1024 * 1024
 
+/** The payload of one LoRa frame. */
+const val MAX_LORA_PACKET_BYTES = 232
+
 /** Fixed lanes stop claimed sender IDs from creating a coroutine and queue each. */
 const val MESH_PACKET_LANES = 8
 /** A full lane drops its newest packet, bounding queued work per lane. */

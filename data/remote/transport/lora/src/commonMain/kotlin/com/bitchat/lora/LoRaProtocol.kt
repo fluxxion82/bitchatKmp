@@ -3,6 +3,7 @@ package com.bitchat.lora
 import com.bitchat.lora.radio.LoRaConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlin.time.Instant
 
 /**
@@ -38,6 +39,9 @@ interface LoRaProtocol {
      * have been received and reassembled.
      */
     val incomingMessages: Flow<ByteArray>
+
+    /** Whole mesh packets received in packet frames; only the BitChat stack has them. */
+    val incomingMeshPackets: Flow<ByteArray> get() = emptyFlow()
 
     /**
      * Whether the protocol transport is ready to send/receive.

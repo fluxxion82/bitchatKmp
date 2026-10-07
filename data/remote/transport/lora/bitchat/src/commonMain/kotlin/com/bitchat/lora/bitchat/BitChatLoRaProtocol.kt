@@ -8,6 +8,7 @@ import com.bitchat.lora.bitchat.protocol.HeartbeatPayload
 import com.bitchat.lora.bitchat.protocol.LoRaAssembler
 import com.bitchat.lora.bitchat.protocol.LoRaFrame
 import com.bitchat.lora.bitchat.protocol.LoRaFragmenter
+import com.bitchat.lora.bitchat.protocol.MeshPacketFrame
 import com.bitchat.lora.bitchat.protocol.RangePiBeacon
 import com.bitchat.lora.bitchat.radio.LoRaRadio
 import com.bitchat.lora.radio.LoRaConfig
@@ -22,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -86,6 +88,13 @@ class BitChatLoRaProtocol internal constructor(
     // Incoming messages (non-heartbeat packets)
     private val _incomingMessages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
     override val incomingMessages: Flow<ByteArray> = _incomingMessages.asSharedFlow()
+
+    // Radio packet frames are dropped rather than retained while the mesh pipeline is absent or slow.
+    private val _incomingMeshPackets = MutableSharedFlow<ByteArray>(
+        extraBufferCapacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    override val incomingMeshPackets: Flow<ByteArray> = _incomingMeshPackets.asSharedFlow()
 
     // Legacy alias for backward compatibility
     val incomingPackets: Flow<ByteArray> get() = incomingMessages
@@ -353,6 +362,11 @@ class BitChatLoRaProtocol internal constructor(
                 )
                 return
             }
+            is IncomingClassification.MeshPacket -> {
+                _incomingMeshPackets.tryEmit(classification.packet)
+                emitTransportEvent(TransportEvent.PacketReceived(classification.packet.size, rssi, snr))
+                return
+            }
             IncomingClassification.Unparsed -> {
                 LoRaLogger.w(LoRaTags.TRANSPORT, "Failed to parse received data as LoRaFrame")
                 return
@@ -454,8 +468,8 @@ class BitChatLoRaProtocol internal constructor(
         const val PEER_CLEANUP_INTERVAL_MS = 30_000L
 
         /**
-         * Classify received bytes. Probe mode checks RangePi beacons first, then falls back
-         * to standard LoRaFrame parsing.
+         * Classify received bytes. Probe mode checks RangePi beacons first, then packet frames,
+         * then standard LoRaFrame parsing.
          */
         fun classifyIncomingData(
             data: ByteArray,
@@ -474,6 +488,10 @@ class BitChatLoRaProtocol internal constructor(
                 }
             }
 
+            MeshPacketFrame.decode(data)?.let { packet ->
+                return IncomingClassification.MeshPacket(packet)
+            }
+
             val frame = LoRaFrame.fromBytes(data) ?: return IncomingClassification.Unparsed
             return IncomingClassification.Frame(frame)
         }
@@ -485,6 +503,7 @@ class BitChatLoRaProtocol internal constructor(
             val reason: RangePiBeacon.InvalidReason,
             val detail: String
         ) : IncomingClassification()
+        data class MeshPacket(val packet: ByteArray) : IncomingClassification()
         data class Frame(val frame: LoRaFrame) : IncomingClassification()
         data object Unparsed : IncomingClassification()
     }

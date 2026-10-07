@@ -23,6 +23,7 @@ class LoRaProtocolManagerTest {
     ) : LoRaProtocol {
         override val peers = MutableStateFlow<List<LoRaPeer>>(emptyList())
         override val incomingMessages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 8)
+        override val incomingMeshPackets = MutableSharedFlow<ByteArray>(extraBufferCapacity = 8)
         override var isReady = false
         override var deviceId = ""
         override var nickname = ""
@@ -100,6 +101,21 @@ class LoRaProtocolManagerTest {
         f.manager.switchProtocol(LoRaProtocolType.MESHCORE)
         f.mesh.incomingMessages.emit(byteArrayOf(2))
         f.bit.incomingMessages.emit(byteArrayOf(3))
+        runCurrent()
+        assertEquals(listOf(1, 2), seen)
+    }
+
+    @Test fun meshPacketCollectorFollowsTheActiveProtocol() = runTest {
+        val f = Fixture(backgroundScope)
+        val seen = mutableListOf<Int>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            f.manager.incomingMeshPackets.collect { seen += it[0].toInt() }
+        }
+        f.manager.start()
+        f.bit.incomingMeshPackets.emit(byteArrayOf(1))
+        f.manager.switchProtocol(LoRaProtocolType.MESHCORE)
+        f.mesh.incomingMeshPackets.emit(byteArrayOf(2))
+        f.bit.incomingMeshPackets.emit(byteArrayOf(3))
         runCurrent()
         assertEquals(listOf(1, 2), seen)
     }

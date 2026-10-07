@@ -1,6 +1,7 @@
 package com.bitchat.lora
 
 import com.bitchat.lora.radio.LoRaConfig
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -33,8 +34,15 @@ class LoRaProtocolManager(
     override val peers = _peers.asStateFlow()
     private val _incomingMessages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
     override val incomingMessages = _incomingMessages.asSharedFlow()
+    // Bounded like the stack's own: a slow or absent reader loses the oldest packets, the radio never waits.
+    private val _incomingMeshPackets = MutableSharedFlow<ByteArray>(
+        extraBufferCapacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    override val incomingMeshPackets = _incomingMeshPackets.asSharedFlow()
     private var peersJob: Job? = null
     private var messagesJob: Job? = null
+    private var meshPacketsJob: Job? = null
     private var ownsSession = false
     private var lifecycleUsed = false
     private var readySession = false
@@ -101,6 +109,9 @@ class LoRaProtocolManager(
             messagesJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 target.incomingMessages.collect { _incomingMessages.emit(it) }
             }
+            meshPacketsJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                target.incomingMeshPackets.collect { _incomingMeshPackets.tryEmit(it) }
+            }
             ownsSession = true // Even a partially failed start requires cleanup.
             val ready = withTimeoutOrNull(readinessTimeoutMs) {
                 if (!target.start(config)) return@withTimeoutOrNull false
@@ -135,8 +146,10 @@ class LoRaProtocolManager(
         readySession = false
         peersJob?.cancelAndJoin()
         messagesJob?.cancelAndJoin()
+        meshPacketsJob?.cancelAndJoin()
         peersJob = null
         messagesJob = null
+        meshPacketsJob = null
         _peers.value = emptyList()
         if (ownsSession) active.stop()
         ownsSession = false

@@ -21,7 +21,10 @@ import com.bitchat.bluetooth.protocol.BinaryProtocol
 import com.bitchat.bluetooth.protocol.BitchatPacket
 import com.bitchat.bluetooth.protocol.IdentityAnnouncement
 import com.bitchat.bluetooth.protocol.MessageType
+import com.bitchat.bluetooth.protocol.LORA_LINK
+import com.bitchat.bluetooth.protocol.LoRaIngressResult
 import com.bitchat.bluetooth.protocol.SpecialRecipients
+import com.bitchat.bluetooth.protocol.admitFromLoRa
 import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
@@ -94,6 +97,10 @@ class BluetoothMeshService(
     private var peerLinkSnapshot: Map<String, String> = emptyMap()
     private lateinit var messageHandler: MessageHandler
     private lateinit var packetProcessor: PacketProcessor
+
+    private val loraDropLogLock = SynchronizedObject()
+    private var lastLoRaDropLogMillis: Long? = null
+    private var loraDropsNotLogged = 0
 
     var delegate: BluetoothMeshDelegate? = null
 
@@ -240,6 +247,41 @@ class BluetoothMeshService(
                 logError("BluetoothMeshService", "Error processing received packet: ${e.message}")
             }
         }
+    }
+
+    /**
+     * A packet arrived over the LoRa radio. Only a complete, unsigned, uncompressed Noise packet
+     * addressed to this device with TTL zero enters. It never binds a sender to a device address,
+     * refreshes or supersedes a Bluetooth link, and uses the radio's one link name so every
+     * per-link limit treats the whole radio as one link.
+     *
+     * The packet goes straight into its bounded lane: nothing is launched or queued per packet
+     * ahead of that bound.
+     */
+    fun onLoRaPacketReceived(data: ByteArray) {
+        when (val result = admitFromLoRa(data, myPeerID)) {
+            is LoRaIngressResult.Rejected -> logLoRaDrop(result.reason.name)
+            is LoRaIngressResult.Accepted ->
+                packetProcessor.processPacket(result.packet, result.senderPeerID, LORA_LINK)
+        }
+    }
+
+    /** Logs rejected radio packets at a bounded rate because the radio is an unauthenticated link. */
+    private fun logLoRaDrop(reason: String) {
+        val now = Clock.System.now().toEpochMilliseconds()
+        val message = synchronized(loraDropLogLock) {
+            val last = lastLoRaDropLogMillis
+            if (last != null && now - last in 0 until LORA_DROP_LOG_INTERVAL_MS) {
+                loraDropsNotLogged++
+                null
+            } else {
+                val skipped = if (loraDropsNotLogged > 0) " ($loraDropsNotLogged more drops not logged)" else ""
+                lastLoRaDropLogMillis = now
+                loraDropsNotLogged = 0
+                "Dropped LoRa packet: $reason$skipped"
+            }
+        }
+        if (message != null) logInfo("BluetoothMeshService", message)
     }
 
     private fun setupDelegates() {
@@ -847,6 +889,14 @@ class BluetoothMeshService(
 
     internal suspend fun handshakeSupervisorSize(): Int = handshakeMutex.withLock { handshakeSupervisor.size }
 
+    internal fun hasNoiseCandidate(peerID: String): Boolean = securityManager.hasCandidate(peerID)
+
+    internal fun hasValidatedNoiseSession(peerID: String): Boolean = securityManager.hasValidatedSession(peerID)
+
+    internal fun pendingEncryptedPayloadCount(): Int = messageHandler.pendingEncryptedPayloadCount
+
+    internal fun failureCount(peerID: String): Int = messageHandler.sessionFailureTracker.consecutiveFailures(peerID)
+
     fun getSessionState(peerID: String): String {
         return noiseEncryption.getSessionState(peerID)
     }
@@ -1206,6 +1256,8 @@ class BluetoothMeshService(
          * Upstream drops a packet dated more than two minutes off its own clock.
          */
         const val ENCRYPTED_PACKET_MAX_AHEAD_MS = 10_000L
+
+        private const val LORA_DROP_LOG_INTERVAL_MS = 1_000L
     }
 }
 

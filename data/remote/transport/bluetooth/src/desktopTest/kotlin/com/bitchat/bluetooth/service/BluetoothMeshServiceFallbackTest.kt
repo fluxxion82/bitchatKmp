@@ -7,7 +7,10 @@ import com.bitchat.bluetooth.manager.HandshakeRefreshPolicy
 import com.bitchat.bluetooth.protocol.BinaryProtocol
 import com.bitchat.bluetooth.protocol.BitchatPacket
 import com.bitchat.bluetooth.protocol.IdentityAnnouncement
+import com.bitchat.bluetooth.protocol.LoRaRejection
+import com.bitchat.bluetooth.protocol.MAX_LORA_PACKET_BYTES
 import com.bitchat.bluetooth.protocol.MessageType
+import com.bitchat.bluetooth.protocol.MessagePadding
 import com.bitchat.bluetooth.protocol.SpecialRecipients
 import com.bitchat.domain.chat.model.BitchatFilePacket
 import com.bitchat.noise.model.NoisePayload
@@ -35,6 +38,85 @@ import kotlin.time.Clock
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
+
+class BluetoothMeshServiceLoRaIngressTest {
+    @Test
+    fun everyRejectedRadioPacketLeavesNoStateForItsClaimedSender() = runTest {
+        for (reason in LoRaRejection.entries) {
+            val fixture = FallbackServiceFixture()
+            val sender = if (reason == LoRaRejection.FROM_THIS_DEVICE) fixture.service.myPeerID else fixture.remoteID
+            val data = when (reason) {
+                LoRaRejection.TOO_LARGE -> exactPacket(sender, fixture.service.myPeerID, payload = ByteArray(203) { it.toByte() })
+                LoRaRejection.NOT_A_PACKET -> byteArrayOf(1)
+                LoRaRejection.NOT_FOR_THIS_DEVICE -> exactPacket(sender, "2122232425262728")
+                LoRaRejection.FROM_THIS_DEVICE -> exactPacket(sender, fixture.service.myPeerID)
+                LoRaRejection.WRONG_TYPE -> exactPacket(sender, fixture.service.myPeerID, type = MessageType.ANNOUNCE)
+                LoRaRejection.WRONG_TTL -> exactPacket(sender, fixture.service.myPeerID, ttl = 1u)
+            }
+            fixture.service.onLoRaPacketReceived(data)
+            fixture.service.assertNoLoRaIngressState(sender)
+        }
+    }
+
+    @Test
+    fun radioHandshakeAdmissionsShareTheRadioLinkWithoutBindingPeerAddresses() = runTest {
+        val fixture = FallbackServiceFixture()
+        val remotes = (3..11).map { FallbackRemote(it.toString(16)) }
+
+        remotes.take(8).forEach { remote ->
+            val opening = remote.noise.initiateHandshake(
+                fixture.service.myPeerID, remote.crypto.getNoisePrivateKey(), remote.crypto.getNoisePublicKey()
+            )
+            fixture.service.onLoRaPacketReceived(exactPacket(remote.id, fixture.service.myPeerID, payload = opening))
+            eventually("radio opening from ${remote.id.take(8)} to be admitted") {
+                fixture.service.hasNoiseCandidate(remote.id)
+            }
+        }
+        val ninth = remotes.last()
+        val ninthOpening = ninth.noise.initiateHandshake(
+            fixture.service.myPeerID, ninth.crypto.getNoisePrivateKey(), ninth.crypto.getNoisePublicKey()
+        )
+        fixture.service.onLoRaPacketReceived(exactPacket(ninth.id, fixture.service.myPeerID, payload = ninthOpening))
+        assertTrue(fixture.service.getDeviceAddressToPeerMapping().isEmpty())
+
+        val bluetoothRemote = FallbackRemote("c")
+        val bluetoothOpening = bluetoothRemote.noise.initiateHandshake(
+            fixture.service.myPeerID, bluetoothRemote.crypto.getNoisePrivateKey(), bluetoothRemote.crypto.getNoisePublicKey()
+        )
+        fixture.service.onPacketReceived(
+            exactPacket(bluetoothRemote.id, fixture.service.myPeerID, payload = bluetoothOpening), "bluetooth-address"
+        )
+        eventually("a Bluetooth opening to use its own admission link") {
+            fixture.service.hasNoiseCandidate(bluetoothRemote.id)
+        }
+        // A connection the platform gives no address for is yet another link than the radio: the
+        // radio's name is its own, not the absence of one.
+        val unaddressedRemote = FallbackRemote("d")
+        val unaddressedOpening = unaddressedRemote.noise.initiateHandshake(
+            fixture.service.myPeerID, unaddressedRemote.crypto.getNoisePrivateKey(), unaddressedRemote.crypto.getNoisePublicKey()
+        )
+        fixture.service.onPacketReceived(
+            exactPacket(unaddressedRemote.id, fixture.service.myPeerID, payload = unaddressedOpening), ""
+        )
+        eventually("an opening from a connection without an address not to count against the radio") {
+            fixture.service.hasNoiseCandidate(unaddressedRemote.id)
+        }
+        // The ninth radio opening was handed over before the Bluetooth one, which has been processed by
+        // now; it is watched a little longer all the same, inside the three seconds its link stays full.
+        never("the ninth radio opening to be admitted", forMillis = 500) {
+            fixture.service.hasNoiseCandidate(ninth.id)
+        }
+        assertEquals("bluetooth-address", fixture.service.getDeviceAddressForPeer(bluetoothRemote.id))
+    }
+
+    @Test
+    fun radioPacketClaimingThisDeviceAsSenderIsDroppedBeforeNoiseStateExists() = runTest {
+        val fixture = FallbackServiceFixture()
+        fixture.service.onLoRaPacketReceived(exactPacket(fixture.service.myPeerID, fixture.service.myPeerID))
+
+        fixture.service.assertNoLoRaIngressState(fixture.service.myPeerID)
+    }
+}
 
 class BluetoothMeshServiceFallbackTest {
 
@@ -761,6 +843,17 @@ private object FallbackNoOpAdvertisingService : AdvertisingService {
     override fun isAdvertising() = false
 }
 
+/** Fails if [condition] becomes true at any moment of the next [forMillis] milliseconds. */
+private suspend fun never(description: String, forMillis: Long, condition: suspend () -> Boolean) {
+    val happened = withContext(Dispatchers.Default) {
+        withTimeoutOrNull(forMillis) {
+            while (!condition()) delay(10)
+            true
+        } ?: false
+    }
+    assertFalse(happened, "did not expect $description")
+}
+
 private suspend fun eventually(description: String, condition: suspend () -> Boolean) {
     // The service works on its own dispatcher in real time; runTest's clock is virtual. The wait
     // is long because this has timed out at five seconds on a machine busy with another build
@@ -780,6 +873,42 @@ private fun response(result: NoiseEncryptionFacade.HandshakeResult): ByteArray =
     NoiseEncryptionFacade.HandshakeResult.Ignored, NoiseEncryptionFacade.HandshakeResult.RejectedIdentity -> error("expected response, got $result")
 }
 private fun String.hexToBytes() = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+private fun exactPacket(
+    sender: String,
+    recipient: String,
+    type: MessageType = MessageType.NOISE_HANDSHAKE,
+    payload: ByteArray = byteArrayOf(1, 2, 3),
+    ttl: UByte = 0u,
+): ByteArray {
+    val packet = BitchatPacket(
+        type = type.value,
+        senderID = sender.hexToBytes(),
+        recipientID = recipient.hexToBytes(),
+        timestamp = 1u,
+        payload = payload,
+        ttl = ttl,
+    )
+    return MessagePadding.unpad(requireNotNull(BinaryProtocol.encode(packet))).also { data ->
+        if (payload.size == 203) {
+            check(data.size == MAX_LORA_PACKET_BYTES + 1)
+        } else {
+            check(data.size <= MAX_LORA_PACKET_BYTES)
+        }
+    }
+}
+
+private suspend fun BluetoothMeshService.assertNoLoRaIngressState(peerID: String) {
+    assertFalse(hasNoiseCandidate(peerID))
+    assertFalse(hasValidatedNoiseSession(peerID))
+    assertEquals(0, pendingEncryptedPayloadCount())
+    assertEquals(0, failureCount(peerID))
+    assertEquals(0, handshakesOwedCount())
+    assertEquals(0, automaticHandshakesOwedCount())
+    assertEquals(0, handshakeStartedAtCount())
+    assertEquals(0, handshakeSupervisorSize())
+    assertFalse(getDeviceAddressToPeerMapping().containsValue(peerID))
+}
 
 /** The Noise nonce an encrypted packet was sent under: the four bytes before its ciphertext. */
 private fun nonceOf(packet: BitchatPacket): Long =

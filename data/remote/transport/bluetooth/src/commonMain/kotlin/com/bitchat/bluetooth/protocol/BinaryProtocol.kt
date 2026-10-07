@@ -139,6 +139,28 @@ object BinaryProtocol {
     }
 
     /**
+     * Decodes [data] only when it is exactly one packet as the radio carries them: version 1, no
+     * padding, no compression, no signature, no flag this app does not know, a payload, and nothing
+     * after it. Null otherwise.
+     */
+    fun decodeExact(data: ByteArray): BitchatPacket? {
+        if (data.size <= 11) return null
+        // The radio carries only what this app sends over it: the larger length field of version 2
+        // exists for payloads no radio frame could hold.
+        if (data[0].toUByte() != 1u.toUByte()) return null
+
+        // The recipient flag is the only one such a packet can carry: not compression, not a
+        // signature, not a bit this app does not know.
+        val flags = data[11].toUByte()
+        if ((flags and Flags.HAS_RECIPIENT.inv()) != 0u.toUByte()) return null
+
+        val packet = decodeCore(data) ?: return null
+        val expectedSize = getHeaderSize(packet.version) + SENDER_ID_SIZE +
+            (if (packet.recipientID != null) RECIPIENT_ID_SIZE else 0) + packet.payload.size
+        return packet.takeIf { data.size == expectedSize && packet.payload.isNotEmpty() }
+    }
+
+    /**
      * Core decoding implementation used by decode() with and without padding removal
      */
     private fun decodeCore(raw: ByteArray): BitchatPacket? {
