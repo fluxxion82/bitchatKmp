@@ -10,7 +10,6 @@ import com.bitchat.nostr.model.NostrIdentity
 import com.bitchat.nostr.model.NostrKind
 import com.bitchat.nostr.model.RelayInfo
 import com.bitchat.nostr.util.NostrEventDeduplicator
-import com.bitchat.nostr.util.RejectedEventLog
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
@@ -45,11 +44,9 @@ class NostrRelayEventVerificationTest {
         eventDeduplicator = NostrEventDeduplicator(),
         wsClient = wsClient,
         relayCache = InMemoryCache<String, RelayInfo>(),
-        relayLogSink = null,
-        torProxyStatus = null,
         scope = CoroutineScope(Dispatchers.Unconfined),
         // On a clock that only this test moves, so "one line" does not depend on how fast it runs.
-        rejectedEvents = RejectedEventLog(interval = 1.minutes, timeSource = time),
+        timeSource = time,
     )
     private val seenInGeohash = mutableListOf<NostrEvent>()
     private val seenAsNotes = mutableListOf<NostrEvent>()

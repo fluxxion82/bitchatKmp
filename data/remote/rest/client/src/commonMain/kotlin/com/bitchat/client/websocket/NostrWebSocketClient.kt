@@ -34,6 +34,10 @@ class NostrWebSocketClient(
             override fun onFailure(url: String, t: Throwable) {
                 listener.onFailure(relayUrl, t)
             }
+
+            override fun onBacklogDrained(url: String, framesDropped: Long) {
+                listener.onBacklogDrained(relayUrl, framesDropped)
+            }
         }
 
         wsClient.connect(
@@ -64,6 +68,9 @@ class NostrWebSocketClient(
     suspend fun shutdown() {
         wsClient.shutdown()
     }
+
+    /** What [relayUrl] has in flight and has lost to its limits; null for a relay never connected to. */
+    internal fun inboundState(relayUrl: String): InboundState? = wsClient.inboundState(relayUrl)
 }
 
 interface NostrWebSocketListener {
@@ -72,4 +79,13 @@ interface NostrWebSocketListener {
     fun onClosing(relayUrl: String, code: Int, reason: String)
     fun onClosed(relayUrl: String, code: Int, reason: String)
     fun onFailure(relayUrl: String, t: Throwable)
+
+    /**
+     * [relayUrl] lost [framesDropped] frames because it had its limit in flight, and everything that
+     * was in flight then has been handled: its backlog was empty when this was decided (a frame that
+     * arrived since may already be on its way). Nobody knows what was in the lost frames; what the
+     * relay stores can be had by asking again. Like any other call here, this one can still arrive
+     * just after a disconnect.
+     */
+    fun onBacklogDrained(relayUrl: String, framesDropped: Long) {}
 }

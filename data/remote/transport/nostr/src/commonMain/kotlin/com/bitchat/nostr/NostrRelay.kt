@@ -16,11 +16,13 @@ import com.bitchat.nostr.util.GeohashUtils
 import com.bitchat.nostr.util.GeohashUtils.haversineDistance
 import com.bitchat.nostr.util.NostrEventDeduplicator
 import com.bitchat.nostr.util.RejectedEventLog
+import com.bitchat.nostr.util.RelayCooldown
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.internal.SynchronizedObject
 import kotlinx.coroutines.internal.synchronized
 import kotlinx.coroutines.launch
@@ -28,9 +30,15 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlin.time.Clock
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.TimeSource
 
 // Relay subscription validation
 const val SUBSCRIPTION_VALIDATION_INTERVAL_MS: Long = 30_000L
+
+/** How often, at most, a relay whose frames were dropped is asked for its stored events again. */
+internal val RESUBSCRIBE_INTERVAL: Duration = 1.minutes
 private val DEFAULT_RELAYS = listOf(
     "wss://relay.damus.io",
     "wss://relay.primal.net",
@@ -39,25 +47,22 @@ private val DEFAULT_RELAYS = listOf(
 )
 
 @OptIn(InternalCoroutinesApi::class)
-class NostrRelay internal constructor(
+class NostrRelay(
     private val eventDeduplicator: NostrEventDeduplicator,
     private val wsClient: NostrWebSocketClient,
     private val relayCache: Cache<String, RelayInfo>,
-    private val relayLogSink: RelayLogSink?,
-    private val torProxyStatus: TorProxyStatus?,
-    private val scope: CoroutineScope,
-    /** Events that failed verification, counted per relay and reported at a bounded rate. */
-    private val rejectedEvents: RejectedEventLog,
+    private val relayLogSink: RelayLogSink? = null,
+    private val torProxyStatus: TorProxyStatus? = null,
+    // Background work and handler dispatch; a test passes a scope it controls.
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
+    // What "at most once a minute" below is measured with; a test passes a clock it moves.
+    timeSource: TimeSource = TimeSource.Monotonic,
 ) {
-    constructor(
-        eventDeduplicator: NostrEventDeduplicator,
-        wsClient: NostrWebSocketClient,
-        relayCache: Cache<String, RelayInfo>,
-        relayLogSink: RelayLogSink? = null,
-        torProxyStatus: TorProxyStatus? = null,
-        // Background work and handler dispatch; a test passes an unconfined scope to see both at once.
-        scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
-    ) : this(eventDeduplicator, wsClient, relayCache, relayLogSink, torProxyStatus, scope, RejectedEventLog())
+    /** Events that failed verification, counted per relay and reported at a bounded rate. */
+    private val rejectedEvents = RejectedEventLog(timeSource = timeSource)
+
+    /** How often a relay that lost frames is asked again. */
+    private val resubscribeCooldown = RelayCooldown(RESUBSCRIBE_INTERVAL, timeSource)
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -256,6 +261,10 @@ class NostrRelay internal constructor(
 
                 override fun onFailure(relayUrl: String, t: Throwable) {
                     handleDisconnection(relayUrl, t)
+                }
+
+                override fun onBacklogDrained(relayUrl: String, framesDropped: Long) {
+                    handleBacklogDrained(relayUrl, framesDropped)
                 }
             }
 
@@ -618,6 +627,24 @@ class NostrRelay internal constructor(
         }
 
         // Exponential backoff is handled by NostrWebSocketClient
+    }
+
+    /**
+     * A relay sent more than this client keeps in flight, some of its frames were dropped, and its
+     * backlog is empty again. What was in them is unknown and may have been a private message, so
+     * the relay is asked again: its subscriptions are sent once more and it replays what it stores
+     * (events already seen are recognised by id and cost no signature check). A relay is asked at
+     * most once per [RESUBSCRIBE_INTERVAL]; a request that comes sooner waits for the rest of it,
+     * and while one waits the next is not needed.
+     */
+    private fun handleBacklogDrained(relayUrl: String, framesDropped: Long) {
+        val wait = resubscribeCooldown.request(relayUrl) ?: return
+        println("NostrRelay: $relayUrl had $framesDropped frame(s) dropped; asking it again in ${wait.inWholeSeconds}s")
+        scope.launch {
+            delay(wait)
+            resubscribeCooldown.started(relayUrl)
+            restoreSubscriptionsForRelay(relayUrl)
+        }
     }
 
     private fun restoreSubscriptionsForRelay(relayUrl: String) {

@@ -23,9 +23,24 @@ import kotlinx.coroutines.internal.synchronized
 import kotlin.math.pow
 import kotlin.time.Duration.Companion.seconds
 
-/** One controller serializes all mutable state for one URL. */
+/**
+ * One controller serializes all mutable state for one URL.
+ *
+ * What a relay sends is bounded here, because nothing below can be relied on to bound it: a frame
+ * is in flight from the moment it is read until its listener call returned, each relay may have
+ * only [limits] in flight, and what arrives beyond that is dropped where it is read. Listener calls
+ * are made on one coroutine, one relay after another in turn, so a relay with a full backlog takes
+ * its turn like the others instead of standing in front of them.
+ */
 @OptIn(InternalCoroutinesApi::class)
-internal class KtorWebSocketClient(private val routeProvider: WebSocketRouteProvider) {
+internal class KtorWebSocketClient(
+    private val routeProvider: WebSocketRouteProvider,
+    private val limits: InboundLimits = InboundLimits(),
+    private val droppedFrames: DroppedFrameLog = DroppedFrameLog(),
+    private val report: (String) -> Unit = ::println,
+    // Fails for bytes that are not text on the engines that hand them over as they came (Curl, CIO).
+    private val decode: (Frame.Text) -> String = { it.readText() },
+) {
     private val scopeJob = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.Default + scopeJob)
     private val registryLock = SynchronizedObject()
@@ -66,7 +81,7 @@ internal class KtorWebSocketClient(private val routeProvider: WebSocketRouteProv
         data class Connect(val policy: ReconnectPolicy, val resetBudget: Boolean) : Command
         data class Opened(val owner: Any, val session: WebSocketSession, val route: TorRouteProvenance) : Command
         data class ReaderEnded(val owner: Any, val session: WebSocketSession?, val error: Throwable?) : Command
-        data class Message(val owner: Any, val session: WebSocketSession, val text: String) : Command
+        data class Message(val owner: Any, val session: WebSocketSession, val text: String, val bytes: Int) : Command
         data class SendRequested(val message: String, val completed: CompletableDeferred<Unit>) : Command
         data class SendResult(val owner: Any, val session: WebSocketSession, val error: Throwable?, val completed: CompletableDeferred<Unit>) : Command
         data class Disconnect(val completed: CompletableDeferred<Unit>) : Command
@@ -74,12 +89,32 @@ internal class KtorWebSocketClient(private val routeProvider: WebSocketRouteProv
         data class Shutdown(val completed: CompletableDeferred<Unit>) : Command
     }
 
-    private data class Callback(val url: String, val owner: Any, val invoke: () -> Unit)
-    private val callbacks = Channel<Callback>(Channel.UNLIMITED)
+    /** A listener call owed to one relay; [release] gives back the room a frame took, however the call ends. */
+    private class Callback(val owner: Any, val release: (() -> Unit)?, val invoke: () -> Unit)
+
+    /**
+     * The controllers that have listener calls waiting, each in here at most once. One call is made
+     * per turn and a controller with more goes to the back, so the calls of one relay keep their
+     * order and no relay waits for another's backlog.
+     */
+    private val ready = Channel<Controller>(Channel.UNLIMITED)
     private val callbackDispatcher = scope.launch {
-        for (callback in callbacks) {
-            // Callbacks are ordered here and rejected again immediately before NostrRelay can see them.
-            if (isCallbackCurrent(callback.url, callback.owner)) runCatching(callback.invoke)
+        for (controller in ready) {
+            controller.takeCallback()?.let { callback ->
+                try {
+                    // Rejected again immediately before NostrRelay can see them.
+                    if (isCallbackCurrent(controller.url, callback.owner)) runCatching(callback.invoke)
+                } finally {
+                    callback.release?.invoke()
+                }
+            }
+            // A relay that lost frames and whose backlog is empty at this moment can be asked again.
+            // Decided under the account's lock and told without it, like every listener call: a
+            // frame may have arrived, or a disconnect finished, between the two.
+            controller.drainedAfterDrops()?.let { dropped ->
+                listenerOf(controller.url)?.let { listener -> runCatching { listener.onBacklogDrained(controller.url, dropped) } }
+            }
+            controller.callbackHandled()
         }
     }
 
@@ -148,7 +183,7 @@ internal class KtorWebSocketClient(private val routeProvider: WebSocketRouteProv
             CompletableDeferred<Unit>().also { controller.commands.trySend(Command.Shutdown(it)) }
         }
         settled.forEach { it.await() }
-        callbacks.close()
+        ready.close()
         scopeJob.cancel()
         scopeJob.join()
         synchronized(registryLock) {
@@ -166,13 +201,29 @@ internal class KtorWebSocketClient(private val routeProvider: WebSocketRouteProv
         }
     }
 
+    /** What [url] has in flight and has lost to its limits; null for a relay never connected to. */
+    internal fun inboundState(url: String): InboundState? =
+        synchronized(registryLock) { controllers[url] }?.inboundState()
+
+    /** The listener of a relay this client is still connected or reconnecting to; none once it was disconnected. */
+    private fun listenerOf(url: String): WebSocketListener? = synchronized(registryLock) {
+        if (terminal) null else activeConnections[url]?.reconnectPolicy?.listener
+    }
+
     private fun isCallbackCurrent(url: String, owner: Any): Boolean = synchronized(registryLock) {
         !terminal && activeConnections[url]?.callbackOwner === owner
     }
 
-    private inner class Controller(private val url: String, private val connection: WebSocketConnection) {
+    private inner class Controller(val url: String, private val connection: WebSocketConnection) {
+        // Unlimited, and still bounded: a frame is put here only with room taken in [backlog], and
+        // every other command is one step of a connection's life or one send its caller waits for.
         val commands = Channel<Command>(Channel.UNLIMITED)
         val job = scope.launch { for (command in commands) handle(command) }
+
+        private val backlog = InboundBacklog(limits)
+        private val callbackLock = SynchronizedObject()
+        private val waitingCallbacks = ArrayDeque<Callback>()
+        private var queuedForDispatch = false
 
         private var owner: Any? = connection.owner
         private var session: WebSocketSession? = connection.session
@@ -259,7 +310,7 @@ internal class KtorWebSocketClient(private val routeProvider: WebSocketRouteProv
                         commands.trySend(Command.Opened(newOwner, established, leasedRoute))
                         for (frame in established.incoming) {
                             when (frame) {
-                                is Frame.Text -> commands.trySend(Command.Message(newOwner, established, frame.readText()))
+                                is Frame.Text -> received(newOwner, established, frame)
                                 is Frame.Close -> {
                                     commands.trySend(Command.ReaderEnded(newOwner, established, null))
                                     reported = true
@@ -316,9 +367,40 @@ internal class KtorWebSocketClient(private val routeProvider: WebSocketRouteProv
             if (!explicitlyDisconnected) scheduleRetry()
         }
 
+        /**
+         * Runs on the reader, and never suspends: the engine's own buffer of frames has no limit on
+         * two engines out of three, so the reader must always be taking from it. A frame is handed
+         * on with room taken in the backlog, or dropped here.
+         *
+         * The order is what keeps the account right. A frame over the size limit is not even
+         * decoded. Any other is decoded BEFORE room is taken for it: bytes that are not text throw
+         * here and end the connection, as they always did, and must leave nothing behind in an
+         * account that outlives the connection. After the room is taken nothing can fail.
+         */
+        private fun received(frameOwner: Any, frameSession: WebSocketSession, frame: Frame.Text) {
+            val bytes = frame.data.size
+            val refusal = if (backlog.refusesSize(bytes)) {
+                DroppedFrameLog.Reason.FRAME_TOO_LARGE
+            } else {
+                val text = decode(frame)
+                if (backlog.take(bytes)) {
+                    // Refused only by a channel that shutdown closed, after which nothing is read any more.
+                    commands.trySend(Command.Message(frameOwner, frameSession, text, bytes))
+                    return
+                }
+                DroppedFrameLog.Reason.BACKLOG_FULL
+            }
+            // A log line that cannot be written must not cost the relay its connection.
+            droppedFrames.dropped(url, refusal)?.let { line -> runCatching { report(line) } }
+        }
+
         private fun message(command: Command.Message) {
-            if (owner === command.owner && session === command.session && !explicitlyDisconnected) {
-                callback(command.owner) { policy?.listener?.onMessage(url, command.text) }
+            // Whether the listener still wants this frame is decided here, where the owner and the
+            // session are known. It goes on to the dispatcher either way, so that the room it took is
+            // given back in one place: when the dispatcher is done with it.
+            val wanted = owner === command.owner && session === command.session && !explicitlyDisconnected
+            callback(command.owner, release = { backlog.giveBack(command.bytes) }) {
+                if (wanted) policy?.listener?.onMessage(url, command.text)
             }
         }
 
@@ -400,9 +482,28 @@ internal class KtorWebSocketClient(private val routeProvider: WebSocketRouteProv
             scope.launch { runCatching { session.close(CloseReason(CloseReason.Codes.NORMAL, reason)) } }
         }
 
-        private fun callback(callbackOwner: Any, block: () -> Unit) {
-            callbacks.trySend(Callback(url, callbackOwner, block))
+        private fun callback(callbackOwner: Any, release: (() -> Unit)? = null, block: () -> Unit) {
+            val firstWaiting = synchronized(callbackLock) {
+                waitingCallbacks.addLast(Callback(callbackOwner, release, block))
+                !queuedForDispatch.also { queuedForDispatch = true }
+            }
+            if (firstWaiting) ready.trySend(this)
         }
+
+        /** For the dispatcher: the next call owed to this relay. */
+        fun takeCallback(): Callback? = synchronized(callbackLock) { waitingCallbacks.removeFirstOrNull() }
+
+        /** For the dispatcher, after each turn: back in line if more is waiting, out of it otherwise. */
+        fun callbackHandled() {
+            val moreWaiting = synchronized(callbackLock) {
+                waitingCallbacks.isNotEmpty().also { queuedForDispatch = it }
+            }
+            if (moreWaiting) ready.trySend(this)
+        }
+
+        fun inboundState(): InboundState = backlog.state(synchronized(callbackLock) { waitingCallbacks.size })
+
+        fun drainedAfterDrops(): Long? = backlog.drainedAfterDrops()
 
         private fun publishSnapshot() = synchronized(registryLock) {
             if (!terminal && !explicitlyDisconnected) {

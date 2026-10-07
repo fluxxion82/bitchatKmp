@@ -24,6 +24,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.async
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
@@ -292,7 +293,10 @@ class ReconnectBudgetTest {
             val connection = client.activeConnections.getValue(server.url)
             withTimeout(1_000) { while (connection.reconnectJob?.isActive != true) delay(5) }
 
-            assertTrue(failures.get() >= 1, "the current reader's failure was treated as obsolete")
+            // The failure is reported on the dispatcher, the retry is scheduled on the controller:
+            // neither waits for the other, so the report is waited for rather than expected already.
+            val reported = withTimeoutOrNull(1_000) { while (failures.get() < 1) delay(5) } != null
+            assertTrue(reported, "the current reader's failure was treated as obsolete")
         } finally {
             routes.releaseOldTeardown.complete(Unit)
             try {

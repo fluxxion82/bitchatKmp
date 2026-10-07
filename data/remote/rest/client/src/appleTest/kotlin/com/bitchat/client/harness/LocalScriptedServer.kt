@@ -28,6 +28,9 @@ internal sealed interface ServerScript {
     /** Complete the WebSocket upgrade (101 + Sec-WebSocket-Accept), then hold the socket open. */
     data object WebSocketUpgrade : ServerScript
 
+    /** Complete the WebSocket upgrade, write each of [texts] as one text frame at once, then hold the socket open. */
+    data class WebSocketFrames(val texts: List<String>) : ServerScript
+
     /** Never answer: the client's handshake or request stays pending. */
     data object HoldAfterRequest : ServerScript
 
@@ -138,7 +141,7 @@ internal class LocalScriptedServer(private val script: ServerScript) {
             }.toMap()
 
             when (script) {
-                ServerScript.WebSocketUpgrade -> {
+                ServerScript.WebSocketUpgrade, is ServerScript.WebSocketFrames -> {
                     val key = headers["sec-websocket-key"] ?: error("no Sec-WebSocket-Key in ${record.requestLine.load()}")
                     val accept = sha1("$key$WEBSOCKET_GUID".encodeToByteArray()).encodeBase64()
                     write(
@@ -147,6 +150,11 @@ internal class LocalScriptedServer(private val script: ServerScript) {
                             "Sec-WebSocket-Accept: $accept\r\n\r\n",
                     )
                     record.respondedAt.store(TimeSource.Monotonic.markNow())
+                    if (script is ServerScript.WebSocketFrames) {
+                        script.texts.forEach { text ->
+                            check(PosixNet.writeAll(fd, textFrame(text))) { "frame write failed: ${PosixNet.lastError()}" }
+                        }
+                    }
                 }
                 ServerScript.KeepAliveOk -> {
                     write(fd, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok")
@@ -182,6 +190,17 @@ internal class LocalScriptedServer(private val script: ServerScript) {
                 else -> record.bytesAfterResponse.addAndFetch(received)
             }
         }
+    }
+
+    /** One unmasked, final WebSocket text frame, as a server sends it. */
+    private fun textFrame(text: String): ByteArray {
+        val payload = text.encodeToByteArray()
+        val header = when {
+            payload.size < 126 -> byteArrayOf(0x81.toByte(), payload.size.toByte())
+            payload.size <= 0xFFFF -> byteArrayOf(0x81.toByte(), 126, (payload.size shr 8).toByte(), payload.size.toByte())
+            else -> error("frames of ${payload.size} bytes are not needed here")
+        }
+        return header + payload
     }
 
     private fun write(fd: Int, text: String) {
