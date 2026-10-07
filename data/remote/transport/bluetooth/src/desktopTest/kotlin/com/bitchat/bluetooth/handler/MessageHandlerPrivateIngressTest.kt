@@ -165,6 +165,32 @@ class MessageHandlerPrivateIngressTest {
     }
 
     @Test
+    fun undecryptablePacketCannotMakeAGenuineEncryptedPrivateMessageLookLikeADuplicate() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.establishSession()
+            val encrypted = fixture.senderPrivateMessage("private-message-id", "authenticated message")
+            val forged = ByteArray(encrypted.size)
+
+            suspend fun receive(packet: BitchatPacket) {
+                if (fixture.securityManager.validatePacket(packet, fixture.sender.peerID)) {
+                    fixture.handler.handlePacket(packet, fixture.sender.peerID)
+                }
+            }
+
+            receive(packet(MessageType.NOISE_ENCRYPTED, fixture, forged))
+            receive(packet(MessageType.NOISE_ENCRYPTED, fixture, encrypted))
+
+            assertEquals(
+                listOf(AuthenticatedMessage(fixture.sender.peerID, "private-message-id", "authenticated message")),
+                fixture.delegate.authenticatedMessages
+            )
+        } finally {
+            fixture.securityManager.shutdown()
+        }
+    }
+
+    @Test
     fun completedImpostorHandshakeCannotEstablishOrDeliverAPrivateMessage() = runTest {
         val fixture = Fixture()
         val attacker = Party("3".repeat(64), claimedPeerID = fixture.sender.peerID)

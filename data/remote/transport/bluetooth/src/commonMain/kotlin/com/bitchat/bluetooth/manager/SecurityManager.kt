@@ -6,6 +6,7 @@ import com.bitchat.bluetooth.protocol.BitchatPacket
 import com.bitchat.bluetooth.protocol.MessageType
 import com.bitchat.bluetooth.protocol.MAX_PROCESSED_MESSAGE_IDS
 import com.bitchat.bluetooth.protocol.MAX_RECENT_ANNOUNCEMENTS
+import com.bitchat.crypto.Cryptography
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
 
@@ -24,6 +25,9 @@ class SecurityManager(
         private const val TAG = "SecurityManager"
         private val MESSAGE_TIMEOUT = 5.minutes // 5 minutes (same as iOS)
         private const val ANNOUNCEMENT_DEDUP_WINDOW_MS = 60_000L  // 1 minute window for announcement dedup
+        private const val PAYLOAD_DIGEST_BYTES = 16
+        // No recipient id is this short: a packet without one cannot share a key with one that has.
+        private const val NO_RECIPIENT = "-"
     }
 
     // Convert peer ID hex string to bytes for comparison
@@ -79,11 +83,25 @@ class SecurityManager(
     }
 
     /**
-     * Generate unique message ID for duplicate detection
+     * The key two packets share exactly when they are the same packet: sender, recipient, timestamp,
+     * type and the first 16 bytes of the SHA-256 of the payload.
+     *
+     * The record is made before anything authenticates the packet, and every one of those fields
+     * travels in the clear. Were the key to leave one out, whoever heard a genuine packet could send
+     * its own under the same key with that field changed (other bytes in the payload, another
+     * recipient) and have the genuine one, arriving later by a relay or as a retry, dropped as a
+     * duplicate. The TTL is left out on purpose, as are the signature, the padding and the
+     * compression of the wire form: a relayed copy differs in those and is still the same packet,
+     * and so is the same ciphertext carried over another link in another envelope.
      */
     private fun generateMessageID(packet: BitchatPacket, peerID: String): String {
-        return "${peerID}_${packet.timestamp}_${packet.type}"
+        val recipient = packet.recipientID?.toHex() ?: NO_RECIPIENT
+        val payloadDigest = Cryptography.getDigestHash(packet.payload).take(PAYLOAD_DIGEST_BYTES).toByteArray().toHex()
+        return "${peerID}_${recipient}_${packet.timestamp}_${packet.type}_${payloadDigest}"
     }
+
+    private fun ByteArray.toHex(): String =
+        joinToString("") { byte -> (byte.toInt() and 0xff).toString(16).padStart(2, '0') }
 
     /** Releases a duplicate record when a refused early payload could later become readable. */
     fun forgetPacket(packet: BitchatPacket, peerID: String) {
