@@ -74,6 +74,8 @@ import com.bitchat.nostr.util.HandledGiftWraps
 import com.bitchat.nostr.util.hexStringToByteArray
 import com.bitchat.nostr.util.toHexString
 import com.bitchat.lora.LoRaPeer
+import com.bitchat.lora.loRaHeartbeatNickname
+import com.bitchat.lora.mayBeCutLoRaNickname
 import com.bitchat.local.prefs.FavoritesUpdate
 import com.bitchat.local.prefs.LoRaPreferences
 import com.bitchat.repo.lora.loRaConfiguration
@@ -2408,20 +2410,36 @@ class ChatRepo(
             // be: every mesh identity known under that name, from the mesh itself and from bitchat LoRa
             // heartbeats. Only the bitchat LoRa stack announces the mesh identity; a Meshtastic or
             // MeshCore node id is another namespace and identifies nobody on the mesh.
-            val loRaPeersNamed = lora?.peers?.value?.filter { it.nickname == nickname }.orEmpty()
+            //
+            // A bitchat heartbeat carries at most the first 24 bytes of a name. A name heard there that
+            // is long enough to be such a cut may be the whole name of one device and the start of
+            // another's, so it identifies nobody; it only says who may be meant (below).
+            val (heardMaybeCut, heardWhole) = lora?.peers?.value.orEmpty().partition {
+                isMeshPeerId(it.deviceId) && mayBeCutLoRaNickname(it.nickname)
+            }
+            val loRaPeersNamed = heardWhole.filter { it.nickname == nickname }
             val (meshIdentityPeers, foreignPeers) = loRaPeersNamed.partition { isMeshPeerId(it.deviceId) }
             val knownSenderIds = (
                 meshIdentityPeers.map { it.deviceId.lowercase() } +
                     meshPeers.value.filter { it.displayName == nickname }.map { it.id.lowercase() }
                 ).toSet()
             val peerId = knownSenderIds.singleOrNull()
+            // A device heard under what this name sounds like in a heartbeat, and not counted above,
+            // may be the sender, another device of the name, or one that only shares its start: the
+            // name is ambiguous. Nothing a peer sends can take a device out of this count, only put it
+            // among the known ones, which makes them two.
+            val heardAs = loRaHeartbeatNickname(nickname)
+            val possibleNamesakes = heardMaybeCut.any {
+                it.nickname == heardAs && it.deviceId.lowercase() !in knownSenderIds
+            }
             // When the name could be more than one device, pairing could hide one person's message
             // behind another's, so this copy is shown as it is: a duplicate row at worst. A node of a
             // foreign LoRa stack cannot be told from a mesh peer of the same name; those two are taken
             // to be one device, which is what they are when our own app runs that stack.
             val senderIsUnambiguous = knownSenderIds.size <= 1 &&
                 foreignPeers.size <= 1 &&
-                (foreignPeers.isEmpty() || meshIdentityPeers.isEmpty())
+                (foreignPeers.isEmpty() || meshIdentityPeers.isEmpty()) &&
+                !possibleNamesakes
             val message = BitchatMessage(
                 id = messageID,
                 sender = shownName,

@@ -26,12 +26,10 @@ fun LoRaConfig.airtimeMicros(frameBytes: Int): Long {
 /** [airtimeMicros] in whole milliseconds, rounded up: what a budget is charged. */
 fun LoRaConfig.airtimeMs(frameBytes: Int): Long = (airtimeMicros(frameBytes) + 999) / 1_000
 
-/**
- * How long a symbol lasts under this configuration relative to SF9 at 125 kHz (1.0 there, 0.25 at SF9 and
- * 500 kHz, 8.0 at SF12 and 125 kHz). Limits on time on air that were worked out for SF9 at 125 kHz are
- * multiplied by this.
- */
-fun LoRaConfig.symbolTimeScale(): Double = symbolDurationMicros().toDouble() / 4_096
+/** A limit on time on air worked out in milliseconds for SF9 at 125 kHz, in microseconds for this
+ *  configuration: scaled by how long a symbol lasts here relative to there. */
+fun LoRaConfig.scaledAirtimeLimitMicros(millisAtSf9Bw125: Long): Long =
+    millisAtSf9Bw125 * 1_000L * symbolDurationMicros() / 4_096
 
 private fun LoRaConfig.symbolDurationMicros(): Long =
     (1L shl spreadingFactor) * 1_000_000L / bandwidth

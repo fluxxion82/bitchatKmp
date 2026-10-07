@@ -10,6 +10,7 @@ import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.lora.LoRaPeer
 import com.bitchat.lora.LoRaProtocol
+import com.bitchat.lora.loRaHeartbeatNickname
 import com.bitchat.lora.radio.LoRaConfig
 import io.mockk.every
 import io.mockk.mockk
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.seconds
@@ -293,6 +295,111 @@ class ChatRepoCrossTransportTest {
         }
     }
 
+    // A bitchat heartbeat carries at most the first 24 bytes of a name. LONG_NAME and OTHER_LONG_NAME
+    // are 25 bytes and differ in the last one, so both are heard as LONG_NAME_ON_AIR, which is 24
+    // bytes and could itself be somebody's whole name.
+
+    @Test fun aLongNameOnBothTransportsIsStillOneRow() = runTest {
+        longNameCase(
+            heard = mapOf(ALICE to LONG_NAME_ON_AIR),
+            onMesh = arrayOf(ALICE to LONG_NAME),
+            meshCopyFrom = ALICE to LONG_NAME,
+            expectedRows = 1,
+        )
+    }
+
+    @Test fun aNameJustShortEnoughToBeHeardWholeOnBothTransportsIsStillOneRow() = runTest {
+        longNameCase(
+            heard = mapOf(ALICE to LONG_NAME_ON_AIR),
+            onMesh = arrayOf(ALICE to LONG_NAME_ON_AIR),
+            meshCopyFrom = ALICE to LONG_NAME_ON_AIR,
+            radioSender = LONG_NAME_ON_AIR,
+            expectedRows = 1,
+        )
+    }
+
+    @Test fun aDeviceHeardUnderTheStartOfALongNameAndUnknownToTheMeshMakesThatNameAmbiguous() = runTest {
+        // It may be another device of this name: the radio copy must not be taken for the mesh peer's.
+        longNameCase(
+            heard = mapOf(OTHER_ALICE to LONG_NAME_ON_AIR),
+            onMesh = arrayOf(ALICE to LONG_NAME),
+            meshCopyFrom = ALICE to LONG_NAME,
+            expectedRows = 2,
+        )
+    }
+
+    @Test fun aDeviceThatOnlySharesTheStartOfALongNameIsNotTakenForItsSender() = runTest {
+        // The mesh knows this device under its own name. Were it taken for the sender, the radio copy
+        // (someone else's message) would be dropped as the twin of what this device said on the mesh.
+        longNameCase(
+            heard = mapOf(OTHER_ALICE to LONG_NAME_ON_AIR),
+            onMesh = arrayOf(OTHER_ALICE to OTHER_LONG_NAME),
+            meshCopyFrom = OTHER_ALICE to OTHER_LONG_NAME,
+            expectedRows = 2,
+        )
+    }
+
+    @Test fun aDeviceWithALongNameIsNotTakenForTheSenderWhoseWholeNameIsItsStart() = runTest {
+        // What is heard of the long name is, letter for letter, another sender's whole name.
+        longNameCase(
+            heard = mapOf(ALICE to LONG_NAME_ON_AIR),
+            onMesh = arrayOf(ALICE to LONG_NAME),
+            meshCopyFrom = ALICE to LONG_NAME,
+            radioSender = LONG_NAME_ON_AIR,
+            expectedRows = 2,
+        )
+    }
+
+    @Test fun aDeviceThatSharesTheStartOfALongNameMakesItAmbiguousWhateverTheMeshCallsThatDevice() = runTest {
+        // What the mesh calls a device is only an announcement: it must not be able to take a
+        // possible namesake out of the count.
+        longNameCase(
+            heard = mapOf(ALICE to LONG_NAME_ON_AIR, OTHER_ALICE to LONG_NAME_ON_AIR),
+            onMesh = arrayOf(ALICE to LONG_NAME, OTHER_ALICE to OTHER_LONG_NAME),
+            meshCopyFrom = ALICE to LONG_NAME,
+            expectedRows = 2,
+        )
+    }
+
+    @Test fun aNodeOfAnotherLoRaStackNamedLikeTheStartOfALongNameChangesNothing() = runTest {
+        // Only bitchat heartbeats cut names: elsewhere those 24 bytes are simply another name.
+        longNameCase(
+            heard = mapOf("!a1b2c3d4" to LONG_NAME_ON_AIR),
+            onMesh = arrayOf(ALICE to LONG_NAME),
+            meshCopyFrom = ALICE to LONG_NAME,
+            expectedRows = 1,
+        )
+    }
+
+    /** A mesh message "hello", then the radio message `<radioSender>:hello`: how many rows are shown. */
+    private suspend fun TestScope.longNameCase(
+        heard: Map<String, String>,
+        onMesh: Array<Pair<String, String>>,
+        meshCopyFrom: Pair<String, String>,
+        expectedRows: Int,
+        radioSender: String = LONG_NAME,
+    ) {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        try {
+            assertEquals(LONG_NAME_ON_AIR, loRaHeartbeatNickname(LONG_NAME))
+            assertEquals(LONG_NAME_ON_AIR, loRaHeartbeatNickname(OTHER_LONG_NAME))
+            val lora = FakeLoRaProtocol(heard)
+            val chatRepo = chatRepo(scope, dispatcher, mutableListOf(), lora, meshWith(*onMesh))
+            chatRepo.didUpdatePeerList(onMesh.map { it.first })
+            runCurrent()
+
+            chatRepo.didReceiveMessage(meshMessage().copy(sender = meshCopyFrom.second, senderPeerID = meshCopyFrom.first))
+            runCurrent()
+            lora.receive("$radioSender:hello")
+            runCurrent()
+
+            assertEquals(expectedRows, chatRepo.getMeshMessages().size)
+        } finally {
+            scope.cancel()
+        }
+    }
+
     @Test fun aNicknameSharedByTwoMeshPeersIsNeverPaired() = runTest {
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -426,11 +533,13 @@ class ChatRepoCrossTransportTest {
         timestamp = Instant.fromEpochSeconds(0),
     )
 
-    private class FakeLoRaProtocol(deviceIds: List<String> = listOf(ALICE), name: String = "alice") : LoRaProtocol {
+    private class FakeLoRaProtocol(heard: Map<String, String>) : LoRaProtocol {
+        constructor(deviceIds: List<String> = listOf(ALICE), name: String = "alice") : this(deviceIds.associateWith { name })
+
         private val messages = MutableSharedFlow<ByteArray>(extraBufferCapacity = 1)
 
         override val peers: StateFlow<List<LoRaPeer>> = MutableStateFlow(
-            deviceIds.map { LoRaPeer(it, name, Instant.fromEpochSeconds(0), -80, 6f) },
+            heard.map { (deviceId, name) -> LoRaPeer(deviceId, name, Instant.fromEpochSeconds(0), -80, 6f) },
         )
         override val incomingMessages: Flow<ByteArray> = messages
         override val isReady = true
@@ -450,5 +559,8 @@ class ChatRepoCrossTransportTest {
     private companion object {
         const val ALICE = "1111111111111111"
         const val OTHER_ALICE = "2222222222222222"
+        val LONG_NAME_ON_AIR = "€".repeat(8)
+        val LONG_NAME = LONG_NAME_ON_AIR + "a"
+        val OTHER_LONG_NAME = LONG_NAME_ON_AIR + "b"
     }
 }

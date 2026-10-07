@@ -2,6 +2,7 @@ package com.bitchat.lora.bitchat
 
 import com.bitchat.lora.LoRaPeer
 import com.bitchat.lora.LoRaProtocol
+import com.bitchat.lora.loRaHeartbeatNickname
 import com.bitchat.lora.bitchat.logging.LoRaLogger
 import com.bitchat.lora.bitchat.logging.LoRaTags
 import com.bitchat.lora.bitchat.protocol.HeartbeatPayload
@@ -11,8 +12,11 @@ import com.bitchat.lora.bitchat.protocol.LoRaFragmenter
 import com.bitchat.lora.bitchat.protocol.MeshPacketFrame
 import com.bitchat.lora.bitchat.protocol.RangePiBeacon
 import com.bitchat.lora.bitchat.radio.LoRaRadio
+import com.bitchat.lora.bitchat.transmit.LoRaTransmitter
+import com.bitchat.lora.bitchat.transmit.TransmitKind
 import com.bitchat.lora.radio.LoRaConfig
 import com.bitchat.lora.radio.LoRaEvent
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
@@ -35,6 +39,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 import kotlin.time.Instant
+import kotlin.time.TimeSource
+
+private val protocolMonotonicStart = TimeSource.Monotonic.markNow()
 
 /**
  * High-level LoRa transport layer implementing the BitChat protocol.
@@ -72,7 +79,9 @@ class BitChatLoRaProtocol internal constructor(
     private val fragmenter: LoRaFragmenter,
     private val assembler: LoRaAssembler,
     private val beaconProbeEnabled: Boolean = false,
-    private val dispatcher: CoroutineDispatcher = Dispatchers.Default
+    private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val clockMillis: () -> Long = { protocolMonotonicStart.elapsedNow().inWholeMilliseconds },
+    private val jitter: (LongRange) -> Long = { it.random() },
 ) : LoRaProtocol {
 
     constructor(radio: LoRaRadio, fragmenter: LoRaFragmenter, assembler: LoRaAssembler,
@@ -80,6 +89,7 @@ class BitChatLoRaProtocol internal constructor(
         this(PlatformBitChatRadio(radio), fragmenter, assembler, beaconProbeEnabled)
 
     private var scope: CoroutineScope? = null
+    private val transmitter = LoRaTransmitter(radio, clockMillis, jitter)
 
     // Peer tracking
     private val _peers = MutableStateFlow<List<LoRaPeer>>(emptyList())
@@ -132,6 +142,7 @@ class BitChatLoRaProtocol internal constructor(
         }
 
         scope = CoroutineScope(dispatcher + SupervisorJob())
+        transmitter.start(config, requireNotNull(scope))
         // Attach before enabling RX so packets from the new session cannot be missed.
         scope?.launch(start = CoroutineStart.UNDISPATCHED) {
             radio.events.collect { event ->
@@ -153,6 +164,7 @@ class BitChatLoRaProtocol internal constructor(
         LoRaLogger.i(LoRaTags.TRANSPORT, "Stopping LoRa transport")
         val oldScope = scope
         scope = null
+        transmitter.stop()
         oldScope?.coroutineContext?.get(Job)?.cancelAndJoin()
         heartbeatJob = null
         peerCleanupJob = null
@@ -173,7 +185,16 @@ class BitChatLoRaProtocol internal constructor(
      * @param flags Frame flags (e.g., FLAG_HEARTBEAT)
      * @return true if all fragments were sent successfully
      */
-    private suspend fun sendWithFlags(data: ByteArray, flags: UByte): Boolean {
+    private suspend fun sendWithFlags(data: ByteArray, flags: UByte): Boolean =
+        transmit(data, flags, TransmitKind.PUBLIC_MESSAGE) == true
+
+    /**
+     * Fragments [data] and hands every frame to the transmitter, the only caller of the radio.
+     *
+     * @return whether all fragments were sent, or null when they were refused as a whole because
+     *   [kind] has no time on air or no place left
+     */
+    private suspend fun transmit(data: ByteArray, flags: UByte, kind: TransmitKind): Boolean? {
         if (!radio.isReady) {
             LoRaLogger.w(LoRaTags.TRANSPORT, "Cannot send: radio not ready")
             return false
@@ -181,25 +202,21 @@ class BitChatLoRaProtocol internal constructor(
 
         LoRaLogger.d(LoRaTags.TRANSPORT, "Sending ${data.size} bytes (flags=${flags})")
 
-        val frames = fragmenter.fragment(data, flags)
+        val frames = fragmenter.fragment(data, flags).map { it.toBytes() }
         if (frames.isEmpty()) {
             LoRaLogger.e(LoRaTags.TRANSPORT, "Fragmentation produced no frames")
             return false
         }
 
-        LoRaLogger.d(LoRaTags.TRANSPORT, "Fragmented into ${frames.size} frame(s)")
-
-        var allSent = true
-        for (frame in frames) {
-            val frameBytes = frame.toBytes()
-            if (!radio.send(frameBytes)) {
-                LoRaLogger.e(LoRaTags.TRANSPORT, "Failed to send frame ${frame.fragmentIndex}/${frame.totalFragments}")
-                allSent = false
-                // Continue trying to send remaining frames
-            }
+        val tickets = transmitter.offer(frames, kind)
+        if (tickets == null) {
+            LoRaLogger.w(
+                LoRaTags.TRANSPORT,
+                "Not sent, no time on air left for $kind: ${frames.size} frame(s), ${frames.sumOf { it.size }} bytes"
+            )
+            return null
         }
-
-        return allSent
+        return tickets.map { it.await() }.all { it == LoRaTransmitter.Outcome.SENT }
     }
 
     /**
@@ -242,19 +259,22 @@ class BitChatLoRaProtocol internal constructor(
             delay(1000)
 
             while (isActive) {
-                sendHeartbeat()
-                delay(HEARTBEAT_INTERVAL_MS)
+                // The wait starts once the heartbeat has left the air, so the next one finds its
+                // ledger free again; one that was refused is asked for again sooner.
+                if (sendHeartbeat()) delay(HEARTBEAT_INTERVAL_MS) else delay(HEARTBEAT_RETRY_MS)
             }
         }
     }
 
     /**
      * Send a single heartbeat broadcast.
+     *
+     * @return false only when it was refused for want of time on air
      */
-    private suspend fun sendHeartbeat() {
+    private suspend fun sendHeartbeat(): Boolean {
         if (deviceId.isEmpty()) {
             LoRaLogger.w(LoRaTags.TRANSPORT, "Cannot send heartbeat: deviceId not set")
-            return
+            return true
         }
 
         val effectiveNickname = nickname.ifEmpty { "Anonymous" }
@@ -264,11 +284,14 @@ class BitChatLoRaProtocol internal constructor(
         try {
             val payload = HeartbeatPayload(
                 deviceId = deviceId.take(16).padEnd(16, '0'),
-                nickname = effectiveNickname.take(50)
+                nickname = loRaHeartbeatNickname(effectiveNickname)
             )
-            sendWithFlags(payload.toBytes(), LoRaFrame.FLAG_HEARTBEAT)
+            return transmit(payload.toBytes(), LoRaFrame.FLAG_HEARTBEAT, TransmitKind.HEARTBEAT) != null
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             LoRaLogger.e(LoRaTags.TRANSPORT, "Failed to send heartbeat", e)
+            return true
         }
     }
 
@@ -460,6 +483,9 @@ class BitChatLoRaProtocol internal constructor(
     companion object {
         /** Heartbeat broadcast interval in milliseconds */
         const val HEARTBEAT_INTERVAL_MS = 60_000L
+
+        /** How soon a heartbeat that was refused for want of time on air is asked for again */
+        const val HEARTBEAT_RETRY_MS = 5_000L
 
         /** Peer timeout in seconds (peers not seen within this time are removed) */
         const val PEER_TIMEOUT_SECONDS = 180L

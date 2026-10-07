@@ -47,12 +47,11 @@ class LoRaAirtimeTest {
         }
     }
 
-    @Test fun symbolTimeScaleMatchesSf9At125KhzBaseline() {
-        assertEquals(1.0, LoRaConfig().symbolTimeScale())
-        assertEquals(0.25, LoRaConfig(bandwidth = 500_000L).symbolTimeScale())
-        assertEquals(0.5, LoRaConfig(bandwidth = 250_000L).symbolTimeScale())
-        assertEquals(8.0, LoRaConfig(spreadingFactor = 12).symbolTimeScale())
-        assertEquals(0.25, LoRaConfig(spreadingFactor = 7).symbolTimeScale())
+    @Test fun airtimeLimitsScaleFromTheSf9At125KhzBaseline() {
+        assertEquals(4_000_000L, LoRaConfig().scaledAirtimeLimitMicros(4_000))
+        assertEquals(1_000_000L, LoRaConfig(bandwidth = 500_000L).scaledAirtimeLimitMicros(4_000))
+        assertEquals(2_000_000L, LoRaConfig(bandwidth = 250_000L).scaledAirtimeLimitMicros(4_000))
+        assertEquals(32_000_000L, LoRaConfig(spreadingFactor = 12).scaledAirtimeLimitMicros(4_000))
     }
 
     @Test fun sf12AirtimeUsesTheDriversLowDataRateOptimizationRule() {
