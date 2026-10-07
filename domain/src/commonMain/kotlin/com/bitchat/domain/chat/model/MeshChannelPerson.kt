@@ -28,6 +28,12 @@ data class MeshChannelPerson(
     val nameIsFixed: Boolean = false,
     /** What the peer announces now, when [nameIsFixed] and that is another name than [displayName]. */
     val claimedName: String? = null,
+    /**
+     * The mesh peer id a private chat with this person is opened under when that is not [id]: for a
+     * person known only from the radio, the id its heartbeat announces, in lower case. Nothing proves
+     * it until a handshake with that id's key completes. Null for a radio node of another stack.
+     */
+    val dmPeerId: String? = null,
 ) {
     /** Known only from the LoRa radio: not connected over the mesh and not the other side of a private chat. */
     val isLoRaOnly: Boolean

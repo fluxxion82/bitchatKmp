@@ -122,6 +122,19 @@ class BindingTest {
         )
     }
 
+    @Test fun peopleCountStillMatchesWhenARadioPersonAnnouncesTheIdOfAPrivateChat() {
+        val header = HeaderState(
+            selectedLocationChannel = Channel.Mesh,
+            meshPeople = listOf(
+                MeshChannelPerson("a1b2", "alice", emptySet(), true, null),
+                MeshChannelPerson("lora-radio", "radio", setOf(MeshChannelTransport.LORA), false, seen, dmPeerId = "a1b2"),
+            ),
+        )
+
+        assertEquals(2, peopleCount(header))
+        assertEquals(peopleCount(header), peerEntries(header, emptySet()).size)
+    }
+
     @Test fun peopleCountMatchesEveryMeshPeopleRow() {
         val header = HeaderState(
             selectedLocationChannel = Channel.Mesh,

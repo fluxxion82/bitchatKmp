@@ -2,7 +2,11 @@ package com.bitchat.design.chat
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.GeoPerson
@@ -68,6 +72,65 @@ class PeopleSectionTest {
         onNodeWithText("radio").assertExists()
         onNodeWithText("LoRa").assertExists()
         onNodeWithText("No one connected").assertDoesNotExist()
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun `a LoRa peer that announces a mesh id is opened as that mesh peer and the drawer closes`() = runComposeUiTest {
+        val opened = mutableListOf<String>()
+        var dismissed = 0
+        setContent {
+            MaterialTheme {
+                PeopleSection(
+                    connectedPeers = emptyList(),
+                    loraPeers = listOf(loraPerson()),
+                    loraDmPeerIds = mapOf("lora-radio" to "a1b2"),
+                    peerNicknames = emptyMap(),
+                    peerDirect = emptyMap(),
+                    nickname = "me",
+                    selectedPrivatePeer = null,
+                    favoritePeers = emptySet(),
+                    hasUnreadPrivateMessages = emptySet(),
+                    privateChats = emptyMap(),
+                    onMeshPersonTap = { opened += it },
+                    onToggleFavorite = {},
+                    onDismiss = { dismissed++ },
+                )
+            }
+        }
+
+        onNodeWithText("radio").performClick()
+        // By the id alone: the name in the heartbeat is this row's label and is handed to nobody.
+        assertEquals(listOf("a1b2"), opened)
+        assertEquals(1, dismissed)
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun `a LoRa peer that announces no mesh id is not clickable`() = runComposeUiTest {
+        var opened = false
+        setContent {
+            MaterialTheme {
+                PeopleSection(
+                    connectedPeers = emptyList(),
+                    loraPeers = listOf(loraPerson()),
+                    peerNicknames = emptyMap(),
+                    peerDirect = emptyMap(),
+                    nickname = "me",
+                    selectedPrivatePeer = null,
+                    favoritePeers = emptySet(),
+                    hasUnreadPrivateMessages = emptySet(),
+                    privateChats = emptyMap(),
+                    onMeshPersonTap = { opened = true },
+                    onToggleFavorite = {},
+                    onDismiss = {},
+                )
+            }
+        }
+
+        onAllNodes(hasText("radio").and(hasClickAction())).assertCountEquals(0)
+        onNodeWithText("radio").performClick()
+        assertFalse(opened)
     }
 
     @OptIn(ExperimentalTestApi::class)

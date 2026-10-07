@@ -36,6 +36,7 @@ import com.bitchat.tui.channelUsesNostr
 import com.bitchat.tui.commandFailureMessage
 import com.bitchat.tui.dmChannelFor
 import com.bitchat.tui.dmPeerFor
+import com.bitchat.tui.dmTarget
 import com.bitchat.tui.eraseDrafts
 import com.bitchat.tui.noteMessages
 import com.bitchat.tui.peerEntries
@@ -127,7 +128,7 @@ fun BitchatTui(vms: TuiViewModels, background: CoroutineScope, notices: StateFlo
     }
 
     fun openDm(peer: PeerEntry) {
-        if (canStartDm(vms, peer)) session.open(peer)
+        if (canStartDm(vms, peer)) session.open(dmTarget(peer, vms.main.headerState.value.peerNicknames))
     }
 
     /** Sends [line] in the open DM, or puts it back in the editor when the DM cannot take it now. */
@@ -351,7 +352,7 @@ private fun canStartDm(vms: TuiViewModels, peer: PeerEntry): Boolean = when (pee
     // A mesh peer or a saved private chat, whatever radio it is on right now.
     PeerTransport.Direct, PeerTransport.DirectLoRa, PeerTransport.Routed, PeerTransport.Offline -> true
     PeerTransport.Nostr -> vms.main.headerState.value.geohashPeople.any { it.id == peer.id }
-    PeerTransport.LoRa -> false // No view-model API for LoRa DMs yet.
+    PeerTransport.LoRa -> peer.dmPeerId != null
 }
 
 /**
@@ -367,7 +368,12 @@ private suspend fun startDm(vms: TuiViewModels, peer: PeerEntry): Boolean {
             val person = header.geohashPeople.firstOrNull { it.id == peer.id } ?: return false
             vms.main.startGeohashDM(person, (header.selectedLocationChannel as? Channel.Location)?.geohash)
         }
-        PeerTransport.LoRa -> return false
+        PeerTransport.LoRa -> {
+            // Under the mesh id the heartbeat announces and never under the heartbeat's name,
+            // whichever of the two this was called with: see dmTarget.
+            val target = dmTarget(peer, header.peerNicknames)
+            vms.main.startMeshDM(target.dmPeerId ?: return false, target.name)
+        }
     }
     // Never cancelled: a switch cut halfway would leave the view model inconsistent. The session
     // stops waiting instead, and undoes a late switch it no longer wants.

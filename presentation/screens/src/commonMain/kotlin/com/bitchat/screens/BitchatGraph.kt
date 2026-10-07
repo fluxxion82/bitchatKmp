@@ -269,6 +269,7 @@ fun BitchatGraph(mainViewModel: MainViewModel) {
                         selectedLocationChannel = headerState.selectedLocationChannel,
                         geohashPeople = headerState.geohashPeople,
                         loraPeers = headerState.loraPeers,
+                        loraDmPeerIds = headerState.loraDmPeerIds,
                         isTeleported = headerState.teleported,
                         onChannelClick = { channel ->
                             mainViewModel.selectChannel(channel)

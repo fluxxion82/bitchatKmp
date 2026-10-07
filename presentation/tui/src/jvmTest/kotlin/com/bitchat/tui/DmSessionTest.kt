@@ -447,5 +447,8 @@ class DmSessionTest {
         assertEquals("b0b", dmConversationKey(bob))
         assertEquals("nostr_d0ra001122334455", dmConversationKey(dora))
         assertEquals("!a1b2c3d4", dmConversationKey("!a1b2c3d4", PeerTransport.LoRa))
+        // A radio row's chat is kept under the mesh id its heartbeat announces; no other row has such an id.
+        assertEquals("a1b2", dmConversationKey(PeerEntry("lora-radio", "radio", PeerTransport.LoRa, dmPeerId = "a1b2")))
+        assertEquals("c4r0l", dmConversationKey(PeerEntry("c4r0l", "carol", PeerTransport.Offline, dmPeerId = "ffff")))
     }
 }

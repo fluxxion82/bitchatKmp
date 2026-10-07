@@ -18,7 +18,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  * `DmState.privateChats`, `DmState.unreadPeers`): a mesh peer ID as is, a geohash person's full
  * Nostr key shortened to `nostr_` and its first 16 characters, as `SaveUserStateAction` does.
  */
-fun dmConversationKey(peer: PeerEntry): String = dmConversationKey(peer.id, peer.transport)
+fun dmConversationKey(peer: PeerEntry): String =
+    peer.dmPeerId.takeIf { peer.transport == PeerTransport.LoRa } ?: dmConversationKey(peer.id, peer.transport)
 
 fun dmConversationKey(id: String, transport: PeerTransport): String =
     if (transport == PeerTransport.Nostr) "nostr_${id.take(16)}" else id

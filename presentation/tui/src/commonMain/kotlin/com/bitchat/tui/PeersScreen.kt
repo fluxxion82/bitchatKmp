@@ -40,8 +40,10 @@ enum class PeerTransport(val label: String) {
 }
 
 /**
- * One row of [PeersScreen]. [id] is what a DM is opened with (a mesh peer ID, a Nostr key, a LoRa
- * node ID); [name] comes from the peer and is sanitized when drawn. [claims] is what the peer
+ * One row of [PeersScreen]. [id] is what a DM is opened with (a mesh peer ID, a Nostr key), except
+ * for a row known only from the LoRa radio: its [id] only tells the rows apart, and [dmPeerId] is the
+ * mesh peer ID its heartbeat announces (null when it announces none: nothing can be opened then).
+ * [name] comes from the peer and is sanitized when drawn. [claims] is what the peer
  * announces now when its row shows the fixed name of its private chat; it comes from the peer and
  * is sanitized when drawn, like [name].
  */
@@ -52,6 +54,7 @@ data class PeerEntry(
     val claims: String? = null,
     val favorite: Boolean = false,
     val unread: Boolean = false,
+    val dmPeerId: String? = null,
 )
 
 private val LoRaPeerHints = listOf(
@@ -62,8 +65,19 @@ private val LoRaPeerHints = listOf(
     KeyHint("Tab", "next"),
 )
 
+/**
+ * The row a private chat is opened from, as the chat it opens. A row known only from the radio stands
+ * for the mesh peer id its heartbeat announces and for nothing else the heartbeat says: the chat is
+ * known by its own name when there is one already and by the start of its id otherwise, never by the
+ * name in the heartbeat, which anybody in range can send. Every other row is the chat it opens.
+ */
+fun dmTarget(row: PeerEntry, peerNicknames: Map<String, String>): PeerEntry {
+    val peerId = row.dmPeerId?.takeIf { row.transport == PeerTransport.LoRa } ?: return row
+    return PeerEntry(id = peerId, name = peerNicknames[peerId] ?: peerId.take(12), transport = PeerTransport.LoRa, dmPeerId = peerId)
+}
+
 internal fun peersFooterHints(selected: PeerEntry?): List<KeyHint>? =
-    LoRaPeerHints.takeIf { selected?.transport == PeerTransport.LoRa }
+    LoRaPeerHints.takeIf { selected?.transport == PeerTransport.LoRa && selected.dmPeerId == null }
 
 /**
  * The mesh channel's people (`HeaderState.meshPeople`), one row per device. The rows a private chat
@@ -85,6 +99,7 @@ fun meshChannelPeerEntries(
         claims = person.claimedName,
         favorite = person.id in favoritePeers,
         unread = person.id in unreadPeers,
+        dmPeerId = person.dmPeerId,
     )
 
     val listed = people.filterNot { it.isLoRaOnly }.map(::entry)
@@ -96,7 +111,8 @@ fun meshChannelPeerEntries(
 /**
  * The tag a mesh person's row ends with. Every tag but [PeerTransport.LoRa] is a row a private chat
  * can be opened from (it has a mesh peer id or a conversation key); a peer known only from the radio
- * cannot be messaged privately. A saved Nostr conversation keeps the `routed` tag it has always had
+ * can be when its heartbeat announces a mesh peer id ([PeerEntry.dmPeerId], see [dmTarget]).
+ * A saved Nostr conversation keeps the `routed` tag it has always had
  * in this list: [PeerTransport.Nostr] means a geohash participant, which it is not.
  */
 internal fun MeshChannelPerson.transport(): PeerTransport {

@@ -103,4 +103,9 @@ data class HeaderState(
     val loraPeers: List<GeoPerson>
         get() = meshPeople.filter { it.isLoRaOnly }
             .map { GeoPerson(it.id, it.displayName, it.lastSeen ?: Instant.DISTANT_PAST) }
+
+    /** The mesh private-chat keys for LoRa-only rows that can open a private chat. */
+    val loraDmPeerIds: Map<String, String>
+        get() = meshPeople.filter { it.isLoRaOnly && it.dmPeerId != null }
+            .associate { it.id to requireNotNull(it.dmPeerId) }
 }

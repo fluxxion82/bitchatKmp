@@ -176,6 +176,7 @@ class ObserveMeshChannelPeopleTest {
             assertEquals(
                 listOf(
                     MeshChannelPerson("X", "radio name", emptySet(), true, null, nameIsFixed = true),
+                    // Its own entry still. ("X" is no mesh id, so nothing could be opened from it.)
                     MeshChannelPerson("lora-x", "radio name", setOf(MeshChannelTransport.LORA), false, seen),
                 ),
                 awaitItem(),
@@ -335,6 +336,62 @@ class ObserveMeshChannelPeopleTest {
             fixture.meshPeople = listOf(person("N", "next"))
             fixture.events.update(ChatEvent.MeshPeersUpdated)
             assertEquals(listOf("N", "P", "lora-L"), awaitItem().map { it.id })
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun aRadioOnlyPersonSaysWhatAPrivateChatWithItIsOpenedUnderInLowerCase() = runTest {
+        val fixture = Fixture(initialLoRaPeople = listOf(lora("radio", "radio name", meshDeviceId = "A1B2C3D4E5F60718")))
+
+        fixture.observe().test {
+            val person = awaitItem().single()
+            assertEquals("lora-radio", person.id)
+            assertEquals("a1b2c3d4e5f60718", person.dmPeerId)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun aRadioNodeOfAnotherStackHasNothingAPrivateChatCouldBeOpenedUnder() = runTest {
+        val fixture = Fixture(initialLoRaPeople = listOf(lora("radio", "radio name", meshDeviceId = null)))
+
+        fixture.observe().test {
+            assertEquals(null, awaitItem().single().dmPeerId)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun onlyAPersonKnownFromTheRadioAloneHasAnIdOfItsOwnForPrivateChats() = runTest {
+        // A connected mesh peer that is also heard, and a private chat: each is opened under its own id.
+        val connected = "a1".repeat(8)
+        val chat = "b2".repeat(8)
+        val radio = "c3".repeat(8)
+        val fixture = Fixture(
+            meshPeople = listOf(person(connected, "mesh name")),
+            chats = linkedMapOf(chat to listOf(message(chat, "chat name"))),
+            initialLoRaPeople = listOf(
+                lora(connected, "radio name", meshDeviceId = connected.uppercase()),
+                lora(chat, "same id as the chat", meshDeviceId = chat),
+                lora(radio, "other", meshDeviceId = radio),
+            ),
+        )
+
+        fixture.observe().test {
+            assertEquals(
+                mapOf(connected to null, chat to null, "lora-$chat" to chat, "lora-$radio" to radio),
+                awaitItem().associate { it.id to it.dmPeerId },
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test fun anIdThatHasNotTheShapeOfAMeshIdIsNotHandedOnAsOne() = runTest {
+        // Whatever the radio stack says of its ids: a list read while the stack was being changed can
+        // hold another stack's ids under this one's word.
+        val shapes = listOf("12345678", "0123456789abcdef0", "0123456789abcdeg", "!a1b2c3d4e5f6071", "nostr_0123456789", "")
+        val fixture = Fixture(initialLoRaPeople = shapes.mapIndexed { index, id -> lora("radio$index", "name", meshDeviceId = id) })
+
+        fixture.observe().test {
+            assertEquals(List(shapes.size) { null }, awaitItem().map { it.dmPeerId })
             cancelAndIgnoreRemainingEvents()
         }
     }

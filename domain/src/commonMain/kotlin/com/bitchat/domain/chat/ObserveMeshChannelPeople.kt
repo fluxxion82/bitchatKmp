@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.withIndex
  *   chat is a record a packet left behind, and both the name in a chat and the name in a heartbeat
  *   are whatever their senders chose: their being equal proves nothing. The chat and the radio peer
  *   are two entries, a duplicate rather than a device shown under a name someone else supplied.
+ *   The radio peer's entry names the mesh id its heartbeat announces
+ *   ([MeshChannelPerson.dmPeerId]), which is what a private chat opened from it is opened under.
  * - A peer of a LoRa stack whose ids are not mesh ids is always its own entry.
  *
  * A mesh private chat has a name of its own, given when the chat was opened and never changed by what
@@ -178,9 +180,22 @@ class ObserveMeshChannelPeople(
                 transports = setOf(MeshChannelTransport.LORA),
                 hasPrivateChat = false,
                 lastSeen = person.lastSeen,
+                // What its heartbeat says its mesh id is: a claim, which a private chat opened under
+                // it puts to the test (only the holder of that id's key completes the handshake).
+                // Nothing that does not have the shape of a mesh id is handed on as one, whatever
+                // the radio stack says of its ids.
+                dmPeerId = person.meshDeviceId?.lowercase()?.takeIf(::isMeshPeerId),
             )
         }
 
         return listed.values + loRaOnly
+    }
+
+    /** Sixteen hex digits, in lower case: the eight bytes of a mesh peer id. */
+    private fun isMeshPeerId(id: String): Boolean =
+        id.length == MESH_PEER_ID_LENGTH && id.all { it in '0'..'9' || it in 'a'..'f' }
+
+    private companion object {
+        const val MESH_PEER_ID_LENGTH = 16
     }
 }

@@ -204,6 +204,7 @@ class PeersScreenTest {
     @Test fun peersFooterHintsReplaceTheModeHintsOnlyForLoRa() {
         val lora = footerText(peersFooterHints(PeerEntry("lora", "radio", PeerTransport.LoRa)) ?: emptyList(), 120).text
         assertTrue(lora.contains("Enter no DM over LoRa"), lora)
+        assertEquals(null, peersFooterHints(PeerEntry("lora", "radio", PeerTransport.LoRa, dmPeerId = "a1b2")))
         assertEquals(null, peersFooterHints(PeerEntry("direct", "bob", PeerTransport.Direct)))
         assertEquals(null, peersFooterHints(null))
     }
@@ -287,6 +288,57 @@ class PeersScreenTest {
         assertEquals(pad("    lora", "lora ", 30), peerRow(PeerEntry("lora", "lora", PeerTransport.LoRa), 30, false))
         assertEquals(pad("    private", "offline ", 30), peerRow(PeerEntry("private", "private", PeerTransport.Offline), 30, false))
         assertEquals(pad("    nostr", "nostr ", 30), peerRow(PeerEntry("nostr", "nostr", PeerTransport.Nostr), 30, false))
+    }
+
+    @Test fun aRadioOnlyRowCarriesTheMeshIdItsHeartbeatAnnounces() {
+        val person = MeshChannelPerson(
+            "lora-radio", "radio", setOf(MeshChannelTransport.LORA), false, Instant.fromEpochSeconds(0), dmPeerId = "a1b2",
+        )
+
+        assertEquals(
+            PeerEntry("lora-radio", "radio", PeerTransport.LoRa, dmPeerId = "a1b2"),
+            meshChannelPeerEntries(listOf(person), emptyMap(), emptySet(), emptySet()).single(),
+        )
+    }
+
+    @Test fun aPrivateChatAndTheRadioPersonThatAnnouncesItsIdStayTwoRows() {
+        val chat = MeshChannelPerson("a1b2", "alice#a1b2", emptySet(), true, null, nameIsFixed = true)
+        val radio = MeshChannelPerson(
+            "lora-radio", "mallory", setOf(MeshChannelTransport.LORA), false, Instant.fromEpochSeconds(0), dmPeerId = "a1b2",
+        )
+
+        assertEquals(
+            listOf(
+                PeerEntry("a1b2", "alice#a1b2", PeerTransport.Offline),
+                PeerEntry("lora-radio", "mallory", PeerTransport.LoRa, dmPeerId = "a1b2"),
+            ),
+            meshChannelPeerEntries(listOf(chat, radio), emptyMap(), emptySet(), emptySet()),
+        )
+    }
+
+    @Test fun aRadioRowIsOpenedAsTheMeshPeerItAnnouncesAndNeverUnderTheHeartbeatsName() {
+        val id = "a1b2c3d4e5f60718"
+        val row = PeerEntry("lora-radio", "mallory", PeerTransport.LoRa, dmPeerId = id)
+
+        // No chat with that id yet: known by the start of the id.
+        assertEquals(PeerEntry(id, "a1b2c3d4e5f6", PeerTransport.LoRa, dmPeerId = id), dmTarget(row, emptyMap()))
+        // There is one: known by the name it already has.
+        assertEquals(
+            PeerEntry(id, "alice#a1b2", PeerTransport.LoRa, dmPeerId = id),
+            dmTarget(row, mapOf(id to "alice#a1b2", "lora-radio" to "not this")),
+        )
+        assertEquals(id, dmConversationKey(dmTarget(row, emptyMap())))
+    }
+
+    @Test fun everyOtherRowIsTheChatItOpens() {
+        val direct = PeerEntry("b0b", "bob", PeerTransport.Direct, claims = "robert", favorite = true)
+        val foreign = PeerEntry("lora-!a1b2", "node", PeerTransport.LoRa)
+        // A row that is not a radio row keeps its own id whatever else it carries.
+        val odd = PeerEntry("c4r0l", "carol", PeerTransport.Offline, dmPeerId = "ffff")
+
+        assertEquals(direct, dmTarget(direct, mapOf("b0b" to "other")))
+        assertEquals(foreign, dmTarget(foreign, emptyMap()))
+        assertEquals(odd, dmTarget(odd, emptyMap()))
     }
 
     @Test fun geohashAndLoRaPeopleBecomeEntries() {

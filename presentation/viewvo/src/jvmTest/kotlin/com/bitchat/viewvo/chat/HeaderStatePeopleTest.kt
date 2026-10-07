@@ -28,6 +28,19 @@ class HeaderStatePeopleTest {
         assertEquals(listOf(GeoPerson("lora-radio", "radio", seen)), header.loraPeers)
     }
 
+    @Test fun loraDmPeerIdsOnlyContainsRadioOnlyPeopleThatCanOpenAMeshDm() {
+        val header = HeaderState(
+            selectedLocationChannel = Channel.Mesh,
+            meshPeople = listOf(
+                MeshChannelPerson("lora-mesh", "radio", setOf(MeshChannelTransport.LORA), false, seen, dmPeerId = "a1b2"),
+                MeshChannelPerson("lora-foreign", "foreign", setOf(MeshChannelTransport.LORA), false, seen),
+                MeshChannelPerson("private", "private", emptySet(), true, null, dmPeerId = "private"),
+            ),
+        )
+
+        assertEquals(mapOf("lora-mesh" to "a1b2"), header.loraDmPeerIds)
+    }
+
     @Test fun namesFollowThePrecedenceTheListAndTheDirectoryAlwaysHad() {
         val header = HeaderState(
             selectedLocationChannel = Channel.Mesh,

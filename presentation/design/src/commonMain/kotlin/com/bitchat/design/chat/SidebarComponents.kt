@@ -98,6 +98,7 @@ fun SidebarOverlay(
     selectedLocationChannel: Channel = Channel.Mesh,
     geohashPeople: List<GeoPerson> = emptyList(),
     loraPeers: List<GeoPerson> = emptyList(),
+    loraDmPeerIds: Map<String, String> = emptyMap(),
     geohashSelfId: String? = null,
     isTeleported: Boolean = false,
     teleportedPeople: Set<String> = emptySet(),
@@ -210,6 +211,7 @@ fun SidebarOverlay(
                                     modifier = Modifier.padding(bottom = 8.dp),
                                     connectedPeers = visibleConnectedPeers,
                                     loraPeers = loraPeers,
+                                    loraDmPeerIds = loraDmPeerIds,
                                     peerNicknames = peerNicknames,
                                     claimedNames = claimedNames,
                                     fixedNamePeers = fixedNamePeers,
@@ -441,6 +443,7 @@ fun NamedChannelsSection(
 fun PeopleSection(
     connectedPeers: List<String>,
     loraPeers: List<GeoPerson> = emptyList(),
+    loraDmPeerIds: Map<String, String> = emptyMap(),
     peerNicknames: Map<String, String>,
     claimedNames: Map<String, String> = emptyMap(),
     fixedNamePeers: Set<String> = emptySet(),
@@ -535,7 +538,20 @@ fun PeopleSection(
             )
         }
 
-        loraPeers.forEach { person -> LoRaPeerItem(person) }
+        loraPeers.forEach { person ->
+            // Opened as the mesh peer its heartbeat says it is, under that id: the name in the
+            // heartbeat stays the label of this row and goes nowhere else.
+            val dmPeerId = loraDmPeerIds[person.id]
+            LoRaPeerItem(
+                person = person,
+                onItemClick = dmPeerId?.let { peerID ->
+                    {
+                        onMeshPersonTap(peerID)
+                        onDismiss()
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -685,7 +701,7 @@ private fun PeerItem(
 }
 
 @Composable
-private fun LoRaPeerItem(person: GeoPerson) {
+private fun LoRaPeerItem(person: GeoPerson, onItemClick: (() -> Unit)?) {
     val colorScheme = MaterialTheme.colorScheme
     val isDark = colorScheme.background.red + colorScheme.background.green + colorScheme.background.blue < 1.5f
     val nameColor = colorForPeer(person.id, isDark)
@@ -694,6 +710,7 @@ private fun LoRaPeerItem(person: GeoPerson) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .let { row -> if (onItemClick == null) row else row.clickable(onClick = onItemClick) }
             .padding(horizontal = 24.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
