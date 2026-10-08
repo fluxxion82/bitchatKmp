@@ -639,6 +639,17 @@ class NoiseEncryptionFacade(
         }
     }
 
+    /**
+     * Drop the in-flight handshake only if this device opened it: for an opening that did not go
+     * out. The peer's own opening may have arrived since ours was begun, and when this device gave
+     * way to it the handshake in flight is the answer to the peer's, which is not ours to take back.
+     */
+    fun abandonOwnOpening(peerID: String) {
+        withPeerLock(peerID) { state ->
+            if (state.initiated) setCandidate(state, null, destroyPrevious = true)
+        }
+    }
+
     fun removeSession(peerID: String) {
         withPeerLock(peerID) { state -> destroySessions(state) }
     }

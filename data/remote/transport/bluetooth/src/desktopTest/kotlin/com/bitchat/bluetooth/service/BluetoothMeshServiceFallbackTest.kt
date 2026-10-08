@@ -618,6 +618,248 @@ class BluetoothMeshServiceRadioLinkTest {
     }
 
     @Test
+    fun theOpeningTheUserIsOwedGoesOutWhenTheRadioHearsItsPeerAgainAsTheUsersOwn() = runTest {
+        val pair = RadioPair()
+        // No Bluetooth link carries anything, and b is not heard when a's user writes to it.
+        pair.a.connection.deliverPackets = false
+        pair.radio.unheard += pair.b.id
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+        pair.awaitOwedAndPutAside()
+        assertTrue(pair.radio.sent.isEmpty())
+        // A change of what the radio hears that does not bring b back starts nothing, and loses nothing.
+        assertEquals(emptyList(), pair.a.service.startOwedOverRadio())
+
+        pair.radio.unheard -= pair.b.id
+        pair.a.service.onRadioHearsChanged()
+        pair.awaitSessions()
+
+        // The opening the user's action paid for and that could not go then: that one, and no other.
+        assertEquals(listOf<RadioPurpose>(RadioPurpose.HandshakeOpening(byUser = true)), pair.openingsOfA())
+        eventually("nothing to be owed any more") { pair.a.service.handshakesOwedCount() == 0 }
+    }
+
+    @Test
+    fun onceTheUsersOpeningHasLeftTheAirNoChangeOfWhatTheRadioHearsSendsAnother() = runTest {
+        val pair = RadioPair()
+        pair.a.connection.deliverPackets = false
+        pair.radio.passOn = { false }
+        pair.radio.unheard += pair.b.id
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+        pair.awaitOwedAndPutAside()
+        pair.radio.unheard -= pair.b.id
+
+        assertEquals(listOf(pair.b.id), pair.a.service.startOwedOverRadio())
+        eventually("the opening to have left") { pair.a.service.handshakeAttemptsFor(pair.b.id) == 1 }
+        // No answer comes; the sweeper puts the attempt aside. The handshake is still owed.
+        pair.a.service.sweepStalledHandshakes(muchLater())
+        assertFalse(pair.a.service.isHandshakeInFlight(pair.b.id))
+        assertEquals(1, pair.a.service.handshakesOwedCount())
+
+        assertEquals(emptyList(), pair.a.service.startOwedOverRadio())
+        assertEquals(1, pair.openingsOfA().size)
+    }
+
+    @Test
+    fun anOpeningABluetoothLinkTookForAPeerTheMeshDoesNotHaveIsStillOwedOverTheRadioOnceThatAttemptIsOver() = runTest {
+        val pair = RadioPair()
+        // Some Bluetooth link takes the opening; it does not lead to b, which is not heard either.
+        pair.radio.unheard += pair.b.id
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+        eventually("the opening to be counted as sent") { pair.a.service.handshakeAttemptsFor(pair.b.id) == 1 }
+        assertTrue(pair.a.service.isHandshakeInFlight(pair.b.id))
+        pair.radio.unheard -= pair.b.id
+
+        // Nothing is started, and nothing is used up, while that attempt is in flight.
+        assertEquals(emptyList(), pair.a.service.startOwedOverRadio())
+
+        pair.a.service.sweepStalledHandshakes(muchLater())
+        assertFalse(pair.a.service.isHandshakeInFlight(pair.b.id))
+        assertEquals(listOf(pair.b.id), pair.a.service.startOwedOverRadio())
+        pair.awaitSessions()
+        assertEquals(listOf<RadioPurpose>(RadioPurpose.HandshakeOpening(byUser = true)), pair.openingsOfA())
+    }
+
+    @Test
+    fun anOpeningTheRadioHasNoTimeOnAirForIsStillOwedAndGoesOutAtALaterChange() = runTest {
+        val pair = RadioPair()
+        pair.a.connection.deliverPackets = false
+        pair.radio.answer = { RadioSendResult.NO_TIME_ON_AIR }
+        // Heard, and refused when the user asks.
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+        pair.awaitOwedAndPutAside()
+        eventually("the opening to have been offered") { pair.openingsOfA().size == 1 }
+
+        // Refused again when the radio hears something next.
+        assertEquals(listOf(pair.b.id), pair.a.service.startOwedOverRadio())
+        eventually("the opening to have been offered again") { pair.openingsOfA().size == 2 }
+        eventually("the refused attempt to be put aside") { !pair.a.service.isHandshakeInFlight(pair.b.id) }
+
+        pair.radio.answer = { RadioSendResult.SENT }
+        assertEquals(listOf(pair.b.id), pair.a.service.startOwedOverRadio())
+        pair.awaitSessions()
+        assertEquals(emptyList(), pair.a.service.startOwedOverRadio())
+        assertEquals(List(3) { RadioPurpose.HandshakeOpening(byUser = true) }, pair.openingsOfA())
+    }
+
+    @Test
+    fun anActionOfTheUsersWhileAHandshakeItDidNotPayForIsInFlightIsOwedItsOpening() = runTest {
+        val pair = RadioPair().established()
+        // b receives nothing from here on. Three packets under b's id that a cannot read: a gives the
+        // session up and opens again by itself.
+        pair.radio.passOn = { false }
+        repeat(3) { round ->
+            pair.a.service.onLoRaPacketReceived(
+                exactPacket(pair.b.id, pair.a.id, MessageType.NOISE_ENCRYPTED, ByteArray(40) { (it + round).toByte() })
+            )
+        }
+        eventually("a's own opening to have left") { pair.a.service.automaticHandshakesOwedCount() == 1 }
+        assertTrue(pair.a.service.isHandshakeInFlight(pair.b.id))
+
+        // The user writes to b meanwhile: nothing more is sent, the handshake in flight is the user's now.
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+        eventually("the handshake to become the user's") {
+            pair.a.service.handshakesOwedCount() == 1 && pair.a.service.automaticHandshakesOwedCount() == 0
+        }
+        // It comes to nothing.
+        pair.a.service.sweepStalledHandshakes(muchLater())
+        assertFalse(pair.a.service.isHandshakeInFlight(pair.b.id))
+
+        // What the user's action paid for has not left yet: it does now.
+        assertEquals(listOf(pair.b.id), pair.a.service.startOwedOverRadio())
+        eventually("the user's opening to have left") { pair.a.service.handshakeAttemptsFor(pair.b.id) == 2 }
+        // Once: when that one comes to nothing too, there is no other.
+        pair.a.service.sweepStalledHandshakes(muchLater())
+        assertFalse(pair.a.service.isHandshakeInFlight(pair.b.id))
+        assertEquals(emptyList(), pair.a.service.startOwedOverRadio())
+        // The first of the three is the one the pair was established with.
+        assertEquals(
+            listOf(true, false, true),
+            pair.openingsOfA().map { (it as RadioPurpose.HandshakeOpening).byUser },
+        )
+    }
+
+    @Test
+    fun aRestartBroughtAboutByAForgedPacketLeavesNoOpeningOfTheUsersToCome() = runTest {
+        val pair = RadioPair()
+        // b never hears a's opening, so the user's handshake stays in flight: its opening has left the air.
+        pair.radio.passOn = { false }
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+        eventually("the user's opening to be recorded") { pair.a.service.handshakeAttemptsFor(pair.b.id) == 1 }
+        withContext(Dispatchers.Default) { delay(HandshakeRefreshPolicy.HANDSHAKE_RESTART_GRACE_MS + 300) }
+
+        // Any packet under b's id from an address a has not seen b on makes a start the handshake
+        // again; this time the radio has no time on air for it.
+        pair.radio.answer = { RadioSendResult.NO_TIME_ON_AIR }
+        val forged = BitchatPacket(
+            type = MessageType.NOISE_ENCRYPTED.value, senderID = pair.b.id.hexToBytes(),
+            recipientID = "0f0e0d0c0b0a0908".hexToBytes(), timestamp = 7u, payload = ByteArray(40) { it.toByte() }, ttl = 1u,
+        )
+        pair.a.service.onPacketReceived(requireNotNull(BinaryProtocol.encode(forged)), "an-address-never-seen")
+        eventually("the restart to be refused and put aside") {
+            pair.openingsOfA().size == 2 && !pair.a.service.isHandshakeInFlight(pair.b.id)
+        }
+        assertEquals(1, pair.a.service.handshakesOwedCount())
+
+        // Owed to the user still, heard, nothing in flight: and nothing of the user's to send for it.
+        pair.radio.answer = { RadioSendResult.SENT }
+        assertEquals(emptyList(), pair.a.service.startOwedOverRadio())
+        assertEquals(
+            listOf<RadioPurpose>(RadioPurpose.HandshakeOpening(byUser = true), RadioPurpose.HandshakeOpening(byUser = false)),
+            pair.openingsOfA(),
+        )
+    }
+
+    @Test
+    fun anOpeningOwedToAPeerTheMeshHasIsNotSentBecauseTheRadioHearsThatPeerToo() = runTest {
+        val pair = RadioPair()
+        pair.a.connection.deliverPackets = false
+        pair.b.announceTo(pair.a)
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+        pair.awaitOwedAndPutAside()
+
+        // Heard on the radio, owed to the user, nothing in flight: left to the Bluetooth links all the
+        // same, which is where what this device starts for a peer the mesh has goes.
+        assertEquals(emptyList(), pair.a.service.startOwedOverRadio())
+        assertTrue(pair.radio.sent.isEmpty())
+    }
+
+    @Test
+    fun anOpeningTheRadioRefusesTakesBackOnlyItselfWhenThePeersOwnOpeningArrivedMeanwhile() = runTest {
+        thePeersOpeningArrivesBeforeOursIsHandedToALink(oursGoesToTheRadio = true)
+    }
+
+    @Test
+    fun anOpeningNoBluetoothLinkTakesTakesBackOnlyItselfWhenThePeersOwnOpeningArrivedMeanwhile() = runTest {
+        thePeersOpeningArrivesBeforeOursIsHandedToALink(oursGoesToTheRadio = false)
+    }
+
+    /**
+     * One device is owed an opening by its user, and a change of what the radio hears sends it.
+     * Between the moment that handshake is begun and the moment its opening is handed to a link,
+     * the peer's own opening arrives; this device, whose id is the larger, gives way and answers.
+     * Its own opening then does not go out. The answer it gave is not its opening: the peer's last
+     * message must still find it.
+     */
+    private suspend fun thePeersOpeningArrivesBeforeOursIsHandedToALink(oursGoesToTheRadio: Boolean) {
+        val pair = RadioPair()
+        val (yielding, holding) = if (pair.a.id > pair.b.id) pair.a to pair.b else pair.b to pair.a
+        fun sentBy(device: RadioDevice, isIt: (RadioPurpose) -> Boolean) =
+            pair.radio.sent.firstOrNull { it.from == device.id && isIt(it.purpose) }
+
+        yielding.connection.deliverPackets = false
+        pair.radio.unheard += holding.id
+        yielding.service.initiateNoiseHandshake(holding.id)
+        eventually("the opening to be owed") {
+            yielding.service.handshakesOwedCount() == 1 && !yielding.service.isHandshakeInFlight(holding.id)
+        }
+        pair.radio.unheard -= holding.id
+
+        // The peer opens too; its opening is in the air, and so is everything else for now.
+        pair.radio.passOn = { false }
+        holding.service.initiateNoiseHandshake(yielding.id)
+        eventually("the peer's opening") { sentBy(holding) { it is RadioPurpose.HandshakeOpening } != null }
+        val theirOpening = requireNotNull(sentBy(holding) { it is RadioPurpose.HandshakeOpening })
+
+        // From here on answers arrive; the peer's last message is held back until ours is known not to have gone.
+        pair.radio.passOn = { it.purpose != RadioPurpose.HandshakeFinal }
+        val refused = CompletableDeferred<Unit>()
+        pair.radio.answer = { sent ->
+            if (sent.from == yielding.id && sent.purpose is RadioPurpose.HandshakeOpening) {
+                refused.complete(Unit)
+                RadioSendResult.NO_TIME_ON_AIR
+            } else {
+                RadioSendResult.SENT
+            }
+        }
+        // The first look at whether the radio hears the peer is this rule's; the second is made when
+        // the handshake has been begun and its opening is about to be handed to a link.
+        val looks = AtomicInteger()
+        pair.radio.stillHeard = { owner, peerID ->
+            if (owner == yielding.id && peerID == holding.id && looks.incrementAndGet() == 2) {
+                yielding.service.onLoRaPacketReceived(theirOpening.bytes)
+                runBlocking {
+                    eventually("the answer to have reached the peer") { sentBy(holding) { it == RadioPurpose.HandshakeFinal } != null }
+                }
+                oursGoesToTheRadio
+            } else {
+                true
+            }
+        }
+
+        assertEquals(listOf(holding.id), yielding.service.startOwedOverRadio())
+        eventually("the peer's last message to be in the air") { sentBy(holding) { it == RadioPurpose.HandshakeFinal } != null }
+        if (oursGoesToTheRadio) refused.await()
+        // Time for what follows an opening that did not go out.
+        withContext(Dispatchers.Default) { delay(300) }
+        assertTrue(yielding.service.isHandshakeInFlight(holding.id), "the answer to the peer's opening was taken back")
+
+        yielding.service.onLoRaPacketReceived(requireNotNull(sentBy(holding) { it == RadioPurpose.HandshakeFinal }).bytes)
+        eventually("a session on both sides") {
+            yielding.service.hasEstablishedSession(holding.id) && holding.service.hasEstablishedSession(yielding.id)
+        }
+    }
+
+    @Test
     fun aMessageRefusedForWantOfTimeOnAirIsOfferedAgainUnchangedAndTheNextOneWaitsBehindIt() = runTest {
         val pair = RadioPair(radioRetryMs = 20).established()
         val refusals = AtomicInteger()
@@ -1116,6 +1358,14 @@ private class RadioPair(
         awaitSessions()
         return this
     }
+
+    suspend fun awaitOwedAndPutAside() = eventually("the handshake to be owed and put aside") {
+        a.service.handshakesOwedCount() == 1 && !a.service.isHandshakeInFlight(b.id)
+    }
+
+    /** What a has offered the radio as the opening of a handshake, oldest first. */
+    fun openingsOfA(): List<RadioPurpose> =
+        radio.sent.filter { it.from == a.id && it.purpose is RadioPurpose.HandshakeOpening }.map { it.purpose }
 }
 
 private class RadioDevice(
@@ -2002,6 +2252,9 @@ private object FallbackNoOpAdvertisingService : AdvertisingService {
 }
 
 /** Fails if [condition] becomes true at any moment of the next [forMillis] milliseconds. */
+/** A time by which every deadline that began before now has passed. */
+private fun muchLater(): Long = Clock.System.now().toEpochMilliseconds() + 60 * 60 * 1000L
+
 private suspend fun never(description: String, forMillis: Long, condition: suspend () -> Boolean) {
     val happened = withContext(Dispatchers.Default) {
         withTimeoutOrNull(forMillis) {

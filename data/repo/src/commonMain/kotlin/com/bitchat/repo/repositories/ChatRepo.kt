@@ -321,6 +321,14 @@ class ChatRepo(
             coroutineScopeFacade.applicationScope.launch {
                 loraTransport.incomingMeshPackets.collect { mesh.onLoRaPacketReceived(it) }
             }
+            // A peer the radio hears again may be one the user is owed a handshake with, or one
+            // with texts waiting for it.
+            coroutineScopeFacade.applicationScope.launch {
+                loraTransport.peers.collect {
+                    mesh.onRadioHearsChanged()
+                    flushOutboxOverMesh()
+                }
+            }
         }
 
         coroutineScopeFacade.applicationScope.launch {
@@ -2206,9 +2214,10 @@ class ChatRepo(
 
     /**
      * Sends what is queued for [peerID], oldest first, and stops at the first text that cannot go
-     * yet: nothing queued behind it may overtake it.
+     * yet: nothing queued behind it may overtake it. With [overMeshOnly], a text the mesh cannot
+     * carry now waits instead of going through a relay.
      */
-    private fun flushOutboxFor(peerID: String): Unit = synchronized(outboxLock) {
+    private fun flushOutboxFor(peerID: String, overMeshOnly: Boolean = false): Unit = synchronized(outboxLock) {
         val queued = outbox[peerID] ?: return@synchronized
         if (queued.isEmpty()) return@synchronized
 
@@ -2227,7 +2236,7 @@ class ChatRepo(
                     continue
                 }
             }
-            val recipientNpub = if (!hasMesh && canSendViaNostr(peerID)) resolveNostrPublicKey(peerID) else null
+            val recipientNpub = if (!hasMesh && !overMeshOnly && canSendViaNostr(peerID)) resolveNostrPublicKey(peerID) else null
             if (hasMesh) {
                 println("   → Sending queued message via mesh: $messageID")
                 handToMesh(content, peerID, nickname, messageID)
@@ -2251,6 +2260,17 @@ class ChatRepo(
             outbox.remove(peerID)
             println("✅ Outbox flushed for $peerID")
         }
+    }
+
+    /**
+     * Sends what the mesh can carry now of everything that is queued. For when a peer may be back:
+     * the mesh's peer list changed, or the radio heard someone. With its session still standing no
+     * handshake will complete to send its queue, because the mesh service starts none over a
+     * standing session. Over the mesh or not yet: both signals are ones nothing authenticates, and
+     * neither may move a text to a relay.
+     */
+    private fun flushOutboxOverMesh() {
+        synchronized(outboxLock) { outbox.keys.toList() }.forEach { flushOutboxFor(it, overMeshOnly = true) }
     }
 
     suspend fun flushAllOutbox() = withContext(coroutinesContextFacade.io) {
@@ -2703,6 +2723,9 @@ class ChatRepo(
             if (namedChat) chatEventBus.update(ChatEvent.PrivateChatsUpdated)
             println("📊 ChatRepo: meshPeers list now contains ${connected.size} peers")
             chatEventBus.update(ChatEvent.MeshPeersUpdated)
+
+            // A peer that is on the list again may be one with texts waiting for it.
+            flushOutboxOverMesh()
         }
     }
 

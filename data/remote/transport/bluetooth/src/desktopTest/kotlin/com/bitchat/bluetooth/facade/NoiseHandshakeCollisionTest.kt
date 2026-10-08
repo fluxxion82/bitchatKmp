@@ -72,6 +72,32 @@ class NoiseHandshakeCollisionTest {
     }
 
     @Test
+    fun anOpeningThatIsTakenBackTakesOnlyItselfAndNotTheAnswerToThePeersOpening() {
+        val (local, remote) = orderedParties("1".repeat(64), "2".repeat(64))
+
+        // Our own opening, taken back because it did not go out: gone.
+        local.facade.initiateHandshake(remote.peerID, local.privateKey, local.publicKey)
+        local.facade.abandonOwnOpening(remote.peerID)
+        assertTrue(!local.facade.isHandshaking(remote.peerID))
+
+        // Our own opening again. The peer's arrives before we learn that ours did not go out, and we,
+        // with the higher id, give way and answer.
+        local.facade.initiateHandshake(remote.peerID, local.privateKey, local.publicKey)
+        val theirMessage1 = remote.facade.initiateHandshake(local.peerID, remote.privateKey, remote.publicKey)
+        val message2 = response(local.facade.processHandshake(remote.peerID, theirMessage1, local.privateKey, local.publicKey))
+
+        // What is in flight now is the answer to the peer's opening: not ours to take back.
+        local.facade.abandonOwnOpening(remote.peerID)
+
+        val message3 = assertNotNull(
+            response(remote.facade.processHandshake(local.peerID, message2, remote.privateKey, remote.publicKey))
+        )
+        local.facade.processHandshake(remote.peerID, message3, local.privateKey, local.publicKey)
+        assertTrue(local.facade.hasEstablishedSession(remote.peerID))
+        assertTrue(remote.facade.hasEstablishedSession(local.peerID))
+    }
+
+    @Test
     fun theTieBreaksTheSameWayOnBothSides() {
         // If both yielded there would be two responders and no message 1 left; if neither did, the
         // deadlock the journal recorded. Exactly one side must yield, whichever way round the two

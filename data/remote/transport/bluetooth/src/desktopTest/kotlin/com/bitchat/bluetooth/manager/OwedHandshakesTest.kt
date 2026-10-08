@@ -64,6 +64,57 @@ class OwedHandshakesTest {
     }
 
     @Test
+    fun anOpeningIsToComeOnlyForAUserWhoseOwnOpeningDidNotLeave() {
+        val owed = OwedHandshakes()
+        owed.rememberForUser("alice", openingToCome = true)
+        owed.rememberForUser("bob")
+        owed.rememberAutomatic("carol")
+
+        assertEquals(listOf("alice"), owed.takeOpeningsToCome { true })
+    }
+
+    @Test
+    fun anOpeningThatIsToComeStaysSoWhateverIsRememberedForItsPeerAfterwards() {
+        val owed = OwedHandshakes()
+        owed.rememberForUser("alice", openingToCome = true)
+        // A restart this node makes by itself for a handshake that is the user's.
+        owed.rememberForUser("alice")
+        owed.rememberAutomatic("alice")
+
+        assertEquals(listOf("alice"), owed.takeOpeningsToCome { true })
+    }
+
+    @Test
+    fun anOpeningIsTakenOnceAndOnlyForAPeerThatIsReadyForIt() {
+        val owed = OwedHandshakes()
+        listOf("alice", "bob", "carol").forEach { owed.rememberForUser(it, openingToCome = true) }
+
+        assertEquals(listOf("alice", "carol"), owed.takeOpeningsToCome { it != "bob" })
+        // Taken: not to come again. Bob's was left alone, and the entries are all still there.
+        assertEquals(listOf("bob"), owed.takeOpeningsToCome { true })
+        assertEquals(emptyList(), owed.takeOpeningsToCome { true })
+        assertEquals(3, owed.userCount)
+
+        // Whoever took one and could not send it says so.
+        owed.rememberForUser("carol", openingToCome = true)
+        assertEquals(listOf("carol"), owed.takeOpeningsToCome { true })
+    }
+
+    @Test
+    fun anOpeningThatIsToComeGoesWithItsEntry() {
+        val owed = OwedHandshakes(capacity = 2)
+        owed.rememberForUser("alice", openingToCome = true)
+        owed.rememberForUser("bob", openingToCome = true)
+        owed.remove("bob")
+        // Pushes alice out; bob comes back without anything said of an opening.
+        owed.rememberForUser("carol")
+        owed.rememberForUser("bob")
+        owed.rememberForUser("alice")
+
+        assertEquals(emptyList(), owed.takeOpeningsToCome { true })
+    }
+
+    @Test
     fun removeForgetsBothKinds() {
         val owed = OwedHandshakes()
         owed.rememberForUser("alice")

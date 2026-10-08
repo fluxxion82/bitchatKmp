@@ -616,6 +616,42 @@ class BluetoothMeshService(
     }
 
     /**
+     * What the radio hears may have changed: for the radio this is the moment a link to a peer
+     * comes up, which for the Bluetooth links is [onPeerLinkRefreshed].
+     */
+    fun onRadioHearsChanged() {
+        serviceScope.launch {
+            try {
+                startOwedOverRadio()
+            } catch (e: Exception) {
+                logError("BluetoothMeshService", "Starting owed handshakes over the radio failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Sends the opening the user is still owed to each peer the radio is now the way to, and says
+     * to whom.
+     *
+     * Without this a handshake the user asked for while the radio could not take its opening is
+     * started again by nothing but the user's next message: no link comes up for a peer the mesh
+     * does not have, and the sweeper retries only peers the mesh has.
+     *
+     * What the radio hears is a heartbeat's word, which anyone in range can give. So what goes out
+     * here is only what an action of the user's already paid for and that has not left the air:
+     * the opening is taken before anything is started, and it is to come again only if it is
+     * known not to have left. A received packet decides when the user's opening is spent, never
+     * whether there is another.
+     */
+    internal suspend fun startOwedOverRadio(): List<String> {
+        val due = handshakeMutex.withLock {
+            handshakesOwed.takeOpeningsToCome { peerID -> radioReaches(peerID) && !noiseEncryption.isHandshaking(peerID) }
+        }
+        due.forEach { peerID -> startHandshake(peerID, byUser = true, paidByUser = true) }
+        return due
+    }
+
+    /**
      * Abandon handshakes that have been in flight past the deadline and, while the peer still
      * looks reachable and the retry budget allows, start a fresh one.
      *
@@ -1212,6 +1248,8 @@ class BluetoothMeshService(
 
     internal suspend fun handshakeSupervisorSize(): Int = handshakeMutex.withLock { handshakeSupervisor.size }
 
+    internal suspend fun handshakeAttemptsFor(peerID: String): Int = handshakeMutex.withLock { handshakeSupervisor.attemptsFor(peerID) }
+
     internal fun hasNoiseCandidate(peerID: String): Boolean = securityManager.hasCandidate(peerID)
 
     internal fun hasValidatedNoiseSession(peerID: String): Boolean = securityManager.hasValidatedSession(peerID)
@@ -1243,7 +1281,8 @@ class BluetoothMeshService(
     /**
      * [byUser] says who wanted this handshake: the user (a private message was sent to the peer) or
      * this node by itself (a recovery, a retry). It only decides which kind of owed entry is kept.
-     * [paidByUser] is true only for the call the user's own action makes: see [openOverRadio].
+     * [paidByUser] is true for the call the user's own action makes and for the one that sends,
+     * later, the opening such an action paid for: see [openOverRadio] and [startOwedOverRadio].
      */
     private fun startHandshake(peerID: String, byUser: Boolean, paidByUser: Boolean = false) {
         serviceScope.launch {
@@ -1271,7 +1310,9 @@ class BluetoothMeshService(
                     // after has its cleanup run after this and remove the entry.
                     if (byUser) {
                         handshakeMutex.withLock {
-                            if (noiseEncryption.isHandshaking(peerID)) handshakesOwed.rememberForUser(peerID)
+                            if (noiseEncryption.isHandshaking(peerID)) {
+                                handshakesOwed.rememberForUser(peerID, openingToCome = paidByUser)
+                            }
                         }
                     }
                     return@launch
@@ -1305,8 +1346,8 @@ class BluetoothMeshService(
                     // The candidate is dropped rather than left handshaking: initiateHandshake()
                     // returns empty while one exists, so keeping it would block the retry that the
                     // link coming up is about to ask for.
-                    noiseEncryption.abandonHandshake(peerID)
-                    handshakeMutex.withLock { rememberOwed(peerID, byUser) }
+                    noiseEncryption.abandonOwnOpening(peerID)
+                    handshakeMutex.withLock { rememberOwed(peerID, byUser, openingToCome = paidByUser) }
                     return@launch
                 }
 
@@ -1314,7 +1355,8 @@ class BluetoothMeshService(
                     val now = Clock.System.now().toEpochMilliseconds()
                     handshakeSupervisor.recordAttempt(peerID, now)
                     recordStartedAt(peerID, now)
-                    rememberOwed(peerID, byUser)
+                    // A Bluetooth link took it: nothing of the user's time on air was spent for it.
+                    rememberOwed(peerID, byUser, openingToCome = paidByUser)
                     handshakeSupervisor.attemptsFor(peerID)
                 }
 
@@ -1329,9 +1371,10 @@ class BluetoothMeshService(
     /**
      * Sends the opening of the handshake just started with [peerID] over the radio.
      *
-     * [paidByUser]: only an opening the user has just asked for is paid from what belongs to the
-     * user. A retry or a restart, whoever the handshake is owed to, is something a received packet
-     * can bring about, and is paid like anything else this device starts by itself.
+     * [paidByUser]: only an opening an action of the user's pays for is paid from what belongs to
+     * the user, when the user asks or, if it could not leave then, once later. A retry or a
+     * restart, whoever the handshake is owed to, is something a received packet can bring about,
+     * and is paid like anything else this device starts by itself.
      *
      * The radio reports a frame only once it has left the air. By then the peer may have answered,
      * the sweeper may have given the attempt up and another may have begun, so what is recorded or
@@ -1352,14 +1395,15 @@ class BluetoothMeshService(
                 rememberOwed(peerID, byUser)
             } else {
                 logInfo("BluetoothMeshService", "The radio did not carry a handshake to $peerID ($result)")
-                noiseEncryption.abandonHandshake(peerID)
-                rememberOwed(peerID, byUser)
+                noiseEncryption.abandonOwnOpening(peerID)
+                rememberOwed(peerID, byUser, openingToCome = paidByUser)
             }
         }
     }
 
-    private fun rememberOwed(peerID: String, byUser: Boolean) {
-        if (byUser) handshakesOwed.rememberForUser(peerID) else handshakesOwed.rememberAutomatic(peerID)
+    /** [openingToCome]: an opening an action of the user's pays for has not left the air; see [startOwedOverRadio]. */
+    private fun rememberOwed(peerID: String, byUser: Boolean, openingToCome: Boolean = false) {
+        if (byUser) handshakesOwed.rememberForUser(peerID, openingToCome) else handshakesOwed.rememberAutomatic(peerID)
     }
 
     /** A new id at capacity gives up the least recently started record. */
