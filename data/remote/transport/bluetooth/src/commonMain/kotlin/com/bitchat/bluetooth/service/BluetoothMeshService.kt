@@ -1144,13 +1144,20 @@ class BluetoothMeshService(
      *   Noise handshake spent all five of its attempts while `clients:0, servers:0` -- thirty such
      *   broadcasts in one twelve-minute window of the device journal.
      */
-    private suspend fun sendPacket(packet: BitchatPacket): Boolean {
+    private suspend fun sendPacket(packet: BitchatPacket): Boolean =
+        handToLinks(packet, "Broadcasting") { signPacket(it) }
+
+    /** Encode what [prepared] makes of [packet] and hand it to the link layer; false when no link carried it. */
+    private suspend fun handToLinks(
+        packet: BitchatPacket,
+        verb: String,
+        prepared: (BitchatPacket) -> BitchatPacket
+    ): Boolean {
         return try {
             val packetTypeName = MessageType.entries.find { it.value == packet.type }?.name ?: "UNKNOWN"
-            logInfo("BROADCAST", "Broadcasting $packetTypeName (${packet.payload.size}B, TTL:${packet.ttl})")
+            logInfo("BROADCAST", "$verb $packetTypeName (${packet.payload.size}B, TTL:${packet.ttl})")
 
-            val signedPacket = signPacket(packet)
-            val binaryData = BinaryProtocol.encode(signedPacket)
+            val binaryData = BinaryProtocol.encode(prepared(packet))
             if (binaryData == null) {
                 logError("BROADCAST", "Failed to encode $packetTypeName")
                 return false
@@ -1171,10 +1178,16 @@ class BluetoothMeshService(
         return packet.copy(signature = signature)
     }
 
+    /**
+     * Pass on a packet another device made: one hop shorter and otherwise as it came. Its signature
+     * is its maker's, over everything but the hop count, and is all a device further on can check
+     * it by; this device's own signature there would make the packet worthless to every device
+     * that verifies (the upstream clients ignore such an ANNOUNCE and drop anything else).
+     */
     private fun relayPacket(packet: BitchatPacket) {
         val relayPacket = packet.copy(ttl = (packet.ttl - 1u).toUByte())
         if (relayPacket.ttl > 0u) {
-            broadcastPacket(relayPacket)
+            serviceScope.launch { handToLinks(relayPacket, "Relaying") { it } }
         }
     }
 
