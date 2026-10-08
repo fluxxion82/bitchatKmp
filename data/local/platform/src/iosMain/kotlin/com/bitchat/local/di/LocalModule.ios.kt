@@ -28,7 +28,9 @@ actual val localModule = module {
     single<DomainInspector> { NoDomainInspector }
     single<LedgerStore> { NoLedgerStore }
 
-    single<EncryptionSettingsFactory> { NativeEncryptionSettingsFactory() }
+    // Readable from the first unlock on: the mesh keeps running on a locked phone, and iOS starts
+    // the app in the background before anyone unlocks it.
+    single<EncryptionSettingsFactory> { NativeEncryptionSettingsFactory(readableWhileLocked = true) }
     single { IosAppLifecycleObserver(foregroundState = get()) } bind AppInitializer::class
 
     single<SettingsService> { IosSettingsService() }

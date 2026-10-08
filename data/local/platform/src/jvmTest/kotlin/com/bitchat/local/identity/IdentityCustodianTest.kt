@@ -227,8 +227,8 @@ class IdentityCustodianTest {
 
     @Test
     fun `a record that is present but unusable is never replaced`() {
-        // loadSigningKey() returns null when the public half is missing or the wrong size, but
-        // the private half is still on the disk. Minting there would overwrite key material.
+        // The load was told there is nothing, but the private half is still on the disk.
+        // Minting there would overwrite key material.
         val store = FakeStore(mapOf("signing_private_key" to "half-a-keypair"))
         val custodian = custodian(store, FakeInspector(DomainVerdict.Virgin), FakeLedger())
 

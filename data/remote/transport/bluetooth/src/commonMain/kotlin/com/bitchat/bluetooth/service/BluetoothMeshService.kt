@@ -42,6 +42,7 @@ import com.bitchat.domain.chat.model.DeliveryStatus
 import com.bitchat.domain.chat.model.PrivateMessageText
 import com.bitchat.domain.chat.model.nextSendTime
 import com.bitchat.domain.user.UNKNOWN_PEER_NICKNAME
+import com.bitchat.local.prefs.SecureStoreUnavailableException
 import com.bitchat.noise.model.NoisePayload
 import com.bitchat.noise.model.NoisePayloadType
 import com.bitchat.noise.model.PrivateMessagePacket
@@ -272,7 +273,7 @@ class BluetoothMeshService(
             }
         })
 
-        val nickname = delegate?.getNickname() ?: "Me"
+        val nickname = nicknameToAnnounce(otherwise = "Me") ?: "Me"
         peerManager.initializeSelfPeer(
             myPeerID = myPeerID,
             myNickname = nickname,
@@ -1035,9 +1036,9 @@ class BluetoothMeshService(
         // TODO: Implement read receipt
     }
 
-    fun sendBroadcastAnnounce() {
+    fun sendBroadcastAnnounce(): Job =
         serviceScope.launch {
-            val nickname = delegate?.getNickname() ?: "Anonymous"
+            val nickname = nicknameToAnnounce(otherwise = "Anonymous") ?: return@launch
             logInfo("ANNOUNCE", "Sending announce: '$nickname' (${myPeerID.take(8)}...)")
 
             val noisePublicKey = cryptoSigning.getNoisePublicKey()
@@ -1067,6 +1068,19 @@ class BluetoothMeshService(
 
             broadcastPacket(packet)
         }
+
+    /**
+     * The name an ANNOUNCE carries: the delegate's, [otherwise] while there is no delegate or it
+     * has none, and null while the secure store that holds it does not answer (the Keychain of a
+     * locked phone). Null means "do not announce": a name that is not this device's must not go
+     * out under its id, since a peer names a conversation after the first one it hears. Only that
+     * one failure is taken; anything else the delegate throws is a fault and stays one.
+     */
+    internal fun nicknameToAnnounce(otherwise: String): String? = try {
+        delegate?.getNickname() ?: otherwise
+    } catch (e: SecureStoreUnavailableException) {
+        logError("ANNOUNCE", "Nickname unavailable, not announcing: ${e.message}")
+        null
     }
 
     fun sendAnnouncementToPeer(peerID: String) {

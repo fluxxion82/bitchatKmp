@@ -3,6 +3,8 @@ package com.bitchat.local.prefs.impl
 import com.bitchat.domain.user.model.BlockedUser
 import com.bitchat.local.prefs.BlockListPreferences
 import com.bitchat.local.prefs.EncryptionSettingsFactory
+import com.bitchat.local.prefs.readForUpdate
+import com.bitchat.local.prefs.writeUpdate
 import com.russhwolf.settings.set
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -15,7 +17,15 @@ class LocalBlockListPreferences(
 
     override fun getMeshBlockedUsers(): Map<String, BlockedUser> {
         return try {
-            val json = settings.getStringOrNull(MESH_BLOCKED_KEY) ?: return emptyMap()
+            decodeBlockedUsers(settings.getStringOrNull(MESH_BLOCKED_KEY))
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun decodeBlockedUsers(json: String?): Map<String, BlockedUser> {
+        return try {
+            if (json == null) return emptyMap()
             val serializer = MapSerializer(String.serializer(), BlockedUser.serializer())
             Json.decodeFromString(serializer, json)
         } catch (e: Exception) {
@@ -29,12 +39,15 @@ class LocalBlockListPreferences(
 
     override fun addMeshBlockedUser(blockedUser: BlockedUser) {
         try {
-            val all = getMeshBlockedUsers().toMutableMap()
+            // Not getMeshBlockedUsers(): that answers "nobody" for a store that did not answer, and the
+            // list written from it would be all that is left of the block list.
+            val saved = settings.readForUpdate(MESH_BLOCKED_KEY)
+            val all = decodeBlockedUsers(saved.text).toMutableMap()
             all[blockedUser.identifier.lowercase()] = blockedUser
 
             val serializer = MapSerializer(String.serializer(), BlockedUser.serializer())
             val json = Json.encodeToString(serializer, all)
-            settings[MESH_BLOCKED_KEY] = json
+            settings.writeUpdate(MESH_BLOCKED_KEY, saved, json)
         } catch (e: Exception) {
             // Log error
         }
@@ -42,12 +55,15 @@ class LocalBlockListPreferences(
 
     override fun removeMeshBlockedUser(fingerprint: String) {
         try {
-            val all = getMeshBlockedUsers().toMutableMap()
+            // Not getMeshBlockedUsers(): that answers "nobody" for a store that did not answer, and the
+            // list written from it would be all that is left of the block list.
+            val saved = settings.readForUpdate(MESH_BLOCKED_KEY)
+            val all = decodeBlockedUsers(saved.text).toMutableMap()
             all.remove(fingerprint.lowercase())
 
             val serializer = MapSerializer(String.serializer(), BlockedUser.serializer())
             val json = Json.encodeToString(serializer, all)
-            settings[MESH_BLOCKED_KEY] = json
+            settings.writeUpdate(MESH_BLOCKED_KEY, saved, json)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -55,9 +71,7 @@ class LocalBlockListPreferences(
 
     override fun getGeohashBlockedUsers(): Map<String, BlockedUser> {
         return try {
-            val json = settings.getStringOrNull(GEOHASH_BLOCKED_KEY) ?: return emptyMap()
-            val serializer = MapSerializer(String.serializer(), BlockedUser.serializer())
-            Json.decodeFromString(serializer, json)
+            decodeBlockedUsers(settings.getStringOrNull(GEOHASH_BLOCKED_KEY))
         } catch (e: Exception) {
             emptyMap()
         }
@@ -69,12 +83,15 @@ class LocalBlockListPreferences(
 
     override fun addGeohashBlockedUser(blockedUser: BlockedUser) {
         try {
-            val all = getGeohashBlockedUsers().toMutableMap()
+            // Not getGeohashBlockedUsers(): that answers "nobody" for a store that did not answer, and the
+            // list written from it would be all that is left of the block list.
+            val saved = settings.readForUpdate(GEOHASH_BLOCKED_KEY)
+            val all = decodeBlockedUsers(saved.text).toMutableMap()
             all[blockedUser.identifier.lowercase()] = blockedUser
 
             val serializer = MapSerializer(String.serializer(), BlockedUser.serializer())
             val json = Json.encodeToString(serializer, all)
-            settings[GEOHASH_BLOCKED_KEY] = json
+            settings.writeUpdate(GEOHASH_BLOCKED_KEY, saved, json)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -82,12 +99,15 @@ class LocalBlockListPreferences(
 
     override fun removeGeohashBlockedUser(pubkeyHex: String) {
         try {
-            val all = getGeohashBlockedUsers().toMutableMap()
+            // Not getGeohashBlockedUsers(): that answers "nobody" for a store that did not answer, and the
+            // list written from it would be all that is left of the block list.
+            val saved = settings.readForUpdate(GEOHASH_BLOCKED_KEY)
+            val all = decodeBlockedUsers(saved.text).toMutableMap()
             all.remove(pubkeyHex.lowercase())
 
             val serializer = MapSerializer(String.serializer(), BlockedUser.serializer())
             val json = Json.encodeToString(serializer, all)
-            settings[GEOHASH_BLOCKED_KEY] = json
+            settings.writeUpdate(GEOHASH_BLOCKED_KEY, saved, json)
         } catch (e: Exception) {
             e.printStackTrace()
         }

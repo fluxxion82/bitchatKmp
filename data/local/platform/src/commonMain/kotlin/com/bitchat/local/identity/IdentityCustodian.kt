@@ -1,6 +1,7 @@
 package com.bitchat.local.identity
 
 import com.bitchat.local.prefs.PreferenceStoreState
+import com.bitchat.local.prefs.SecureStoreUnavailableException
 import com.bitchat.transport.IdentityRefusedException
 import kotlin.random.Random
 
@@ -14,6 +15,13 @@ interface IdentityRecordStore {
 
     /** How the backing store presented itself when it was opened. */
     fun state(): PreferenceStoreState
+
+    /**
+     * Whether the store's own inventory names a record under [key], asked separately from
+     * [record]. The two agree wherever both are answered from one loaded map. On the Keychain they
+     * are separate questions, and an item that is listed and yet "not found" when read is there.
+     */
+    fun lists(key: String): Boolean = record(key) != null
 }
 
 /**
@@ -66,14 +74,37 @@ class IdentityCustodian(
      * invariant is satisfied.
      *
      * @param load reads the component in whatever shape its owner uses. Returning null means
-     *   "not usable", which is not the same as "not there": if the record *is* on disk this
-     *   refuses rather than replacing it.
+     *   the store answered that there is nothing, which is not the same as "not there": if the
+     *   record *is* on disk after all this refuses rather than replacing it. A record that was
+     *   returned and is malformed is the loader's own to refuse, with a reason that says so.
      * @param claimOf the public value to record against the component in the ledger.
      * @param persist saves a freshly created value. Runs before the claim is recorded.
      * @param mint creates a value. Called only after the gate has allowed it.
-     * @throws IdentityRefusedException when creating it could abandon a recoverable identity.
+     * @throws IdentityRefusedException when creating it could abandon a recoverable identity,
+     *   which includes every case of the store not answering: see below. Its cause is then a
+     *   [SecureStoreUnavailableException], by which a start knows to try again.
      */
     fun <T : Any> loadOrMint(
+        component: IdentityComponent,
+        load: () -> T?,
+        claimOf: (T) -> String,
+        persist: (T) -> Unit,
+        mint: () -> T,
+    ): T = try {
+        loadOrMintFromAStoreThatAnswers(component, load, claimOf, persist, mint)
+    } catch (e: SecureStoreUnavailableException) {
+        // A store that did not answer says nothing about what it holds. On a locked phone the
+        // Keychain refuses every read, and the identity is in it all the same. Whichever step
+        // met the refusal - the load, the second look, the listing or the save - ends here.
+        throw IdentityRefusedException(
+            reason = "the identity store cannot be read or written right now (${e.message}), so " +
+                "'${component.storeKey}' was neither loaded nor created",
+            remedy = "unlock the device and start again; nothing in the store was replaced",
+            cause = e,
+        )
+    }
+
+    private fun <T : Any> loadOrMintFromAStoreThatAnswers(
         component: IdentityComponent,
         load: () -> T?,
         claimOf: (T) -> String,
@@ -86,15 +117,33 @@ class IdentityCustodian(
         }
 
         // Present but unusable is not absent. A record that is on the disk is the only copy of
-        // something, whatever this build can make of it.
+        // something, whatever this build can make of it. The load was told there is nothing and
+        // this second look finds the record: the store did not show it a moment ago, so the
+        // refusal is the store's failure and a start tries again.
         val raw = store.record(component.storeKey)
         if (raw != null) {
+            val reason = "'${component.storeKey}' is in the identity store but could not be " +
+                "used; creating a replacement would write over key material that is still " +
+                "on this device"
             throw IdentityRefusedException(
-                reason = "'${component.storeKey}' is in the identity store but could not be " +
-                    "used; creating a replacement would write over key material that is still " +
-                    "on this device",
+                reason = reason,
                 remedy = "inspect the identity store and restore it from a backup; do not " +
                     "delete the existing record",
+                cause = SecureStoreUnavailableException(reason),
+            )
+        }
+
+        // Read as absent and listed as present: the store has contradicted itself, and a record
+        // it names is on the device whatever the read said. It is not showing what it holds, so
+        // the refusal is the store's failure and a start tries again.
+        if (store.lists(component.storeKey)) {
+            val reason = "'${component.storeKey}' is listed in the identity store but the store " +
+                "did not return it; creating a replacement would write over key material " +
+                "that is still on this device"
+            throw IdentityRefusedException(
+                reason = reason,
+                remedy = "unlock the device and start again; do not delete the existing record",
+                cause = SecureStoreUnavailableException(reason),
             )
         }
 

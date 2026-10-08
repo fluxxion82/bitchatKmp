@@ -29,11 +29,15 @@ enum class IdentityStoreState {
  * @param reason what was seen, in the operator's terms.
  * @param remedy a command, or the shape of one, that a human can act on. A refusal that does not
  *   say what to do next is a black screen on a headless box.
+ * @param cause what the store raised, when the refusal is the store not answering rather than
+ *   the record being damaged: a start can tell from it that trying again later is worth it.
+ *   Nothing promises that it will succeed.
  */
 class IdentityRefusedException(
     val reason: String,
     val remedy: String,
-) : RuntimeException("$reason\n  remedy: $remedy")
+    cause: Throwable? = null,
+) : RuntimeException("$reason\n  remedy: $remedy", cause)
 
 interface TransportIdentityProvider {
     fun loadKey(key: String): String?

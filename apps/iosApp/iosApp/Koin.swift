@@ -8,10 +8,11 @@
 import Foundation
 import BitchatApp
 
-func startKoin() {
+/// Starts the Kotlin side. Nil once it is started; otherwise why the Keychain did not answer: see `AppLaunch`.
+func startApplication() -> String? {
     let isMock = false
 
-    _ = KoinIosKt.doInitKoinIos(
+    return KoinIosKt.startApplication(
         initializers: KotlinMutableSet(set: [TempAppInitializer()]), mock: isMock
     )
 }

@@ -63,10 +63,6 @@ kotlin {
             }
         }
         val commonTest by getting {
-            dependencies {
-                implementation(libs.mockk.common)
-                implementation(libs.turbine)
-            }
         }
         val androidMain by getting {
             dependencies {
@@ -83,6 +79,8 @@ kotlin {
         }
         val jvmTest by getting {
             dependencies {
+                implementation(libs.mockk.common)
+                implementation(libs.turbine)
                 implementation(libs.kotlin.test)
                 implementation(libs.kotlin.test.junit)
                 implementation(libs.kotlinx.coroutines.test)
@@ -95,8 +93,16 @@ kotlin {
         val macosMain by getting {
         }
 
-        // Apple-specific (iOS + macOS) - uses KeychainSettings
+        // Apple-specific (iOS + macOS) - the Keychain-backed secure store
         val appleMain by getting {
+        }
+        // Runs on the host as :data:local:platform:macosArm64Test, against a fake Keychain.
+        // :data:local:platform:iosSimulatorArm64Test runs it again in a simulator, with the check
+        // that the iOS graph binds the store that stays readable on a locked phone.
+        val appleTest by getting {
+            dependencies {
+                implementation(libs.kotlin.test)
+            }
         }
 
         if (embeddedEnabled) {

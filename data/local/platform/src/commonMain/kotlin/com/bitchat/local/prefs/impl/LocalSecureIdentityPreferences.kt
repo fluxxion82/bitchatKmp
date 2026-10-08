@@ -11,6 +11,8 @@ import com.bitchat.local.prefs.EncryptionSettingsFactory
 import com.bitchat.local.prefs.HealthReportingSettings
 import com.bitchat.local.prefs.PreferenceStoreState
 import com.bitchat.local.prefs.SecureIdentityPreferences
+import com.bitchat.local.prefs.SecureStoreUnavailableException
+import com.bitchat.local.prefs.putStringWhereNoneWasRead
 import com.bitchat.local.util.toHexString
 import com.bitchat.transport.IdentityRefusedException
 import com.russhwolf.settings.contains
@@ -38,6 +40,7 @@ class LocalSecureIdentityPreferences(
         store = object : IdentityRecordStore {
             override fun record(key: String): String? = settings.getStringOrNull(key)
             override fun state(): PreferenceStoreState = storeState()
+            override fun lists(key: String): Boolean = key in settings.keys
         },
         inspector = domainInspector,
         ledgerStore = ledgerStore,
@@ -47,9 +50,9 @@ class LocalSecureIdentityPreferences(
         mint: () -> Pair<ByteArray, ByteArray>,
     ): Pair<ByteArray, ByteArray> = custodian.loadOrMint(
         component = IdentityComponent.MESH_SIGNING,
-        load = ::loadSigningKey,
+        load = ::storedSigningKey,
         claimOf = { (_, publicKey) -> publicKey.toHexString() },
-        persist = { (privateKey, publicKey) -> saveSigningKey(privateKey, publicKey) },
+        persist = { (privateKey, publicKey) -> createSigningKey(privateKey, publicKey) },
         mint = mint,
     )
 
@@ -69,9 +72,67 @@ class LocalSecureIdentityPreferences(
             component = component,
             load = { settings.getStringOrNull(key) },
             claimOf = publicFormOf,
-            persist = { settings.putString(key, it) },
+            persist = { create(key, it) },
             mint = mint,
         )
+    }
+
+    /**
+     * The stored signing pair as the custodian needs it told apart: null only when the store
+     * answers that one of its halves is not there. [loadSigningKey] says null for a damaged pair
+     * too.
+     *
+     * With the private key reported absent the custodian looks for it again and goes on from
+     * there. With only the public half reported absent it finds the private key in that second
+     * look and refuses as for a store that did not show what it holds: to be tried again. A pair
+     * that was returned and is not a pair of keys is damage, and trying again does not cure it.
+     */
+    private fun storedSigningKey(): Pair<ByteArray, ByteArray>? {
+        val privateKeyString = settings.getStringOrNull(KEY_SIGNING_PRIVATE_KEY) ?: return null
+        val publicKeyString = settings.getStringOrNull(KEY_SIGNING_PUBLIC_KEY) ?: return null
+
+        val pair = try {
+            decode(privateKeyString) to decode(publicKeyString)
+        } catch (e: IllegalArgumentException) {
+            null
+        }
+        if (pair == null || pair.first.size != 32 || pair.second.size != 32) {
+            throw IdentityRefusedException(
+                reason = "'$KEY_SIGNING_PRIVATE_KEY' is in the identity store but is not a pair of " +
+                    "32-byte keys; creating a replacement would write over key material that is " +
+                    "still on this device",
+                remedy = "inspect the identity store and restore it from a backup; do not " +
+                    "delete the existing record",
+            )
+        }
+        return pair
+    }
+
+    /**
+     * Saves a freshly created value: under a key that was read as absent, and never over one
+     * that is there. The custodian turns the failure into a refusal; what was created is dropped.
+     */
+    private fun create(key: String, value: String) {
+        if (!settings.putStringWhereNoneWasRead(key, value)) {
+            throw SecureStoreUnavailableException(
+                "the identity store reported '$key' absent and holds it after all; the new one " +
+                    "is not written over it",
+            )
+        }
+    }
+
+    private fun createSigningKey(privateKey: ByteArray, publicKey: ByteArray) {
+        if (privateKey.size != 32 || publicKey.size != 32) {
+            throw IllegalArgumentException("Invalid signing key sizes: private=${privateKey.size}, public=${publicKey.size}")
+        }
+        // The public half first, the key itself last: a start that ends between the two leaves a
+        // public key and no identity, which the next start creates afresh. The other way round
+        // it would leave a private key that no load accepts and nothing may replace.
+        // Neither half is written over one that is there. A public half that is (left by such a
+        // start, or belonging to a key this store did not show) stays as it is: it is derived,
+        // not key material, and the Bluetooth module corrects a stored one at the next load.
+        settings.putStringWhereNoneWasRead(KEY_SIGNING_PUBLIC_KEY, encode(publicKey))
+        create(KEY_SIGNING_PRIVATE_KEY, encode(privateKey))
     }
 
     override fun loadStaticKey(): Pair<ByteArray, ByteArray>? {
@@ -91,6 +152,9 @@ class LocalSecureIdentityPreferences(
             } else {
                 null
             }
+        } catch (e: SecureStoreUnavailableException) {
+            // Not "no key": whoever asked must not go on to create one.
+            throw e
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -131,6 +195,9 @@ class LocalSecureIdentityPreferences(
             } else {
                 null
             }
+        } catch (e: SecureStoreUnavailableException) {
+            // Not "no key": whoever asked must not go on to create one.
+            throw e
         } catch (e: Exception) {
             e.printStackTrace()
             null

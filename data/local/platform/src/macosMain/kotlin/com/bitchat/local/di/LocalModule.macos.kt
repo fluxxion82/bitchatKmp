@@ -25,7 +25,7 @@ actual val localModule = module {
     single<DomainInspector> { NoDomainInspector }
     single<LedgerStore> { NoLedgerStore }
 
-    single<EncryptionSettingsFactory> { NativeEncryptionSettingsFactory() }
+    single<EncryptionSettingsFactory> { NativeEncryptionSettingsFactory(readableWhileLocked = false) }
 
     single<SettingsService> { IosSettingsService() }
     single<LocationService> { MacosLocationService() }

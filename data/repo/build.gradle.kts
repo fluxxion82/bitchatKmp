@@ -93,6 +93,9 @@ kotlin {
                 // The JVM mockk build: TorManager is a final expect/actual class, which
                 // mockk-common cannot stub.
                 implementation(libs.mockk)
+
+                // SecureStoreStartTest stands in for the secure stores, which are Settings.
+                implementation(libs.multiplatform.settings)
             }
         }
         val iosMain by getting {

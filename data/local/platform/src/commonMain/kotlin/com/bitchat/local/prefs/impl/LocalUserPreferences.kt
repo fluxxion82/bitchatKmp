@@ -9,7 +9,11 @@ import com.bitchat.domain.user.model.AppUser
 import com.bitchat.domain.user.model.FavoriteRelationship
 import com.bitchat.local.prefs.EncryptionSettingsFactory
 import com.bitchat.local.prefs.FavoritesUpdate
+import com.bitchat.local.prefs.SecureStoreUnavailableException
 import com.bitchat.local.prefs.UserPreferences
+import com.bitchat.local.prefs.putStringWhereNoneWasRead
+import com.bitchat.local.prefs.readForUpdate
+import com.bitchat.local.prefs.writeUpdate
 import com.russhwolf.settings.set
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
@@ -32,8 +36,16 @@ class LocalUserPreferences(
             AppUser.ActiveAnonymous(name = savedName)
         } else {
             val randomName = "anon${kotlin.random.Random.nextInt(1000, 9999)}"
-            settings[USER_NAME] = randomName
-            AppUser.ActiveAnonymous(name = randomName)
+            if (settings.putStringWhereNoneWasRead(USER_NAME, randomName)) {
+                AppUser.ActiveAnonymous(name = randomName)
+            } else {
+                // There is a name after all: someone else created it since the read, or the
+                // store's "none" was wrong. Either way it is the name, and it stays.
+                val name = settings.getStringOrNull(USER_NAME) ?: throw SecureStoreUnavailableException(
+                    "the secure store holds a nickname and does not return it",
+                )
+                AppUser.ActiveAnonymous(name = name)
+            }
         }
     }
 
@@ -203,7 +215,15 @@ class LocalUserPreferences(
     // Favorite management
     override fun getAllFavorites(): Map<String, FavoriteRelationship> {
         return try {
-            val json = settings.getStringOrNull(FAVORITES_KEY) ?: return emptyMap()
+            decodeFavorites(settings.getStringOrNull(FAVORITES_KEY))
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun decodeFavorites(json: String?): Map<String, FavoriteRelationship> {
+        return try {
+            if (json == null) return emptyMap()
             val serializer = MapSerializer(String.serializer(), FavoriteRelationship.serializer())
             val data = Json.decodeFromString(serializer, json)
             data.mapValues { (_, relationshipData) -> relationshipData }
@@ -226,7 +246,10 @@ class LocalUserPreferences(
 
     override fun <T> updateFavorites(change: (Map<String, FavoriteRelationship>) -> FavoritesUpdate<T>): T =
         synchronized(favoritesLock) {
-            val current = getAllFavorites().mapKeys { it.key.lowercase() }
+            // Not getAllFavorites(): that answers "none" for a store that did not answer, and
+            // the map written from it would be all that is left of the favourites.
+            val saved = settings.readForUpdate(FAVORITES_KEY)
+            val current = decodeFavorites(saved.text).mapKeys { it.key.lowercase() }
             val update = change(current)
             val next = current.toMutableMap()
             // Every key, then one write.
@@ -241,7 +264,7 @@ class LocalUserPreferences(
             if (changed) {
                 try {
                     val serializer = MapSerializer(String.serializer(), FavoriteRelationship.serializer())
-                    settings[FAVORITES_KEY] = Json.encodeToString(serializer, next)
+                    settings.writeUpdate(FAVORITES_KEY, saved, Json.encodeToString(serializer, next))
                 } catch (e: Exception) {
                     // Log error
                 }
@@ -296,12 +319,13 @@ class LocalUserPreferences(
 
     override fun setLastReadTimestamp(peerID: String, timestamp: Long) {
         try {
-            val all = getAllLastReadTimestamps().toMutableMap()
+            val saved = settings.readForUpdate(LAST_READ_TIMESTAMPS_KEY)
+            val all = decodeLastReadTimestamps(saved.text).toMutableMap()
             all[peerID.lowercase()] = timestamp
 
             val serializer = MapSerializer(String.serializer(), Long.serializer())
             val json = Json.encodeToString(serializer, all)
-            settings[LAST_READ_TIMESTAMPS_KEY] = json
+            settings.writeUpdate(LAST_READ_TIMESTAMPS_KEY, saved, json)
         } catch (e: Exception) {
             // Log error
         }
@@ -309,7 +333,15 @@ class LocalUserPreferences(
 
     override fun getAllLastReadTimestamps(): Map<String, Long> {
         return try {
-            val json = settings.getStringOrNull(LAST_READ_TIMESTAMPS_KEY) ?: return emptyMap()
+            decodeLastReadTimestamps(settings.getStringOrNull(LAST_READ_TIMESTAMPS_KEY))
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun decodeLastReadTimestamps(json: String?): Map<String, Long> {
+        return try {
+            if (json == null) return emptyMap()
             val serializer = MapSerializer(String.serializer(), Long.serializer())
             Json.decodeFromString(serializer, json)
         } catch (e: Exception) {
