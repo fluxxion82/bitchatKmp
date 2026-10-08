@@ -305,4 +305,104 @@ class CentralLinkPolicyTest {
 
         assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 3L))
     }
+
+    // A link the GATT client no longer holds. Measured on a board on 2026-10-08: the policy kept a
+    // phone's old address as established for hours after the client had dropped it, which with the
+    // one real link filled the budget, and the board dialled nobody.
+
+    @Test
+    fun aLinkTheClientNoLongerHoldsIsReleased() {
+        val policy = policy()
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 0L))
+        policy.onConnected(phoneA)
+
+        assertEquals(listOf(phoneA), policy.releaseUnheld(held = emptySet(), now = 1_000L))
+
+        assertEquals(0, policy.establishedCount())
+    }
+
+    @Test
+    fun aLinkTheClientHoldsIsKept() {
+        val policy = policy()
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 0L))
+        policy.onConnected(phoneA)
+
+        assertEquals(emptyList(), policy.releaseUnheld(held = setOf(phoneA), now = 1_000L))
+
+        assertEquals(1, policy.establishedCount())
+        val again = policy.onDiscovered(phoneA, now = 2_000L)
+        assertIs<CentralLinkPolicy.Decision.Skip>(again)
+        assertTrue(again.reason.contains("already linked"))
+    }
+
+    @Test
+    fun anAttemptInFlightIsNotReleasedForHavingNoLinkYet() {
+        val policy = policy()
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 0L))
+
+        // The client holds nothing for an address until gattlib reports the connection, so an
+        // attempt is always "unheld". Releasing it here would free the one initiator mid-attempt.
+        assertEquals(emptyList(), policy.releaseUnheld(held = emptySet(), now = 1_000L))
+
+        assertTrue(policy.isPending(phoneA))
+        assertEquals(1, policy.pendingCount())
+    }
+
+    @Test
+    fun aPhantomLinkNoLongerUsesUpTheLinkBudget() {
+        val policy = policy()
+        val third = "90:82:8D:69:79:2D"
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 0L))
+        policy.onConnected(phoneA)
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(other, now = 10L))
+        policy.onConnected(other)
+
+        // What the board logged every five seconds: two links counted, one of them real.
+        val refused = policy.onDiscovered(third, now = 20L)
+        assertIs<CentralLinkPolicy.Decision.Skip>(refused)
+        assertTrue(refused.reason.contains("outbound link(s) already open"))
+
+        assertEquals(listOf(phoneA), policy.releaseUnheld(held = setOf(other), now = 30L))
+
+        assertEquals(1, policy.establishedCount())
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(third, now = 40L))
+    }
+
+    @Test
+    fun aLinkReportedReadyAfterItsLossCountsAsALinkThatDroppedAtOnce() {
+        val policy = CentralLinkPolicy(immediateDropRetryEnabled = true)
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 0L))
+
+        // The two reports are handled by separately launched coroutines, so the loss can be handled
+        // first, when there is nothing to release yet, and the ready after it.
+        policy.onReleased(phoneA, now = 10L)
+        policy.onConnected(phoneA, now = 11L)
+        assertEquals(listOf(phoneA), policy.releaseUnheld(held = emptySet(), now = 11L))
+
+        // The same outcome as the two handled in order: not linked, and on the first rung of the
+        // immediate-drop ladder.
+        assertEquals(0, policy.establishedCount())
+        val soon = policy.onDiscovered(phoneA, now = 12L)
+        assertIs<CentralLinkPolicy.Decision.Skip>(soon)
+        assertTrue(soon.reason.contains("immediate-drop"))
+        assertIs<CentralLinkPolicy.Decision.Connect>(
+            policy.onDiscovered(phoneA, now = 11L + CentralLinkPolicy.FIRST_IMMEDIATE_DROP_BACKOFF_MS)
+        )
+    }
+
+    @Test
+    fun aLossReportedAfterItsLinkWasAlreadyReleasedIsNotASecondDrop() {
+        val policy = CentralLinkPolicy(immediateDropRetryEnabled = true)
+        assertIs<CentralLinkPolicy.Decision.Connect>(policy.onDiscovered(phoneA, now = 0L))
+        policy.onConnected(phoneA, now = 1L)
+        assertEquals(listOf(phoneA), policy.releaseUnheld(held = emptySet(), now = 2L))
+
+        // The sweep got there first; the loss it anticipated arrives later.
+        policy.onReleased(phoneA, now = 4_000L)
+
+        // Still one drop, counted from when the link was released.
+        assertIs<CentralLinkPolicy.Decision.Connect>(
+            policy.onDiscovered(phoneA, now = 2L + CentralLinkPolicy.FIRST_IMMEDIATE_DROP_BACKOFF_MS)
+        )
+    }
 }

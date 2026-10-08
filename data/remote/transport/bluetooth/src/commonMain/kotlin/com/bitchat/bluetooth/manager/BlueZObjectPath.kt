@@ -15,6 +15,20 @@ object BlueZObjectPath {
 
     private const val DEVICE_SEGMENT_PREFIX = "dev_"
 
+    /** The adapter the embedded app works with; gattlib's default and the GATT server's. */
+    const val ADAPTER_PATH = "/org/bluez/hci0"
+
+    /**
+     * Whether [path] is [adapterPath] itself or an object below it.
+     *
+     * An address alone does not name a link when a machine has two controllers: the same peer can
+     * be connected on each, and what is known of one link (its age above all) must not be taken
+     * for the other's. Everything that watches or lists BlueZ's devices for the app keeps to the
+     * one adapter the app uses.
+     */
+    fun isOnAdapter(path: String, adapterPath: String = ADAPTER_PATH): Boolean =
+        path == adapterPath || path.startsWith("$adapterPath/")
+
     /**
      * The Bluetooth address in `/org/bluez/hci0/dev_5C_00_46_51_7B_0E`, or null when the path does
      * not name a device.
@@ -31,6 +45,16 @@ object BlueZObjectPath {
 
         val address = segment.removePrefix(DEVICE_SEGMENT_PREFIX).replace('_', ':')
         return if (isBluetoothAddress(address)) address else null
+    }
+
+    /**
+     * The BlueZ device object path for [address], or null when it is not a Bluetooth address.
+     *
+     * The path goes into a D-Bus method call and libdbus aborts the process on an invalid path.
+     */
+    fun devicePath(address: String, adapterPath: String = ADAPTER_PATH): String? {
+        if (!isBluetoothAddress(address)) return null
+        return "$adapterPath/$DEVICE_SEGMENT_PREFIX${address.uppercase().replace(':', '_')}"
     }
 
     private fun isBluetoothAddress(candidate: String): Boolean {

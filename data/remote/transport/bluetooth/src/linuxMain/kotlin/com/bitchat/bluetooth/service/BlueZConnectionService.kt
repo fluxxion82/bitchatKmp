@@ -1,16 +1,21 @@
 package com.bitchat.bluetooth.service
 
 import com.bitchat.bluetooth.manager.CentralLinkPolicy
+import com.bitchat.bluetooth.manager.OrphanedLinks
+import com.bitchat.bluetooth.manager.bitchatLinks
 import com.bitchat.bluetooth.protocol.logDebug
+import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
 import com.bitchat.domain.base.CoroutineScopeFacade
 import platform.posix.getenv
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.time.TimeSource
 
 /**
  * BlueZ Connection Service - orchestrates BLE mesh networking on Linux.
@@ -52,6 +57,19 @@ class BlueZConnectionService(
     // Permission to open an outbound link, and the deadline gattlib does not enforce on one.
     private val linkPolicy = CentralLinkPolicy(immediateDropRetryEnabled = true)
 
+    // Links BlueZ holds that neither role here uses; see [dropOrphanedLinks].
+    private val orphans = OrphanedLinks()
+
+    // What a link's age is measured with. The boards have no battery clock and their time of day
+    // jumps when NTP lands; the policy keeps currentTimeMillis() as before.
+    private val started = TimeSource.Monotonic.markNow()
+
+    // After a bus session that failed, no other is tried before this (on the clock above). Only
+    // the reconciliation loop reads and writes it.
+    private var busRestsUntil = 0L
+
+    private fun monotonicMs(): Long = started.elapsedNow().inWholeMilliseconds
+
     /**
      * Every address the scanner has ever named, so the sweep can offer one again.
      *
@@ -73,6 +91,7 @@ class BlueZConnectionService(
     private var connectionReadyCallback: ConnectionReadyCallback? = null
 
     private var reaperJob: Job? = null
+    private var reconciliationJob: Job? = null
 
     init {
         setupDelegates()
@@ -81,6 +100,7 @@ class BlueZConnectionService(
         // lifecycle. Without the reaper a connection attempt gattlib goes quiet about would sit
         // pending for ever, and with it the paused scan.
         startAttemptReaper()
+        startLinkReconciliation()
     }
 
     override fun setPeerAddressLookup(lookup: (String) -> Set<String>) {
@@ -225,6 +245,8 @@ class BlueZConnectionService(
 
         reaperJob?.cancel()
         reaperJob = null
+        reconciliationJob?.cancel()
+        reconciliationJob = null
 
         scanningService.stopScan()
         gattServer.stopAdvertising()
@@ -314,7 +336,24 @@ class BlueZConnectionService(
      * Called when client connection is established.
      */
     internal suspend fun onClientConnected(deviceAddress: String) {
-        connectionMutex.withLock { linkPolicy.onConnected(deviceAddress, currentTimeMillis()) }
+        // The ready and the loss of a link are handled by separately launched coroutines, so the
+        // loss can be handled first; the entry made here would then stay for ever and count against
+        // the link budget (measured: a board that dialled nobody for hours). The client removes its
+        // registry entry before it reports a loss, so either the registry still holds this address
+        // here, and the loss, reported later, releases it later; or it does not, and the entry goes
+        // again in this same locked step.
+        val released = connectionMutex.withLock {
+            val now = currentTimeMillis()
+            linkPolicy.onConnected(deviceAddress, now)
+            linkPolicy.releaseUnheld(gattClient.heldAddresses(), now)
+        }
+        released.filter { it != deviceAddress }.forEach { address ->
+            logInfo(TAG, "Released the link to ${address.take(8)}: the GATT client no longer holds it")
+        }
+        if (deviceAddress in released) {
+            logInfo(TAG, "The link to ${deviceAddress.take(8)} was gone before it was reported ready; not counting it")
+            return
+        }
 
         logInfo(TAG, "Client connected: ${deviceAddress.take(8)}")
         connectionEstablishedCallback?.onDeviceConnected(deviceAddress)
@@ -458,6 +497,111 @@ class BlueZConnectionService(
         }
     }
 
+    /**
+     * Every sweep interval: let go of policy entries the GATT client no longer holds, then drop
+     * links BlueZ holds that nothing here uses.
+     *
+     * A loop of its own, not part of the reaper's: that one re-offers known peers, and a dial
+     * blocks inside gattlib for up to 25 s, which would stretch these two checks to half a minute.
+     */
+    private fun startLinkReconciliation() {
+        if (reconciliationJob?.isActive == true) return
+        reconciliationJob = coroutineScopeFacade.applicationScope.launch {
+            while (isActive) {
+                delay(CentralLinkPolicy.SWEEP_INTERVAL_MS)
+                try {
+                    val released = connectionMutex.withLock {
+                        linkPolicy.releaseUnheld(gattClient.heldAddresses(), currentTimeMillis())
+                    }
+                    released.forEach { address ->
+                        logInfo(TAG, "Released the link to ${address.take(8)}: the GATT client no longer holds it")
+                    }
+                    dropOrphanedLinks()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logError(TAG, "Link reconciliation failed: ${e.message}")
+                }
+            }
+        }
+    }
+
+    /**
+     * Ask BlueZ to disconnect the links it has held for the whole connect deadline while neither
+     * role here uses them: not in the GATT client's registry, and no central that has written to
+     * our server.
+     *
+     * Such a link is what a dial leaves behind when it completes after gattlib's D-Bus timeout
+     * (gattlib cannot join it afterwards, and answers BUSY for that address from then on). Nothing
+     * else ends it: both controllers are alive, so it never times out. After the disconnect BlueZ
+     * reports the link gone, gattlib lets go of the address, and the next dial starts clean; that
+     * the outcome arrives that way is why no answer is waited for here.
+     *
+     * What to disconnect is decided only once the bus is open and BlueZ has listed its devices,
+     * because both can take seconds: a link found due before that could have gone and been replaced
+     * by a new one meanwhile. And only a link to a device that shows the bitchat service is
+     * disconnected. Any other is somebody else's (a device another program connected) and is no
+     * longer judged.
+     */
+    private suspend fun dropOrphanedLinks() {
+        val inUse: (String) -> Boolean = { address ->
+            gattClient.holdsConnection(address) || gattServer.isClientConnected(address)
+        }
+        // The clock is read before use is asked about: see OrphanedLinks.due.
+        val now = monotonicMs()
+        if (now < busRestsUntil || !orphans.anyDue(now, inUse)) return
+
+        val asked = BlueZDeviceBus.session { bus ->
+            val devices = bus.devices() ?: return@session false
+            val ours = bitchatLinks(devices, BlueZManager.SERVICE_UUID).toSet()
+            orphans.due(monotonicMs(), inUse).forEach { orphan ->
+                val address = orphan.address
+                if (address !in ours) {
+                    logInfo(TAG, "BlueZ holds ${address.take(8)}, which nothing here uses and which shows " +
+                            "no bitchat service; leaving it alone")
+                    orphans.leaveAlone(orphan)
+                } else if (orphans.isSameLink(orphan)) {
+                    logInfo(TAG, "BlueZ has held a link to ${address.take(8)} for " +
+                            "${CentralLinkPolicy.CONNECT_TIMEOUT_MS}ms that nothing here uses; asking it to disconnect")
+                    bus.disconnect(address)
+                }
+            }
+            true
+        }
+        if (asked != true) {
+            // Not again on every pass: a bus that does not answer costs each try its full limit.
+            busRestsUntil = monotonicMs() + CentralLinkPolicy.CONNECT_TIMEOUT_MS
+            logInfo(TAG, "Could not ask BlueZ about the links nothing here uses; trying again in " +
+                    "${CentralLinkPolicy.CONNECT_TIMEOUT_MS}ms")
+        }
+    }
+
+    /**
+     * Drop the links bluetoothd kept from a previous process of this app.
+     *
+     * bluetoothd keeps an LE link when the app exits and tells the next process nothing about it:
+     * measured after a restart, `bluetoothctl` showed the other board connected while this app
+     * broadcast to no devices and the other board kept "sending" to it. Nothing of such a link is
+     * usable, since its GATT application and the subscriptions on it went with the old process.
+     *
+     * Only safe while nothing can have connected to this process yet, which is why the mesh
+     * service waits for this before it advertises. A device that shows no bitchat service is left
+     * alone: nothing says it is ours.
+     */
+    override suspend fun prepareForStart() {
+        val listed = BlueZDeviceBus.session { bus ->
+            val devices = bus.devices() ?: return@session false
+            bitchatLinks(devices, BlueZManager.SERVICE_UUID).forEach { address ->
+                logInfo(TAG, "Dropping the link to ${address.take(8)} left over from before this start")
+                bus.disconnect(address)
+            }
+            true
+        }
+        if (listed != true) {
+            logInfo(TAG, "Could not list BlueZ's devices; a link left over from before this start, if there is one, stays")
+        }
+    }
+
     /** A received mesh frame proves this link was useful, regardless of its connection age. */
     private fun onMeshFrameExchanged(deviceAddress: String) {
         coroutineScopeFacade.applicationScope.launch {
@@ -498,15 +642,15 @@ class BlueZConnectionService(
         // firing, and the link then stayed in the registry forever. The journal showed the effect
         // directly -- BlueZ reporting one connected device while every broadcast claimed two, so
         // half of each one went to a peer that was no longer there and still logged success.
+        // The orphan tracker is updated on the dispatch thread itself, so up and gone are applied
+        // in the order BlueZ sent them. A launched coroutine would not keep that order.
         gattServer.onDeviceConnected = { address ->
-            coroutineScopeFacade.applicationScope.launch {
-                adoptConnectedPeer(address)
-            }
+            orphans.onLinkUp(address, monotonicMs())
+            coroutineScopeFacade.applicationScope.launch { adoptConnectedPeer(address) }
         }
         gattServer.onDeviceLinkGone = { address ->
-            coroutineScopeFacade.applicationScope.launch {
-                reapOutboundLink(address)
-            }
+            orphans.onLinkGone(address)
+            coroutineScopeFacade.applicationScope.launch { reapOutboundLink(address) }
         }
 
         // Client connect/disconnect. This is the other way the mesh learns a client link came up or

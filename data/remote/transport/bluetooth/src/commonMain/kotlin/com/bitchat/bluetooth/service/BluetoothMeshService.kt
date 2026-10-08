@@ -694,6 +694,7 @@ class BluetoothMeshService(
         isActive = true
 
         serviceScope.launch {
+            connectionService.prepareForStart()
             advertisingService.startAdvertising(BITCHAT_SERVICE_UUID, "Bitchat-${myPeerID.take(8)}")
             gattServerService.startAdvertising()
             scanningService.startScan(lowLatency = true)

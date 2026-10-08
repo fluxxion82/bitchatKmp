@@ -147,6 +147,22 @@ class CentralLinkPolicy(
         if (attemptCount.containsKey(address)) lastActivity[address] = now
     }
 
+    /**
+     * Release every established address that is not in [held], the addresses the GATT client holds
+     * a connection for, and return them.
+     *
+     * This record and the client's are kept by different threads, and a link's loss can be handled
+     * before its ready. Measured on a board: an address stayed established here for hours after the
+     * client had dropped it, which with the one real link filled [maxCentralLinks], and the board
+     * dialled nobody. An attempt in flight is not touched: the client holds nothing for an address
+     * until gattlib reports the connection.
+     */
+    fun releaseUnheld(held: Set<String>, now: Long): List<String> {
+        val released = established.filter { it !in held }
+        released.forEach { onReleased(it, now) }
+        return released
+    }
+
     /** A mesh frame proves the link was useful, so prior immediate drops no longer predict it. */
     fun onMeshFrameExchanged(address: String) {
         if (immediateDropRetryEnabled) clearImmediateDropRecord(address)

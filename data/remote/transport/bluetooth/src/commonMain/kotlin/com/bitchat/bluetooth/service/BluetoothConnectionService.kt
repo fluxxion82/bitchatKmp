@@ -1,6 +1,15 @@
 package com.bitchat.bluetooth.service
 
 interface BluetoothConnectionService {
+    /**
+     * Called by the mesh service and awaited before it advertises, registers its GATT server or
+     * scans. Only the BlueZ service acts on this: it drops links left over from a previous process,
+     * which is only safe while nothing can have connected to this one yet.
+     */
+    suspend fun prepareForStart() {
+        // Optional: only the BlueZ service has links from a previous process to remove.
+    }
+
     suspend fun connectToDevice(deviceAddress: String)
     suspend fun confirmDevice()
     suspend fun isDeviceConnecting(deviceAddress: String): Boolean

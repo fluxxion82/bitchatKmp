@@ -1448,6 +1448,9 @@ private fun observeDeviceSignal(message: CPointer<DBusMessage>, server: BlueZGat
     when {
         iface == "org.freedesktop.DBus.Properties" && member == "PropertiesChanged" -> {
             val path = dbus_message_get_path(message)?.toKString() ?: return
+            // Only the adapter the app uses: an address alone would make the same peer on another
+            // controller pass for the link here.
+            if (!BlueZObjectPath.isOnAdapter(path)) return
             val address = BlueZObjectPath.deviceAddress(path) ?: return
             when (readDeviceConnectedChange(message)) {
                 false -> server.onDeviceGone(address)
@@ -1458,6 +1461,7 @@ private fun observeDeviceSignal(message: CPointer<DBusMessage>, server: BlueZGat
 
         iface == "org.freedesktop.DBus.ObjectManager" && member == "InterfacesRemoved" -> {
             val path = readRemovedDevicePath(message) ?: return
+            if (!BlueZObjectPath.isOnAdapter(path)) return
             val address = BlueZObjectPath.deviceAddress(path) ?: return
             server.onDeviceGone(address)
         }

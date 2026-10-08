@@ -97,4 +97,36 @@ class GattClientRegistryTest {
         assertEquals(setOf(phoneFirstAddress), snapshot)
         assertTrue(registry.addresses().isEmpty())
     }
+
+    @Test
+    fun aRegistrationMadeWhileAnotherCentralIsDroppedIsNotLost() {
+        // A central is registered on the D-Bus dispatch thread while the mesh service drops
+        // another from a coroutine. Each builds the next set from the one it read, so without a
+        // lock one of the two changes can vanish: a central that had just written was then not in
+        // the registry, and looked like a link nobody uses.
+        repeat(200) { round ->
+            val registry = GattClientRegistry()
+            val centrals = (0 until 50).map { "AA:BB:CC:DD:%02X:%02X".format(round % 256, it) }
+            val churned = "11:22:33:44:55:66"
+            val start = java.util.concurrent.CountDownLatch(1)
+
+            val dropping = kotlin.concurrent.thread {
+                start.await()
+                repeat(2_000) {
+                    registry.onConnected(churned)
+                    registry.onDisconnected(churned)
+                }
+            }
+            val registering = kotlin.concurrent.thread {
+                start.await()
+                centrals.forEach { registry.onConnected(it) }
+            }
+            start.countDown()
+            dropping.join(30_000)
+            registering.join(30_000)
+
+            assertTrue(!dropping.isAlive && !registering.isAlive, "the two threads did not finish")
+            assertEquals(centrals.toSet(), registry.addresses() - churned, "a registration was lost in round $round")
+        }
+    }
 }

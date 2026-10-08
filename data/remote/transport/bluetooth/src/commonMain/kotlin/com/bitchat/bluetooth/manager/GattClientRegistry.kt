@@ -1,6 +1,8 @@
 package com.bitchat.bluetooth.manager
 
 import kotlin.concurrent.Volatile
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
 
 /**
  * Which centrals currently hold a link to our GATT server.
@@ -17,26 +19,34 @@ import kotlin.concurrent.Volatile
  * thread (a `WriteValue` arriving, a `Device1` signal) while reads come from the coroutine that is
  * broadcasting, so a plain mutable set would let a broadcast iterate a set being pruned underneath
  * it. A reader always sees one whole generation, never a half-built one.
+ *
+ * Writers take a lock, because they do not all come from one thread: a central is registered on
+ * the dispatch thread while the mesh service drops another from a coroutine. Each builds the next
+ * generation from the one it read, so two at once could publish a set that had lost the other's
+ * change. A registration lost that way made a central that had just written look like a link
+ * nobody uses.
  */
 class GattClientRegistry {
+
+    private val writers = SynchronizedObject()
 
     @Volatile
     private var clients: Set<String> = emptySet()
 
     /** @return true when [address] was not already registered, i.e. this is a new link. */
-    fun onConnected(address: String): Boolean {
+    fun onConnected(address: String): Boolean = synchronized(writers) {
         val current = clients
         if (address in current) return false
         clients = current + address
-        return true
+        true
     }
 
     /** @return true when [address] was registered and has now been dropped. */
-    fun onDisconnected(address: String): Boolean {
+    fun onDisconnected(address: String): Boolean = synchronized(writers) {
         val current = clients
         if (address !in current) return false
         clients = current - address
-        return true
+        true
     }
 
     fun isConnected(address: String): Boolean = address in clients
@@ -62,7 +72,7 @@ class GattClientRegistry {
 
     fun isEmpty(): Boolean = clients.isEmpty()
 
-    fun clear() {
+    fun clear(): Unit = synchronized(writers) {
         clients = emptySet()
     }
 }
