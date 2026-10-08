@@ -7,6 +7,7 @@ import com.bitchat.noise.NoiseSession
 import com.bitchat.noise.NoiseSessionState
 import kotlinx.atomicfu.locks.ReentrantLock
 import kotlinx.atomicfu.locks.withLock
+import kotlinx.atomicfu.atomic
 import kotlin.time.Clock
 
 /**
@@ -43,21 +44,18 @@ class NoiseEncryptionFacade(
     private val sessionOrder = LinkedHashMap<String, Unit>()
     // Peers the user chose to write to, oldest choice first. Guarded by sessionOrderLock.
     private val chosenByUser = LinkedHashMap<String, Unit>()
+    private val nextSessionToken = atomic(0L)
 
     private class PeerLock {
         val lock = ReentrantLock()
         var users = 0
         /** Only this peer's lock reads or mutates these slots. */
         var established: NoiseSession? = null
-        /**
-         * The link the last message of [established]'s handshake arrived on. Written with it, in the
-         * one place a session becomes the established one, and only ever read beside it: what a
-         * session may be used for depends on where it was made, and the two must not be seen apart.
-         */
-        var establishedLink: String = ""
+        var establishedBinding: SessionBinding? = null
         var candidate: NoiseSession? = null
         /** Validated predecessor used only to read during recovery. */
         var fallback: NoiseSession? = null
+        var fallbackBinding: SessionBinding? = null
         /** When [fallback] began sitting beside an established session, if it does. */
         var fallbackEstablishedAt: Long? = null
         var initiated = false
@@ -82,8 +80,18 @@ class NoiseEncryptionFacade(
 
     data class DecryptionResult(
         val plaintext: ByteArray,
-        val via: DecryptionVia
+        val via: DecryptionVia,
+        val sessionToken: Long
     )
+
+    /**
+     * What goes with a session from the moment it becomes the established one: a [token] that tells it
+     * from every other session of this run, and the [link] the last message of its handshake arrived
+     * on. One object, moved with the session and dropped with it, and only ever read beside it: what
+     * a session may be used for depends on where it was made, and what was said in one session must
+     * not be taken for another's. The token is this device's own and is never sent.
+     */
+    class SessionBinding internal constructor(val token: Long, val link: String)
 
     private inline fun <T> withPeerLock(peerID: String, block: (PeerLock) -> T): T {
         val peerLock = peerLocksRegistry.withLock {
@@ -210,7 +218,7 @@ class NoiseEncryptionFacade(
     fun establishedSessionLink(peerID: String, now: Long = currentTimeMillis()): String? {
         return withPeerLock(peerID) { state ->
             retireExpiredFallback(state, now)
-            state.established?.takeIf { it.isEstablished() }?.let { state.establishedLink }
+            state.established?.takeIf { it.isEstablished() }?.let { state.establishedBinding?.link }
         }
     }
 
@@ -504,8 +512,8 @@ class NoiseEncryptionFacade(
     fun encrypt(peerID: String, data: ByteArray, now: Long = currentTimeMillis()): ByteArray? =
         encryptNamingLink(peerID, data, now)?.bytes
 
-    /** What [encryptNamingLink] made, and the link the handshake of the session it was made in completed on. */
-    class Encrypted(val bytes: ByteArray, val sessionLink: String)
+    /** What [encryptNamingLink] made, and the binding of the session that made it. */
+    class Encrypted(val bytes: ByteArray, val sessionLink: String, val sessionToken: Long)
 
     /**
      * [encrypt], which also says where the session it used was made: read under the same lock as
@@ -515,11 +523,12 @@ class NoiseEncryptionFacade(
     fun encryptNamingLink(peerID: String, data: ByteArray, now: Long = currentTimeMillis()): Encrypted? {
         return withPeerLock(peerID) { state ->
             retireExpiredFallback(state, now)
+            val binding = state.establishedBinding
             val encrypted = state.established
                 ?.takeIf { it.isEstablished() }
                 ?.encrypt(data)
             if (encrypted != null) touchSession(peerID)
-            encrypted?.let { Encrypted(it, state.establishedLink) }
+            encrypted?.let { binding?.let { current -> Encrypted(it, current.link, current.token) } }
         }
     }
 
@@ -539,15 +548,18 @@ class NoiseEncryptionFacade(
                 // Successfully reading the new traffic confirms the peer has switched.
                 state.fallback?.destroy()
                 state.fallback = null
+                state.fallbackBinding = null
                 state.fallbackEstablishedAt = null
                 touchSession(peerID)
-                return@withPeerLock DecryptionResult(establishedPlaintext, DecryptionVia.ESTABLISHED)
+                return@withPeerLock state.establishedBinding?.let {
+                    DecryptionResult(establishedPlaintext, DecryptionVia.ESTABLISHED, it.token)
+                }
             }
             state.fallback?.takeIf { it.isEstablished() }?.let { session ->
                 val fallbackPlaintext = try { session.decrypt(encryptedData) } catch (e: Exception) { null }
                 fallbackPlaintext?.let {
                     touchSession(peerID)
-                    DecryptionResult(it, DecryptionVia.FALLBACK)
+                    state.fallbackBinding?.let { binding -> DecryptionResult(it, DecryptionVia.FALLBACK, binding.token) }
                 }
             }
         }
@@ -591,8 +603,10 @@ class NoiseEncryptionFacade(
         val established = state.established ?: return
         state.fallback?.destroy()
         state.fallback = established
+        state.fallbackBinding = state.establishedBinding
         state.fallbackEstablishedAt = null
         state.established = null
+        state.establishedBinding = null
     }
 
     /**
@@ -611,6 +625,7 @@ class NoiseEncryptionFacade(
             }
             state.established?.destroy()
             state.established = null
+            state.establishedBinding = null
             state.fallbackEstablishedAt = null
             // As in demote: nothing left over may block the handshake the caller starts next.
             setCandidate(state, null, destroyPrevious = true)
@@ -631,8 +646,10 @@ class NoiseEncryptionFacade(
     private fun destroySessions(state: PeerLock) {
         state.established?.destroy()
         state.established = null
+        state.establishedBinding = null
         state.fallback?.destroy()
         state.fallback = null
+        state.fallbackBinding = null
         state.fallbackEstablishedAt = null
         // A renegotiation only exists to replace the session being removed here, so it goes
         // too -- otherwise it would outlive its purpose and later promote itself over a
@@ -676,9 +693,10 @@ class NoiseEncryptionFacade(
         if (previousEstablished != null) {
             state.fallback?.destroy()
             state.fallback = previousEstablished
+            state.fallbackBinding = state.establishedBinding
         }
         state.established = candidate
-        state.establishedLink = link
+        state.establishedBinding = SessionBinding(nextSessionToken.incrementAndGet(), link)
         state.fallbackEstablishedAt = state.fallback?.let { now }
         touchSession(peerID)
         println("[NoiseEncryptionFacade] Noise identity validated for $peerID; session established")
@@ -702,6 +720,7 @@ class NoiseEncryptionFacade(
         if (state.established != null && now - since >= FALLBACK_MAX_AGE_MS) {
             state.fallback?.destroy()
             state.fallback = null
+            state.fallbackBinding = null
             state.fallbackEstablishedAt = null
         }
     }

@@ -1114,7 +1114,7 @@ class ChatRepo(
                 )
             }
 
-            NoisePayloadType.FILE_TRANSFER -> Unit
+            NoisePayloadType.FILE_TRANSFER, NoisePayloadType.DELIVERED_NUMBERS -> Unit
         }
     }
 
@@ -1403,8 +1403,11 @@ class ChatRepo(
         val updated = synchronized(privateChatsLock) {
             val messages = privateChats[convKey] ?: return
             val index = messages.indexOfFirst { it.id == messageId }
-            if (index >= 0) messages[index] = messages[index].copy(deliveryStatus = status)
-            index >= 0
+            val current = messages.getOrNull(index)?.deliveryStatus
+            // A report that a message did not go out never takes back what a receipt has said of it.
+            val mayUpdate = status !is DeliveryStatus.Failed || current is DeliveryStatus.Sending || current is DeliveryStatus.Sent
+            if (index >= 0 && mayUpdate) messages[index] = messages[index].copy(deliveryStatus = status)
+            index >= 0 && mayUpdate
         }
 
         if (updated) {
@@ -2707,12 +2710,28 @@ class ChatRepo(
         println("Bluetooth: Peer $fromPeer left channel $channel")
     }
 
-    // Mesh receipts arrive only out of a Noise session (see MessageHandler), but they are not applied
-    // yet. Applying one rewrites a conversation, and the private-chat lists have no writer lock: a peer
-    // could time receipts against the user's own send and drop the message being added. They are
-    // wired once those writes are serialised.
+    // Mesh receipts arrive only out of a Noise session (see MessageHandler). A delivery receipt moves
+    // the row of that message, in that peer's chat, forward to Delivered: the look at the row and the
+    // write are one step under the chats' lock, a row that is Delivered or Read already is left as it
+    // is, and a message id that is not in that chat changes and creates nothing. Read receipts are
+    // not applied yet.
     override fun didReceiveAuthenticatedDeliveryAck(messageID: String, recipientPeerID: String) {
-        println("Bluetooth: Message $messageID delivered to $recipientPeerID")
+        val updated = synchronized(privateChatsLock) {
+            val messages = privateChats[recipientPeerID] ?: return@synchronized false
+            val index = messages.indexOfFirst { it.id == messageID }
+            val current = messages.getOrNull(index)?.deliveryStatus
+            if (index < 0 || current !is DeliveryStatus.Sending && current !is DeliveryStatus.Sent && current !is DeliveryStatus.Failed) {
+                return@synchronized false
+            }
+            messages[index] = messages[index].copy(
+                deliveryStatus = DeliveryStatus.Delivered(
+                    to = meshChatNames[recipientPeerID] ?: recipientPeerID,
+                    at = Clock.System.now()
+                )
+            )
+            true
+        }
+        if (updated) coroutineScopeFacade.nostrScope.launch { chatEventBus.update(ChatEvent.PrivateChatsUpdated) }
     }
 
     override fun didReceiveAuthenticatedReadReceipt(messageID: String, recipientPeerID: String) {

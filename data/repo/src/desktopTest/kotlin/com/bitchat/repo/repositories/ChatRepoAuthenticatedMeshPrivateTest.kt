@@ -85,8 +85,9 @@ class ChatRepoAuthenticatedMeshPrivateTest {
             runCurrent()
             val before = chatRepo.getPrivateChats()
 
-            // Receipts are not applied on the mesh yet (the conversation lists have no writer lock),
-            // so neither the chat's own peer nor another one can change a stored message with them.
+            // A receipt can only move a message this device sent forward. One that names a message
+            // the peer itself sent changes nothing, whether it comes from the chat's own peer or
+            // from another one, and a read receipt is not applied at all.
             chatRepo.didReceiveAuthenticatedDeliveryAck(privateMessage().id, PEER_ID)
             chatRepo.didReceiveAuthenticatedReadReceipt(privateMessage().id, PEER_ID)
             chatRepo.didReceiveAuthenticatedDeliveryAck(privateMessage().id, OTHER_PEER_ID)

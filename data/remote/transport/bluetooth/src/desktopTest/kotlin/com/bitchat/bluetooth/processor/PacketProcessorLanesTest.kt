@@ -4,6 +4,7 @@ import com.bitchat.bluetooth.facade.CryptoSigningFacade
 import com.bitchat.bluetooth.facade.NoiseEncryptionFacade
 import com.bitchat.bluetooth.handler.MessageHandler
 import com.bitchat.bluetooth.handler.MessageHandlerDelegate
+import com.bitchat.bluetooth.handler.PrivateReceipt
 import com.bitchat.bluetooth.manager.PeerManager
 import com.bitchat.bluetooth.manager.SecurityManager
 import com.bitchat.bluetooth.protocol.BitchatPacket
@@ -221,7 +222,8 @@ class PacketProcessorLanesTest {
             if (message == "m299" || message == "a2" || message == "y".repeat(50) || message == "good") arrived.countDown()
         }
         override fun onPeerAnnounced(peerID: String, nickname: String) = Unit
-        override fun onAuthenticatedPrivateMessage(peerID: String, messageId: String, content: String) = Unit
+        override fun onAuthenticatedPrivateMessage(peerID: String, messageId: String, content: String, receipt: PrivateReceipt) = Unit
+        override fun onAuthenticatedDeliveredNumbers(peerID: String, numbers: List<Long>, sessionToken: Long) = Unit
         override fun onAuthenticatedPrivateFile(peerID: String, file: BitchatFilePacket) = Unit
         override fun onAuthenticatedDelivered(peerID: String, messageId: String) = Unit
         override fun onAuthenticatedRead(peerID: String, messageId: String) = Unit

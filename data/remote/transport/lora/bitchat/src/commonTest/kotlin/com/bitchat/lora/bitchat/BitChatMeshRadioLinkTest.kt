@@ -215,6 +215,15 @@ class BitChatMeshRadioLinkTest {
     }
 
     @Test
+    fun aDeliveryAcknowledgementIsPaidByTheValidatedPeer() = runTest {
+        val fixture = fixture()
+        assertEquals(RadioSendResult.SENT, fixture.link.send(ByteArray(56), alice, RadioPurpose.DeliveryAck))
+        assertEquals(onAir(61), fixture.transmitter.takenMicros(Cause.Validated(alice)))
+        assertEquals(0L, fixture.local())
+        assertEquals(0, fixture.link.keptHolds())
+    }
+
+    @Test
     fun anOpeningThatDidNotGoOutGivesItsHoldBack() = runTest {
         val fixture = fixture()
         fixture.radio.isReady = false

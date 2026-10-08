@@ -9,6 +9,8 @@ import com.bitchat.bluetooth.manager.PeerManager
 import com.bitchat.bluetooth.manager.SecurityManager
 import com.bitchat.bluetooth.manager.SessionFailureTracker
 import com.bitchat.bluetooth.protocol.BitchatPacket
+import com.bitchat.bluetooth.protocol.DeliveredNumbers
+import com.bitchat.bluetooth.protocol.LORA_LINK
 import com.bitchat.bluetooth.protocol.IdentityAnnouncement
 import com.bitchat.bluetooth.protocol.MessageType
 import com.bitchat.bluetooth.protocol.SpecialRecipients
@@ -232,7 +234,12 @@ class MessageHandler(
                         delegate?.onAuthenticatedPrivateMessage(
                             peerID,
                             privateMessage.messageID,
-                            privateMessage.content
+                            privateMessage.content,
+                            PrivateReceipt(
+                                link = link,
+                                number = DeliveredNumbers.packetNumber(payload),
+                                sessionToken = decrypted.sessionToken
+                            )
                         )
                     } else {
                         println("❌ Failed to parse PrivateMessagePacket from $peerID")
@@ -244,7 +251,21 @@ class MessageHandler(
                 }
 
                 NoisePayloadType.DELIVERED -> {
-                    delegate?.onAuthenticatedDelivered(peerID, noisePayload.data.decodeToString())
+                    // This form names a message by its id, whatever session it was sent in. Over
+                    // the radio a delivery is acknowledged by packet numbers, which hold only for
+                    // the session they are read in: the id form is not taken from there.
+                    if (link != LORA_LINK) {
+                        delegate?.onAuthenticatedDelivered(peerID, noisePayload.data.decodeToString())
+                    }
+                }
+
+                NoisePayloadType.DELIVERED_NUMBERS -> {
+                    val numbers = DeliveredNumbers.decode(noisePayload.data)
+                    if (numbers != null) {
+                        delegate?.onAuthenticatedDeliveredNumbers(peerID, numbers, decrypted.sessionToken)
+                    } else {
+                        logInfo("MessageHandler", "Ignored malformed delivery acknowledgement from $peerID")
+                    }
                 }
 
                 NoisePayloadType.FILE_TRANSFER -> {
@@ -372,12 +393,21 @@ class MessageHandler(
 
 }
 
+/**
+ * How an authenticated private message came in: the [link] its packet arrived on, the packet's
+ * [number] (the counter at its start) and the session that read it ([sessionToken]), which is the
+ * established one or its read-only predecessor.
+ */
+class PrivateReceipt(val link: String, val number: Long?, val sessionToken: Long)
+
 interface MessageHandlerDelegate {
     fun onPeerAnnounced(peerID: String, nickname: String)
     fun onMessageReceived(peerID: String, message: String)
-    fun onAuthenticatedPrivateMessage(peerID: String, messageId: String, content: String)
+    fun onAuthenticatedPrivateMessage(peerID: String, messageId: String, content: String, receipt: PrivateReceipt)
     fun onAuthenticatedPrivateFile(peerID: String, file: BitchatFilePacket)
     fun onAuthenticatedDelivered(peerID: String, messageId: String)
+    /** The peer says it read the packets of these numbers; [sessionToken] is the session the saying was read in. */
+    fun onAuthenticatedDeliveredNumbers(peerID: String, numbers: List<Long>, sessionToken: Long)
     fun onAuthenticatedRead(peerID: String, messageId: String)
     fun onHandshakeReceived(peerID: String)
     fun onHandshakeResponse(peerID: String, responsePacket: ByteArray, link: String, final: Boolean)

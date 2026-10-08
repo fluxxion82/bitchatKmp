@@ -6,6 +6,7 @@ import com.bitchat.bluetooth.facade.NoiseEncryptionFacade
 import com.bitchat.bluetooth.manager.PeerManager
 import com.bitchat.bluetooth.manager.SecurityManager
 import com.bitchat.bluetooth.protocol.BitchatPacket
+import com.bitchat.bluetooth.protocol.DeliveredNumbers
 import com.bitchat.bluetooth.protocol.IdentityAnnouncement
 import com.bitchat.bluetooth.protocol.MessageType
 import com.bitchat.bluetooth.protocol.SpecialRecipients
@@ -159,6 +160,88 @@ class MessageHandlerPrivateIngressTest {
                 listOf(AuthenticatedMessage(fixture.sender.peerID, "private-message-id", "authenticated message")),
                 fixture.delegate.authenticatedMessages
             )
+        } finally {
+            fixture.securityManager.shutdown()
+        }
+    }
+
+    @Test
+    fun aPrivateMessageComesWithTheLinkTheNumberAndTheSessionItWasReadIn() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.establishSession()
+            val private = fixture.senderPrivateMessage("private-message-id", "authenticated message")
+            fixture.handler.handlePacket(packet(MessageType.NOISE_ENCRYPTED, fixture, private), fixture.sender.peerID, "lora")
+
+            val receipt = fixture.delegate.receipts.single()
+            assertEquals("lora", receipt.link)
+            assertEquals(DeliveredNumbers.packetNumber(private), receipt.number)
+            assertEquals(fixture.receiver.tokenOfTheSessionWith(fixture.sender.peerID), receipt.sessionToken)
+        } finally {
+            fixture.securityManager.shutdown()
+        }
+    }
+
+    @Test
+    fun deliveredNumbersReachTheDelegateWithTheSessionTheyWereReadIn() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.establishSession()
+            val delivered = fixture.sender.noise.encrypt(
+                fixture.receiver.peerID,
+                NoisePayload(NoisePayloadType.DELIVERED_NUMBERS, byteArrayOf(2, 0, 0, 0, 7, 0, 0, 1, 0)).encode()
+            )!!
+            fixture.handler.handlePacket(packet(MessageType.NOISE_ENCRYPTED, fixture, delivered), fixture.sender.peerID)
+
+            val token = fixture.receiver.tokenOfTheSessionWith(fixture.sender.peerID)
+            assertEquals(listOf(Triple(fixture.sender.peerID, listOf(7L, 256L), token)), fixture.delegate.deliveredNumbers)
+        } finally {
+            fixture.securityManager.shutdown()
+        }
+    }
+
+    @Test
+    fun aDeliveryNamedByMessageIdIsTakenFromBluetoothAndNotFromTheRadio() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.establishSession()
+            fun delivered(id: String) = fixture.sender.noise.encrypt(
+                fixture.receiver.peerID, NoisePayload(NoisePayloadType.DELIVERED, id.encodeToByteArray()).encode()
+            )!!
+
+            // Over the radio a delivery is acknowledged by numbers of the session, never by an id.
+            fixture.handler.handlePacket(packet(MessageType.NOISE_ENCRYPTED, fixture, delivered("over-the-radio")), fixture.sender.peerID, "lora")
+            assertTrue(fixture.delegate.deliveryAcks.isEmpty())
+
+            fixture.handler.handlePacket(packet(MessageType.NOISE_ENCRYPTED, fixture, delivered("over-bluetooth")), fixture.sender.peerID, "address")
+            assertEquals(listOf(fixture.sender.peerID to "over-bluetooth"), fixture.delegate.deliveryAcks)
+        } finally {
+            fixture.securityManager.shutdown()
+        }
+    }
+
+    @Test
+    fun deliveredNumbersThatAreNotWellFormedAreIgnoredWhole() = runTest {
+        val fixture = Fixture()
+        try {
+            fixture.establishSession()
+            // No number, more than eight, a number cut short, a byte too many.
+            val malformed = listOf(
+                byteArrayOf(0),
+                ByteArray(1 + 9 * 4).also { it[0] = 9 },
+                byteArrayOf(1, 0, 0, 7),
+                byteArrayOf(1, 0, 0, 0, 7, 0),
+                byteArrayOf(),
+            )
+            malformed.forEach { data ->
+                val packetBytes = fixture.sender.noise.encrypt(
+                    fixture.receiver.peerID, NoisePayload(NoisePayloadType.DELIVERED_NUMBERS, data).encode()
+                )!!
+                fixture.handler.handlePacket(packet(MessageType.NOISE_ENCRYPTED, fixture, packetBytes), fixture.sender.peerID)
+            }
+
+            assertTrue(fixture.delegate.deliveredNumbers.isEmpty())
+            assertTrue(fixture.delegate.deliveryAcks.isEmpty())
         } finally {
             fixture.securityManager.shutdown()
         }
@@ -688,12 +771,17 @@ class MessageHandlerPrivateIngressTest {
         val crypto = CryptoSigningFacade(seed)
         val peerID = claimedPeerID ?: crypto.getIdentityFingerprint()
         val noise = NoiseEncryptionFacade(peerID)
+
+        /** The token this party knows its established session with [peer] by. */
+        fun tokenOfTheSessionWith(peer: String): Long = noise.encryptNamingLink(peer, byteArrayOf(1))!!.sessionToken
     }
 
     private class RecordingDelegate : MessageHandlerDelegate {
         val announcements = mutableListOf<Pair<String, String>>()
         val publicMessages = mutableListOf<Pair<String, String>>()
         val authenticatedMessages = mutableListOf<AuthenticatedMessage>()
+        val receipts = mutableListOf<PrivateReceipt>()
+        val deliveredNumbers = mutableListOf<Triple<String, List<Long>, Long>>()
         val authenticatedFiles = mutableListOf<Pair<String, BitchatFilePacket>>()
         val deliveryAcks = mutableListOf<Pair<String, String>>()
         val readReceipts = mutableListOf<Pair<String, String>>()
@@ -714,8 +802,9 @@ class MessageHandlerPrivateIngressTest {
             publicMessages += peerID to message
         }
 
-        override fun onAuthenticatedPrivateMessage(peerID: String, messageId: String, content: String) {
+        override fun onAuthenticatedPrivateMessage(peerID: String, messageId: String, content: String, receipt: PrivateReceipt) {
             authenticatedMessages += AuthenticatedMessage(peerID, messageId, content)
+            receipts += receipt
         }
 
         override fun onAuthenticatedPrivateFile(peerID: String, file: BitchatFilePacket) {
@@ -724,6 +813,10 @@ class MessageHandlerPrivateIngressTest {
 
         override fun onAuthenticatedDelivered(peerID: String, messageId: String) {
             deliveryAcks += peerID to messageId
+        }
+
+        override fun onAuthenticatedDeliveredNumbers(peerID: String, numbers: List<Long>, sessionToken: Long) {
+            deliveredNumbers += Triple(peerID, numbers, sessionToken)
         }
 
         override fun onAuthenticatedRead(peerID: String, messageId: String) {

@@ -5,6 +5,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Where a session was made (the link its handshake's last message arrived on) is kept with the
@@ -13,72 +14,71 @@ import kotlin.test.assertNull
 class NoiseSessionLinkTest {
 
     @Test
-    fun withoutAnEstablishedSessionThereIsNoLink() {
-        val local = Party("1".repeat(64))
-        val remote = Party("2".repeat(64))
-        assertNull(local.facade.establishedSessionLink(remote.peerID))
+    fun everySessionThatBecomesTheEstablishedOneHasATokenOfItsOwn() {
+        val local = Party("b".repeat(64))
+        val remote = Party("c".repeat(64))
+        val other = Party("d".repeat(64))
+        establish(local, remote, "radio", "radio")
+        establish(local, other, "radio", "radio")
+        val first = assertNotNull(local.facade.encryptNamingLink(remote.peerID, byteArrayOf(1)))
+        val ofAnotherPeer = assertNotNull(local.facade.encryptNamingLink(other.peerID, byteArrayOf(1)))
 
-        // Nor while a handshake is only in flight.
-        local.facade.initiateHandshake(remote.peerID, local.privateKey, local.publicKey)
-        assertNull(local.facade.establishedSessionLink(remote.peerID))
-        assertNull(local.facade.encryptNamingLink(remote.peerID, byteArrayOf(1)))
+        // The same peer starts over: another session, another token.
+        establish(Party("c".repeat(64)), local, "radio", "bluetooth")
+        val second = assertNotNull(local.facade.encryptNamingLink(remote.peerID, byteArrayOf(2)))
+
+        assertEquals(3, setOf(first.sessionToken, ofAnotherPeer.sessionToken, second.sessionToken).size)
+        assertEquals("bluetooth", second.sessionLink)
+        // And it stays the session's own for as long as the session stands.
+        assertEquals(second.sessionToken, assertNotNull(local.facade.encryptNamingLink(remote.peerID, byteArrayOf(3))).sessionToken)
     }
 
     @Test
-    fun aSessionIsKnownByTheLinkItsHandshakeCompletedOnOnEitherSide() {
-        val initiator = Party("3".repeat(64))
-        val responder = Party("4".repeat(64))
-        // The initiator's session stands when message 2 arrives, the responder's when message 3 does.
-        establish(initiator, responder, initiatorHears = "first", responderHears = "second")
+    fun aPacketIsReadUnderTheTokenOfTheSessionThatReadIt() {
+        val local = Party("d".repeat(64))
+        val remote = Party("e".repeat(64))
+        establish(local, remote, "radio", "radio")
+        val old = assertNotNull(local.facade.encryptNamingLink(remote.peerID, byteArrayOf(1))).sessionToken
+        val ofTheOldSession = assertNotNull(remote.facade.encrypt(local.peerID, byteArrayOf(3)))
+        val alsoOfTheOldSession = assertNotNull(remote.facade.encrypt(local.peerID, byteArrayOf(5)))
 
-        assertEquals("first", initiator.facade.establishedSessionLink(responder.peerID))
-        assertEquals("second", responder.facade.establishedSessionLink(initiator.peerID))
+        val restarted = Party("e".repeat(64))
+        establish(restarted, local, "radio", "bluetooth")
+        val fresh = assertNotNull(local.facade.encryptNamingLink(remote.peerID, byteArrayOf(2))).sessionToken
+
+        // The session that was replaced still reads, under the token it always had...
+        val readByTheOld = assertNotNull(local.facade.decrypt(remote.peerID, ofTheOldSession))
+        assertEquals(NoiseEncryptionFacade.DecryptionVia.FALLBACK, readByTheOld.via)
+        assertEquals(old, readByTheOld.sessionToken)
+        // ...and the new one under its own.
+        val ofTheNewSession = assertNotNull(restarted.facade.encrypt(local.peerID, byteArrayOf(4)))
+        val readByTheNew = assertNotNull(local.facade.decrypt(remote.peerID, ofTheNewSession))
+        assertEquals(NoiseEncryptionFacade.DecryptionVia.ESTABLISHED, readByTheNew.via)
+        assertEquals(fresh, readByTheNew.sessionToken)
+        // The peer was seen using the new session: the old one is gone, and nothing reads under its token.
+        assertNull(local.facade.decrypt(remote.peerID, alsoOfTheOldSession))
     }
 
     @Test
-    fun aSessionMadeAgainIsKnownByTheLinkOfTheNewHandshakeAtOnce() {
-        val local = Party("5".repeat(64))
-        val remote = Party("6".repeat(64))
-        establish(remote, local, initiatorHears = "radio", responderHears = "radio")
-        assertEquals("radio", local.facade.establishedSessionLink(remote.peerID))
+    fun aSessionThatWasGivenUpReadsUnderItsOwnTokenBesideTheOneThatFollows() {
+        val local = Party("a".repeat(64))
+        val remote = Party("b".repeat(64))
+        establish(remote, local, "radio", "radio")
+        val token = assertNotNull(local.facade.encryptNamingLink(remote.peerID, byteArrayOf(1))).sessionToken
+        val first = assertNotNull(remote.facade.encrypt(local.peerID, byteArrayOf(2)))
+        val second = assertNotNull(remote.facade.encrypt(local.peerID, byteArrayOf(3)))
 
-        // The peer starts over and this time its messages arrive on another link. Until the last of
-        // them the standing session is the old one, with its link; with the last, the new one and its.
-        val restarted = Party("6".repeat(64))
-        val message1 = restarted.facade.initiateHandshake(local.peerID, restarted.privateKey, restarted.publicKey)
-        val message2 = response(local.facade.processHandshake(remote.peerID, message1, local.privateKey, local.publicKey, link = "bluetooth"))
-        assertEquals("radio", local.facade.establishedSessionLink(remote.peerID))
-        val message3 = response(restarted.facade.processHandshake(local.peerID, message2, restarted.privateKey, restarted.publicKey, link = "bluetooth"))
-        local.facade.processHandshake(remote.peerID, message3, local.privateKey, local.publicKey, link = "bluetooth")
-
-        assertEquals("bluetooth", local.facade.establishedSessionLink(remote.peerID))
-    }
-
-    @Test
-    fun encryptionSaysWhereTheSessionItUsedWasMade() {
-        val local = Party("7".repeat(64))
-        val remote = Party("8".repeat(64))
-        establish(local, remote, initiatorHears = "radio", responderHears = "bluetooth")
-
-        val fromLocal = assertNotNull(local.facade.encryptNamingLink(remote.peerID, "one".encodeToByteArray()))
-        assertEquals("radio", fromLocal.sessionLink)
-        assertContentEquals("one".encodeToByteArray(), assertNotNull(remote.facade.decrypt(local.peerID, fromLocal.bytes)).plaintext)
-        val fromRemote = assertNotNull(remote.facade.encryptNamingLink(local.peerID, "two".encodeToByteArray()))
-        assertEquals("bluetooth", fromRemote.sessionLink)
-        // The plain form is the same encryption without the word.
-        assertNotNull(local.facade.decrypt(remote.peerID, assertNotNull(remote.facade.encrypt(local.peerID, "three".encodeToByteArray()))))
-    }
-
-    @Test
-    fun aSessionThatWasGivenUpHasNoLinkAndNeitherHasItsFallback() {
-        val local = Party("9".repeat(64))
-        val remote = Party("a".repeat(64))
-        establish(remote, local, initiatorHears = "radio", responderHears = "radio")
-
+        // Given up: it only reads from now on, under the token it always had.
         local.facade.demote(remote.peerID)
-
         assertNull(local.facade.establishedSessionLink(remote.peerID))
-        assertNull(local.facade.encryptNamingLink(remote.peerID, byteArrayOf(1)))
+        assertEquals(token, assertNotNull(local.facade.decrypt(remote.peerID, first)).sessionToken)
+
+        // A new session beside it has a token of its own, and the old one keeps its.
+        val restarted = Party("b".repeat(64))
+        establish(restarted, local, "radio", "radio")
+        val fresh = assertNotNull(local.facade.encryptNamingLink(remote.peerID, byteArrayOf(4))).sessionToken
+        assertTrue(fresh != token)
+        assertEquals(token, assertNotNull(local.facade.decrypt(remote.peerID, second)).sessionToken)
     }
 
     private fun establish(initiator: Party, responder: Party, initiatorHears: String, responderHears: String) {

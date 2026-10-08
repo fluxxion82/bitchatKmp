@@ -53,6 +53,7 @@ internal class BitChatMeshRadioLink(
             RadioPurpose.HandshakeFinal ->
                 following(frame, peer, TransmitKind.LOCAL_HANDSHAKE_FINAL, TransmitKind.HANDSHAKE_FINAL, Cause.Validated(peer))
             RadioPurpose.PrivateMessage -> transmitter.offer(listOf(frame), TransmitKind.PRIVATE_MESSAGE)?.single()
+            RadioPurpose.DeliveryAck -> transmitter.offer(listOf(frame), TransmitKind.DELIVERY_ACK, Cause.Validated(peer))?.single()
         } ?: return RadioSendResult.NO_TIME_ON_AIR
 
         val outcome = ticket.await()

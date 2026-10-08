@@ -6,6 +6,9 @@ import com.bitchat.bluetooth.facade.CryptoSigningFacade
 import com.bitchat.bluetooth.facade.NoiseEncryptionFacade
 import com.bitchat.bluetooth.handler.MessageHandler
 import com.bitchat.bluetooth.handler.MessageHandlerDelegate
+import com.bitchat.bluetooth.handler.PrivateReceipt
+import com.bitchat.bluetooth.handler.RadioAckNotes
+import com.bitchat.bluetooth.handler.SentRadioTexts
 import com.bitchat.bluetooth.manager.HandshakeRefreshPolicy
 import com.bitchat.bluetooth.manager.FragmentManager
 import com.bitchat.bluetooth.manager.HandshakeSupervisor
@@ -20,6 +23,7 @@ import com.bitchat.bluetooth.processor.PacketProcessorDelegate
 import com.bitchat.bluetooth.protocol.BinaryProtocol
 import com.bitchat.bluetooth.protocol.BitchatPacket
 import com.bitchat.bluetooth.protocol.IdentityAnnouncement
+import com.bitchat.bluetooth.protocol.DeliveredNumbers
 import com.bitchat.bluetooth.protocol.MessageType
 import com.bitchat.bluetooth.protocol.LORA_LINK
 import com.bitchat.bluetooth.protocol.MAX_LORA_PACKET_BYTES
@@ -44,6 +48,7 @@ import com.bitchat.noise.model.PrivateMessagePacket
 import com.bitchat.transport.MeshRadioLink
 import com.bitchat.transport.RadioPurpose
 import com.bitchat.transport.RadioSendResult
+import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.CancellationException
@@ -92,6 +97,9 @@ class BluetoothMeshService(
     private val privateSendHandoverWaitMs: Long = PRIVATE_SEND_HANDOVER_WAIT_MS,
     private val radioRetryMs: Long = RADIO_RETRY_MS,
     private val radioGiveUpMs: Long = RADIO_GIVE_UP_MS,
+    private val ackGatherMs: Long = ACK_GATHER_MS,
+    private val ackRetryMs: Long = ACK_RETRY_MS,
+    private val ackMaxAgeMs: Long = ACK_MAX_AGE_MS,
     // What the wait for the radio is measured with: a clock that only goes forward, whatever is done
     // to the device's time of day (a board without a battery clock has its own set after it starts).
     private val radioWaitClock: TimeSource = TimeSource.Monotonic,
@@ -104,6 +112,9 @@ class BluetoothMeshService(
     private val fragmentManager = FragmentManager()
     private val devicePeerLock = Mutex()
     private val peerLinks = PeerLinkDirectory()
+    private val radioAckNotes = RadioAckNotes(radioWaitClock, ackMaxAgeMs)
+    private val sentRadioTexts = SentRadioTexts(radioWaitClock)
+    private val acknowledgers = atomic(0)
 
     // A lock-free view of [peerLinks] for the connection service, which has to answer "is this
     // address the peer I am already linked to?" while deciding whether to connect and cannot
@@ -406,7 +417,7 @@ class BluetoothMeshService(
                 delegate?.didReceiveMessage(bitchatMessage)
             }
 
-            override fun onAuthenticatedPrivateMessage(peerID: String, messageId: String, content: String) {
+            override fun onAuthenticatedPrivateMessage(peerID: String, messageId: String, content: String, receipt: PrivateReceipt) {
                 val peer = peerManager.getPeer(peerID)
                 val senderName = peer?.nickname ?: UNKNOWN_PEER_NICKNAME
                 val now = Clock.System.now()
@@ -423,6 +434,13 @@ class BluetoothMeshService(
                 )
 
                 delegate?.didReceiveAuthenticatedPrivateMessage(bitchatMessage)
+                // A text that came over the radio is acknowledged there, in the session it was read in.
+                // One read by a session that has been replaced is noted under that session's token,
+                // which no acknowledgement is ever encrypted under: it is dropped when its turn comes.
+                if (receipt.link == LORA_LINK && receipt.number != null &&
+                    radioAckNotes.note(peerID, receipt.sessionToken, receipt.number)) {
+                    startAcknowledging(peerID, receipt.sessionToken)
+                }
             }
 
             override fun onAuthenticatedPrivateFile(peerID: String, file: BitchatFilePacket) {
@@ -432,6 +450,12 @@ class BluetoothMeshService(
 
             override fun onAuthenticatedDelivered(peerID: String, messageId: String) {
                 delegate?.didReceiveAuthenticatedDeliveryAck(messageId, peerID)
+            }
+
+            override fun onAuthenticatedDeliveredNumbers(peerID: String, numbers: List<Long>, sessionToken: Long) {
+                sentRadioTexts.resolve(peerID, sessionToken, numbers).forEach { messageID ->
+                    delegate?.didReceiveAuthenticatedDeliveryAck(messageID, peerID)
+                }
             }
 
             override fun onAuthenticatedRead(peerID: String, messageId: String) {
@@ -795,7 +819,10 @@ class BluetoothMeshService(
                         return@launch
                     }
                     try {
-                        sendOverRadioUntilSent(packet, send, handedOver, madeOverRadio)
+                        sendOverRadioUntilSent(
+                            packet, send, handedOver, madeOverRadio,
+                            encrypted.sessionToken, DeliveredNumbers.packetNumber(encrypted.bytes)
+                        )
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -845,13 +872,21 @@ class BluetoothMeshService(
      * otherwise (the peer is no longer heard, or the session was made again over Bluetooth while the
      * mesh does not have the peer).
      */
-    private suspend fun sendOverRadioUntilSent(packet: BitchatPacket, send: PrivateSend, handedOver: TimeMark, madeOverRadio: Boolean) {
+    private suspend fun sendOverRadioUntilSent(
+        packet: BitchatPacket,
+        send: PrivateSend,
+        handedOver: TimeMark,
+        madeOverRadio: Boolean,
+        sessionToken: Long,
+        packetNumber: Long?
+    ) {
         val peerID = send.recipientPeerID
         val bytes = radioBytes(packet)
         if (bytes == null) {
             failed(send, "too long for one LoRa frame")
             return
         }
+        var remembered = false
         while (true) {
             if (!madeOverRadio || !radioReaches(peerID)) {
                 if (isOutOfReach(peerID)) {
@@ -863,6 +898,10 @@ class BluetoothMeshService(
                 // took it, the message has gone nowhere.
                 serviceScope.launch { if (!sendPacket(packet)) failed(send, "no link carried it") }
                 return
+            }
+            if (!remembered && send.messageID != null && packetNumber != null) {
+                sentRadioTexts.remember(peerID, sessionToken, packetNumber, send.messageID)
+                remembered = true
             }
             when (radioLink?.send(bytes, peerID, RadioPurpose.PrivateMessage)) {
                 RadioSendResult.SENT -> return
@@ -880,6 +919,74 @@ class BluetoothMeshService(
             }
         }
     }
+
+    /**
+     * Tells [peerID] which of its private texts arrived over the radio, by their packet numbers, in
+     * the session they were read in ([token]): one frame for all that were noted by the time it goes,
+     * after a short wait in which more can come. It is what a received packet caused, so it is paid
+     * from that peer's own allowance and never from this device's user's; without time on air it is
+     * tried again with whatever has been noted by then, until the numbers are too old. It goes only
+     * over the radio, only in a session made over the radio, and only in the session the numbers
+     * belong to: if another session has taken its place, the numbers are dropped.
+     */
+    private fun startAcknowledging(peerID: String, token: Long) {
+        acknowledgers.incrementAndGet()
+        serviceScope.launch {
+            try {
+                delay(ackGatherMs)
+                while (true) {
+                    val numbers = radioAckNotes.snapshot(peerID, token)
+                    if (numbers.isEmpty()) return@launch
+                    val data = DeliveredNumbers.encode(numbers) ?: run {
+                        radioAckNotes.drop(peerID, token)
+                        return@launch
+                    }
+                    val encrypted = noiseEncryption.encryptNamingLink(
+                        peerID, NoisePayload(NoisePayloadType.DELIVERED_NUMBERS, data).encode()
+                    )
+                    if (encrypted == null || encrypted.sessionToken != token || encrypted.sessionLink != LORA_LINK || !radioReaches(peerID)) {
+                        radioAckNotes.drop(peerID, token)
+                        return@launch
+                    }
+                    val packet = BitchatPacket(
+                        type = MessageType.NOISE_ENCRYPTED.value,
+                        senderID = BitchatPacket.hexStringToByteArray(myPeerID),
+                        recipientID = BitchatPacket.hexStringToByteArray(peerID),
+                        timestamp = nextEncryptedPacketTime(),
+                        payload = encrypted.bytes,
+                        ttl = 0u
+                    )
+                    val bytes = radioBytes(packet)
+                    if (bytes == null) {
+                        radioAckNotes.drop(peerID, token)
+                        return@launch
+                    }
+                    when (radioLink?.send(bytes, peerID, RadioPurpose.DeliveryAck)) {
+                        RadioSendResult.SENT -> {
+                            // Ends in the step that empties the entry, not after a wait: a number
+                            // noted from then on starts a sender of its own.
+                            if (!radioAckNotes.sent(peerID, token, numbers)) return@launch
+                            delay(ackRetryMs)
+                        }
+                        RadioSendResult.NO_TIME_ON_AIR -> delay(ackRetryMs)
+                        RadioSendResult.FAILED, null -> {
+                            radioAckNotes.drop(peerID, token)
+                            return@launch
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                radioAckNotes.drop(peerID, token)
+            } finally {
+                acknowledgers.decrementAndGet()
+            }
+        }
+    }
+
+    /** How many acknowledgement senders are alive now, for tests. One whose entry is gone or replaced may still be on its way out. */
+    internal fun acknowledgersRunning(): Int = acknowledgers.value
 
     /**
      * Waits until the private message sent to the same peer [before] this one is with the links:
@@ -1525,6 +1632,11 @@ class BluetoothMeshService(
         /** Private messages that may wait for the radio at one time; one more is reported as failed. */
         const val MAX_WAITING_RADIO_MESSAGES = 16
         const val OUT_OF_REACH = "the peer is out of reach"
+        /** How long the first text to acknowledge waits for others to share its frame. */
+        const val ACK_GATHER_MS = 2_000L
+        const val ACK_RETRY_MS = 5_000L
+        /** A text not acknowledged by then is not acknowledged at all. */
+        const val ACK_MAX_AGE_MS = 120_000L
 
         /**
          * How far the time on an encrypted packet may run ahead of the clock (see [nextSendTime]).

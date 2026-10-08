@@ -9,6 +9,7 @@ sealed interface RadioPurpose {
     /** Message 3: the peer's key has been validated. */
     data object HandshakeFinal : RadioPurpose
     data object PrivateMessage : RadioPurpose
+    data object DeliveryAck : RadioPurpose
 }
 
 enum class RadioSendResult { SENT, NO_TIME_ON_AIR, FAILED }
