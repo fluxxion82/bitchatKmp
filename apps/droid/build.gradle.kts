@@ -41,6 +41,9 @@ android {
         compose = true
         buildConfig = true
     }
+    // The prebuilt Arti library (data/remote/tor/native/build-android.sh). :data:remote:tor is a
+    // multiplatform library and can no longer name a jniLibs directory itself, so the app packages it.
+    sourceSets["main"].jniLibs.directories += rootProject.file("data/remote/tor/jniLibs").path
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"

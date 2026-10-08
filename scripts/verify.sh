@@ -58,7 +58,23 @@ case "$MODE" in
     fi
     gradle "${desktop_tasks[@]}"
     ;;
-  android)  gradle :apps:droid:assembleDebug ;;
+  android)
+    gradle :apps:droid:assembleDebug
+    # The Arti library is a prebuilt the app has to carry: without it Tor is unavailable on Android and
+    # nothing fails, so an assemble alone does not notice (it went missing from the APK on 2026-09-09).
+    apk=apps/droid/build/outputs/apk/debug/droid-debug.apk
+    apk_entries="$(unzip -Z1 "$apk")"
+    arti_checked=0
+    for prebuilt in data/remote/tor/jniLibs/*/libarti_android.so; do
+      [[ -f "$prebuilt" ]] || continue
+      entry="lib/$(basename "$(dirname "$prebuilt")")/libarti_android.so"
+      grep -qxF "$entry" <<<"$apk_entries" || { echo "$apk does not carry $entry although $prebuilt exists" >&2; exit 1; }
+      arti_checked=$((arti_checked + 1))
+    done
+    if (( arti_checked == 0 )); then
+      echo "verify.sh android: no prebuilt libarti_android.so under data/remote/tor/jniLibs, so the APK was not checked for it"
+    fi
+    ;;
   ios)
     gradle :iosdi:linkDebugFrameworkIosSimulatorArm64 :iosdi:linkDebugFrameworkIosArm64 :iosdi:linkReleaseFrameworkIosArm64 \
       :data:crypto:macosArm64Test :data:crypto:iosSimulatorArm64Test :data:remote:rest:client:macosArm64Test :data:remote:rest:client:iosSimulatorArm64Test
