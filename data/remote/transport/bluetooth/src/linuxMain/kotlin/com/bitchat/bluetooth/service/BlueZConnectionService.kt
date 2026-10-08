@@ -49,6 +49,9 @@ class BlueZConnectionService(
 
     companion object {
         private const val TAG = "BLUEZ_CONN"
+
+        // The link status line is written once in this many reconciliation passes: once a minute.
+        private const val STATUS_EVERY_PASSES = 12
     }
 
     // Server connections (they connected to us)
@@ -536,6 +539,7 @@ class BlueZConnectionService(
     private fun startLinkReconciliation() {
         if (reconciliationJob?.isActive == true) return
         reconciliationJob = coroutineScopeFacade.applicationScope.launch {
+            var passes = 0
             while (isActive) {
                 delay(CentralLinkPolicy.SWEEP_INTERVAL_MS)
                 try {
@@ -546,6 +550,7 @@ class BlueZConnectionService(
                         logInfo(TAG, "Released the link to ${address.take(8)}: the GATT client no longer holds it")
                     }
                     dropOrphanedLinks()
+                    if (++passes % STATUS_EVERY_PASSES == 0) logLinkStatus()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -553,6 +558,27 @@ class BlueZConnectionService(
                 }
             }
         }
+    }
+
+    /**
+     * One line a minute with every record of a link this service keeps, side by side.
+     *
+     * The faults found on the boards were all two of these records disagreeing for hours (BlueZ
+     * holding a link the app did not use, the policy counting one the client had dropped, no
+     * advertisement while everything else looked normal), and each took a comparison by hand of
+     * `bluetoothctl` against scattered journal lines to see. This is that comparison, kept.
+     */
+    private suspend fun logLinkStatus() {
+        val held = gattClient.heldAddresses()
+        val ready = gattClient.getReadyDeviceAddresses().toSet()
+        val (attempts, counted, known) = connectionMutex.withLock {
+            Triple(linkPolicy.pendingCount(), linkPolicy.establishedCount(), knownPeers.candidates(emptySet()).size)
+        }
+        fun Collection<String>.short() = sorted().joinToString(",") { it.take(8) }.ifEmpty { "-" }
+        logInfo(TAG, "Link status: advertising=${if (advertisingService.isAdvertising()) "yes" else "NO"} " +
+                "client=[${ready.short()}] client-not-ready=[${(held - ready).short()}] " +
+                "server=[${gattServer.getConnectedClients().short()}] bluez-links=[${orphans.tracked().short()}] " +
+                "attempts=$attempts policy-links=$counted known=$known")
     }
 
     /**
