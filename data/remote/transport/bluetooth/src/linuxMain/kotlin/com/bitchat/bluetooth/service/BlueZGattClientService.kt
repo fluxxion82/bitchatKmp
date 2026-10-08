@@ -131,7 +131,14 @@ class BlueZGattClientService(
         BUSY,
 
         /** gattlib refused outright. No callback is coming. */
-        REFUSED
+        REFUSED,
+
+        /**
+         * There is no such device any more: bluetoothd dropped its object, and gattlib its record
+         * with it. Asking again cannot end differently until BlueZ sees the peer again, and gattlib
+         * announces it through the scan callback when that happens.
+         */
+        UNKNOWN_DEVICE
     }
 
     /**
@@ -177,6 +184,14 @@ class BlueZGattClientService(
         if (result == GATTLIB_BUSY) {
             logDebug(TAG, "gattlib still owns an attempt to $deviceAddress")
             return ConnectOutcome.BUSY
+        }
+
+        // GATTLIB_INVALID_PARAMETER is gattlib finding no record for the address ("Cannot find
+        // connection"), GATTLIB_NOT_FOUND is BlueZ answering UnknownObject for a record gattlib
+        // still had. Either way the device is gone, which is not a failed attempt at reaching it.
+        if (result == GATTLIB_INVALID_PARAMETER || result == GATTLIB_NOT_FOUND) {
+            logInfo(TAG, "BlueZ has no device $deviceAddress (gattlib error $result)")
+            return ConnectOutcome.UNKNOWN_DEVICE
         }
 
         if (result != GATTLIB_SUCCESS) {

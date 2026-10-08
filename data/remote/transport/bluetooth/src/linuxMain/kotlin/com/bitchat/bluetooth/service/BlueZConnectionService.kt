@@ -1,6 +1,7 @@
 package com.bitchat.bluetooth.service
 
 import com.bitchat.bluetooth.manager.CentralLinkPolicy
+import com.bitchat.bluetooth.manager.KnownPeers
 import com.bitchat.bluetooth.manager.OrphanedLinks
 import com.bitchat.bluetooth.manager.bitchatLinks
 import com.bitchat.bluetooth.protocol.logDebug
@@ -71,15 +72,18 @@ class BlueZConnectionService(
     private fun monotonicMs(): Long = started.elapsedNow().inWholeMilliseconds
 
     /**
-     * Every address the scanner has ever named, so the sweep can offer one again.
+     * The addresses the scanner has named and BlueZ still has, so the sweep can offer one again.
      *
      * BlueZ announces a device once, when it first appears. gattlib's discovery callback passes
      * that straight through, so a peer whose connect failed is never offered a second time and the
      * policy's backoff -- which assumes repeated offers -- never gets to expire. Measured on the
      * Pi: two connects failed within ten seconds of start-up and the radio then sat idle with zero
      * links while both peers were still advertising.
+     *
+     * An address leaves when a dial to it is refused because BlueZ no longer has the device; see
+     * [KnownPeers]. Guarded by [connectionMutex].
      */
-    private val knownPeers = mutableSetOf<String>()
+    private val knownPeers = KnownPeers()
 
     // Addresses of peers this node is already talking to, keyed by peer ID rather than by MAC.
     // Android rotates its advertising address, so the same phone is offered by the scanner under a
@@ -109,7 +113,8 @@ class BlueZConnectionService(
 
     override suspend fun connectToDevice(deviceAddress: String) {
         logInfo(TAG, "Connect request: $deviceAddress")
-        handleConnectOutcome(deviceAddress, gattClient.connect(deviceAddress))
+        val sighting = connectionMutex.withLock { knownPeers.sightingOf(deviceAddress) }
+        handleConnectOutcome(deviceAddress, gattClient.connect(deviceAddress), sighting)
     }
 
     override suspend fun confirmDevice() {
@@ -265,8 +270,11 @@ class BlueZConnectionService(
      * several times a minute, and because Android rotates its resolvable private address most of
      * those offers are the same phone under a new MAC. Answering all of them is what produced the
      * churn: overlapping attempts cancelling each other, and links that lasted seconds.
+     *
+     * [sighted] is false when the sweep is the one offering the address: only the scanner, or
+     * BlueZ reporting a link, says the device exists now.
      */
-    suspend fun onDeviceDiscovered(deviceAddress: String, deviceName: String?) {
+    suspend fun onDeviceDiscovered(deviceAddress: String, deviceName: String?, sighted: Boolean = true) {
         // Setting BITCHAT_BLE_NO_DIAL runs this node peripheral-only: it keeps advertising and
         // keeps serving centrals that dial us, but never dials out itself. It is the mirror of
         // BITCHAT_BLE_NO_ADVERTISE in BlueZAdvertisingService, and exists so the desktop's central
@@ -275,13 +283,15 @@ class BlueZConnectionService(
         // The address is still remembered, so clearing the variable and restarting picks up
         // everything already discovered rather than waiting for BlueZ to announce it again.
         if (dialSuppressed()) {
-            connectionMutex.withLock { knownPeers.add(deviceAddress) }
+            if (sighted) connectionMutex.withLock { knownPeers.onSighted(deviceAddress) }
             logDebug(TAG, "BITCHAT_BLE_NO_DIAL set: not dialling ${deviceAddress.take(8)}")
             return
         }
 
+        var sighting: Long? = null
         val decision = connectionMutex.withLock {
-            knownPeers.add(deviceAddress)
+            if (sighted) knownPeers.onSighted(deviceAddress)
+            sighting = knownPeers.sightingOf(deviceAddress)
             linkPolicy.onDiscovered(
                 address = deviceAddress,
                 now = currentTimeMillis(),
@@ -303,7 +313,7 @@ class BlueZConnectionService(
                 "(links: ${connectionMutex.withLock { linkPolicy.establishedCount() }})")
 
         logInfo(TAG, "Connect request: $deviceAddress")
-        handleConnectOutcome(deviceAddress, gattClient.connect(deviceAddress))
+        handleConnectOutcome(deviceAddress, gattClient.connect(deviceAddress), sighting)
     }
 
     /**
@@ -313,10 +323,15 @@ class BlueZConnectionService(
      * milliseconds rather than holding it for the reaper's full deadline. BUSY is different: gattlib
      * is still holding an attempt this side has already given up on, and asking again before it lets
      * go only collects another refusal. See [CentralLinkPolicy.onNativeBusy].
+     *
+     * UNKNOWN_DEVICE takes the address out of the sweep as well, unless the scanner has named it
+     * again since [sighting], the sighting this dial acted on: BlueZ dropped the device, so every
+     * further dial would be refused the same way until it is announced again.
      */
     private suspend fun handleConnectOutcome(
         deviceAddress: String,
-        outcome: BlueZGattClientService.ConnectOutcome
+        outcome: BlueZGattClientService.ConnectOutcome,
+        sighting: Long?
     ) {
         when (outcome) {
             BlueZGattClientService.ConnectOutcome.STARTED -> Unit
@@ -329,6 +344,20 @@ class BlueZConnectionService(
 
             BlueZGattClientService.ConnectOutcome.REFUSED ->
                 onClientConnectionFailed(deviceAddress, "gattlib refused the connection")
+
+            BlueZGattClientService.ConnectOutcome.UNKNOWN_DEVICE -> {
+                val dropped = connectionMutex.withLock {
+                    linkPolicy.onReleased(deviceAddress, currentTimeMillis())
+                    knownPeers.onUnknownToBlueZ(deviceAddress, sighting)
+                }
+                if (dropped) {
+                    logInfo(TAG, "BlueZ no longer has ${deviceAddress.take(8)}; not offering it " +
+                            "again until the scanner names it")
+                } else {
+                    logInfo(TAG, "BlueZ had dropped ${deviceAddress.take(8)} but it has been " +
+                            "named again since; keeping it")
+                }
+            }
         }
     }
 
@@ -479,8 +508,8 @@ class BlueZConnectionService(
      */
     internal suspend fun reofferKnownPeers() {
         val held = gattClient.heldAddresses() + serverConnections.toSet()
-        val candidates = connectionMutex.withLock { knownPeers - held }
-        candidates.forEach { address -> onDeviceDiscovered(address, null) }
+        val candidates = connectionMutex.withLock { knownPeers.candidates(held) }
+        candidates.forEach { address -> onDeviceDiscovered(address, null, sighted = false) }
     }
 
     private fun startAttemptReaper() {
