@@ -1844,27 +1844,15 @@ class ChatRepo(
         }
     }
 
+    // What is queued for a peer is queued under its mesh id, and only that id says whose queue is
+    // sent. The Noise key a peer announces is checked against nothing: it names no queue.
     override suspend fun onPeersUpdated(peers: List<String>) = withContext(coroutinesContextFacade.io) {
-        peers.forEach { pid ->
-            flushOutboxFor(pid)
-            val noiseHex = try {
-                mesh.getPeerInfo(pid)?.noisePublicKey
-            } catch (_: Exception) {
-                null
-            }
-            noiseHex?.let { flushOutboxFor(it.toHexString()) }
-        }
+        peers.forEach { pid -> flushOutboxFor(pid) }
     }
 
     override suspend fun onSessionEstablished(peerID: String): Unit = withContext(coroutinesContextFacade.io) {
         println("🔐 Session established for: $peerID")
         flushOutboxFor(peerID)
-        val noiseHex = try {
-            mesh.getPeerInfo(peerID)?.noisePublicKey
-        } catch (_: Exception) {
-            null
-        }
-        noiseHex?.let { flushOutboxFor(it.toHexString()) }
     }
 
     override suspend fun joinChannel(channel: String, password: String?): Boolean = withContext(coroutinesContextFacade.io) {
@@ -2227,15 +2215,6 @@ class ChatRepo(
         while (iterator.hasNext()) {
             val (content, nickname, messageID) = iterator.next()
             val hasMesh = reachesOverMesh(peerID) && mesh.hasEstablishedSession(peerID)
-            if (!hasMesh && peerID.length == 64 && peerID.matches(Regex("^[0-9a-fA-F]+$"))) {
-                val meshPeer = resolveMeshPeerForNoiseHex(peerID)
-                if (meshPeer != null && mesh.getPeerInfo(meshPeer)?.isConnected == true && mesh.hasEstablishedSession(meshPeer)) {
-                    println("   → Sending queued message via mesh peer: $messageID")
-                    handToMesh(content, meshPeer, nickname, messageID, chatKey = peerID)
-                    iterator.remove()
-                    continue
-                }
-            }
             val recipientNpub = if (!hasMesh && !overMeshOnly && canSendViaNostr(peerID)) resolveNostrPublicKey(peerID) else null
             if (hasMesh) {
                 println("   → Sending queued message via mesh: $messageID")
@@ -2282,9 +2261,9 @@ class ChatRepo(
      * carry (a text cut for Bluetooth when the peer has since become reachable over the radio only):
      * the row then says so, instead of standing as sent when nothing was.
      */
-    private fun handToMesh(content: String, toPeerID: String, nickname: String, messageID: String?, chatKey: String = toPeerID) {
+    private fun handToMesh(content: String, toPeerID: String, nickname: String, messageID: String?) {
         if (mesh.sendPrivateMessage(content, toPeerID, nickname, messageID)) return
-        if (messageID != null) updateDeliveryStatus(chatKey, messageID, DeliveryStatus.Failed("too long for the link it would take: send it again"))
+        if (messageID != null) updateDeliveryStatus(toPeerID, messageID, DeliveryStatus.Failed("too long for the link it would take: send it again"))
     }
 
     /**
@@ -2324,18 +2303,6 @@ class ChatRepo(
             }
         } catch (_: Exception) {
             false
-        }
-    }
-
-    private fun resolveMeshPeerForNoiseHex(noiseHex: String): String? {
-        return try {
-            mesh.getPeerNicknames().keys.firstOrNull { pid ->
-                val info = mesh.getPeerInfo(pid)
-                val keyHex = info?.noisePublicKey
-                keyHex != null && keyHex.equals(noiseHex)
-            }
-        } catch (_: Exception) {
-            null
         }
     }
 
