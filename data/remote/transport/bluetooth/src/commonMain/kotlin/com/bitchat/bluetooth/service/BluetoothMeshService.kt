@@ -574,43 +574,47 @@ class BluetoothMeshService(
      * link that has just been replaced, and the peer never saw it. Discard the stalled candidate
      * and start over, and give the peer a fresh retry budget, since its history says nothing about a
      * link it did not have.
+     *
+     * Runs to its decision on the caller's coroutine, not on a launched one. The packet that binds
+     * the link is handed to its lane right after, and may itself start a handshake (an unreadable
+     * packet asks for a recovery): launched, the reset here could land after that handshake had
+     * recorded its attempt and wipe the record, with the decision then inside the restart grace and
+     * nothing to record it again.
      */
-    private fun onPeerLinkRefreshed(peerID: String) {
-        serviceScope.launch {
-            val now = Clock.System.now().toEpochMilliseconds()
-            val (owed, byUser) = handshakeMutex.withLock {
-                handshakeSupervisor.reset(peerID)
-                (peerID in handshakesOwed) to handshakesOwed.isForUser(peerID)
+    private suspend fun onPeerLinkRefreshed(peerID: String) {
+        val now = Clock.System.now().toEpochMilliseconds()
+        val (owed, byUser) = handshakeMutex.withLock {
+            handshakeSupervisor.reset(peerID)
+            (peerID in handshakesOwed) to handshakesOwed.isForUser(peerID)
+        }
+        val startedAt = handshakeMutex.withLock { handshakeStartedAt[peerID] }
+
+        when (handshakeRefreshPolicy.decide(
+            established = noiseEncryption.hasEstablishedSession(peerID),
+            handshaking = noiseEncryption.isHandshaking(peerID),
+            ourHandshakeStartedAt = startedAt,
+            now = now,
+            owed = owed
+        )) {
+            HandshakeRefreshPolicy.Decision.LEAVE -> Unit
+
+            HandshakeRefreshPolicy.Decision.INITIATE -> {
+                logInfo(
+                    "BluetoothMeshService",
+                    "Peer $peerID is reachable again; sending the handshake it is owed"
+                )
+                startHandshake(peerID, byUser = byUser)
             }
-            val startedAt = handshakeMutex.withLock { handshakeStartedAt[peerID] }
 
-            when (handshakeRefreshPolicy.decide(
-                established = noiseEncryption.hasEstablishedSession(peerID),
-                handshaking = noiseEncryption.isHandshaking(peerID),
-                ourHandshakeStartedAt = startedAt,
-                now = now,
-                owed = owed
-            )) {
-                HandshakeRefreshPolicy.Decision.LEAVE -> Unit
-
-                HandshakeRefreshPolicy.Decision.INITIATE -> {
-                    logInfo(
-                        "BluetoothMeshService",
-                        "Peer $peerID is reachable again; sending the handshake it is owed"
-                    )
-                    startHandshake(peerID, byUser = byUser)
-                }
-
-                HandshakeRefreshPolicy.Decision.RESTART -> {
-                    logInfo(
-                        "BluetoothMeshService",
-                        "Peer $peerID reappeared with our handshake in flight; restarting it on the new link"
-                    )
-                    noiseEncryption.abandonHandshake(peerID)
-                    // A link coming up is reported by a packet that only CLAIMS the peer's id, so
-                    // it may restart a handshake but must not turn it into one the user asked for.
-                    startHandshake(peerID, byUser = byUser)
-                }
+            HandshakeRefreshPolicy.Decision.RESTART -> {
+                logInfo(
+                    "BluetoothMeshService",
+                    "Peer $peerID reappeared with our handshake in flight; restarting it on the new link"
+                )
+                noiseEncryption.abandonHandshake(peerID)
+                // A link coming up is reported by a packet that only CLAIMS the peer's id, so
+                // it may restart a handshake but must not turn it into one the user asked for.
+                startHandshake(peerID, byUser = byUser)
             }
         }
     }
