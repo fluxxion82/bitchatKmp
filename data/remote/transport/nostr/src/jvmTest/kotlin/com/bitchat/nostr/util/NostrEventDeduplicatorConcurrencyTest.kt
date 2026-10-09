@@ -33,7 +33,7 @@ class NostrEventDeduplicatorConcurrencyTest {
         val admissions = Array<EventAdmission?>(COPIES) { null }
 
         (0 until COPIES).map { index ->
-            thread { admissions[index] = deduplicator.processEvent(event.copy()) { delivered.incrementAndGet() } }
+            thread { admissions[index] = deduplicator.processEvent(event.copy(), setOf(1L)) { _, _ -> delivered.incrementAndGet() } }
         }.forEach { it.join() }
 
         assertEquals(1, delivered.get())

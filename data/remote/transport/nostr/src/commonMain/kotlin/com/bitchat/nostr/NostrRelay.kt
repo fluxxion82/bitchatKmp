@@ -71,7 +71,6 @@ class NostrRelay(
     // Internal state
     private val relaysList = mutableListOf<Relay>()
     private val subscriptions = ConcurrentMap<String, Set<String>>() // relay URL -> subscription IDs
-    private val messageHandlers = ConcurrentMap<String, MutableList<(NostrEvent) -> Unit>>()
 
     // Persistent subscription tracking for robust reconnection
     private val activeSubscriptions = ConcurrentMap<String, SubscriptionInfo>()
@@ -85,6 +84,15 @@ class NostrRelay(
 
     private val messageQueue = mutableListOf<QueuedMessage>()
     private val messageQueueLock = SynchronizedObject()
+
+    /**
+     * Subscriptions are numbered in the order they are made, and the record of what was handed on
+     * rests on that order: "every subscription up to number N that wants this event has had it".
+     * So a subscription gets its number and its place in [activeSubscriptions] in one step under
+     * this lock, and the subscriptions that want an event are read under it too.
+     */
+    private val subscriptionOrderLock = SynchronizedObject()
+    private var lastSubscriptionNumber = 0L
 
     // Subscription validation timer
     private var subscriptionValidationJob: Job? = null
@@ -386,21 +394,22 @@ class NostrRelay(
         }
         println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-        // Create subscription info
-        val subInfo = SubscriptionInfo(
-            id = subscriptionId,
-            filter = filter,
-            handler = handler,
-            targetRelayUrls = targetRelayUrls,
-            originGeohash = originGeohash
-        )
-
-        // Store subscription
-        activeSubscriptions[subscriptionId] = subInfo
-
-        // Add handler to list (supporting multiple handlers per subscription)
-        val handlers = messageHandlers.getOrPut(subscriptionId) { mutableListOf() }
-        handlers.add(handler)
+        synchronized(subscriptionOrderLock) {
+            // Asked again under an id that is still subscribed, for the same events, this is the
+            // subscription it was: it keeps its number and gains a handler, which is not owed what
+            // the others had. Anything else is a new subscription, with this handler only, and what
+            // the relay stores is new to it.
+            val standing = activeSubscriptions[subscriptionId]?.takeIf { it.filter == filter }
+            activeSubscriptions[subscriptionId] = SubscriptionInfo(
+                id = subscriptionId,
+                filter = filter,
+                handler = handler,
+                targetRelayUrls = targetRelayUrls,
+                originGeohash = originGeohash,
+                number = standing?.number ?: ++lastSubscriptionNumber,
+                handlers = standing?.handlers.orEmpty() + handler,
+            )
+        }
 
         // Send subscription requests to relays
         scope.launch {
@@ -430,8 +439,7 @@ class NostrRelay(
      * @param subscriptionId The subscription ID to remove
      */
     fun unsubscribe(subscriptionId: String) {
-        activeSubscriptions.remove(subscriptionId)
-        messageHandlers.remove(subscriptionId)
+        synchronized(subscriptionOrderLock) { activeSubscriptions.remove(subscriptionId) }
 
         // Send CLOSE message to relays
         scope.launch {
@@ -504,30 +512,28 @@ class NostrRelay(
                         }
                     }
 
-                    // An event no subscription asks for stops here, unverified and unrecorded. No
-                    // handler would see it, and a recorded id is never handed on again, so recording
-                    // it would let a relay use up a genuine event before its subscription exists.
-                    if (subscriptionsMatching(response.event).isEmpty()) return
-
                     // Until the deduplicator has verified it, an event's fields are only what this
-                    // relay claims. The filters above use them to decide whether the event is worth
-                    // verifying, nothing prints them, and no handler ever sees an event that failed.
-                    val admission = eventDeduplicator.processEvent(response.event) { event ->
+                    // relay claims. The filters use them to decide who would want the event if it is
+                    // genuine, nothing prints them, and no handler ever sees an event that failed.
+                    // An event no subscription wants is owed to nobody: the deduplicator neither
+                    // verifies nor records it, so a relay cannot use up a genuine event before the
+                    // subscription it is meant for exists.
+                    val wantedBy = subscriptionsWanting(response.event)
+                    val admission = eventDeduplicator.processEvent(response.event, wantedBy.keys) { event, owed ->
                         logVerifiedEvent(event, relayUrl, response.subscriptionId)
+                        println("NostrRelay: Event goes to ${owed.size} of ${wantedBy.size} matching subscription(s)")
 
-                        val matchingSubscriptions = subscriptionsMatching(event)
-
-                        println("NostrRelay: Event matches ${matchingSubscriptions.size} subscription(s)")
-
-                        // Invoke handlers for ALL matching subscriptions
-                        matchingSubscriptions.forEach { (subId, subInfo) ->
-                            val handlers = messageHandlers[subId] ?: emptyList()
-                            if (handlers.isNotEmpty()) {
-                                println("NostrRelay: Invoking ${handlers.size} handler(s) for subscription $subId")
-                                handlers.forEach { handler ->
-                                    scope.launch {
-                                        handler(event)
-                                    }
+                        owed.forEach { number ->
+                            val subId = wantedBy.getValue(number).id
+                            // One look at what holds that id now gives both its number and its
+                            // handlers. If the id was given up, or given up and taken again, since
+                            // the event was found owed, nobody is called: the new subscription is
+                            // owed the relay's next copy, and what it is handed must be recorded.
+                            val current = activeSubscriptions[subId]?.takeIf { it.number == number } ?: return@forEach
+                            println("NostrRelay: Invoking ${current.handlers.size} handler(s) for subscription $subId")
+                            current.handlers.forEach { handler ->
+                                scope.launch {
+                                    handler(event)
                                 }
                             }
                         }
@@ -558,14 +564,16 @@ class NostrRelay(
         }
     }
 
-    private fun subscriptionsMatching(event: NostrEvent): Map<String, SubscriptionInfo> =
+    /** Every subscription there is right now whose filter [event] matches, by its number. */
+    private fun subscriptionsWanting(event: NostrEvent): Map<Long, SubscriptionInfo> = synchronized(subscriptionOrderLock) {
         activeSubscriptions.filter { (_, subInfo) ->
             try {
                 subInfo.filter.matches(event)
             } catch (e: Exception) {
                 false
             }
-        }
+        }.values.associateBy { it.number }
+    }
 
     /** Diagnostics for an event that verified and is about to be delivered: once per event, whichever relay sent it first. */
     private fun logVerifiedEvent(event: NostrEvent, relayUrl: String, subscriptionId: String) {
@@ -714,7 +722,11 @@ class NostrRelay(
         val handler: (NostrEvent) -> Unit,
         val targetRelayUrls: Set<String>? = null, // null means all relays
         val createdAt: Long = Clock.System.now().toEpochMilliseconds(),
-        val originGeohash: String? = null // used for logging and grouping
+        val originGeohash: String? = null, // used for logging and grouping
+        /** Its place in the order subscriptions were made in; what was handed on is recorded by it. */
+        val number: Long = 0,
+        /** Everyone to call for an event of this subscription; [handler] is the one added last. */
+        val handlers: List<(NostrEvent) -> Unit> = listOf(handler),
     )
 
     // ========== NIP-28 Named Channel Methods ==========

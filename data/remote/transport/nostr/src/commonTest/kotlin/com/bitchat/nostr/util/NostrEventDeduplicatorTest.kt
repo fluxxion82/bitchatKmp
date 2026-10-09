@@ -50,7 +50,7 @@ class NostrEventDeduplicatorTest {
             val genuine = sender.signed(kind, "hello")
             val handedOn = mutableListOf<NostrEvent>()
 
-            val admissions = listOf(genuine, genuine.copy(), genuine.copy()).map { copy -> deduplicator.processEvent(copy) { handedOn += it } }
+            val admissions = listOf(genuine, genuine.copy(), genuine.copy()).map { copy -> deduplicator.processEvent(copy, ONE_SUBSCRIPTION) { event, _ -> handedOn += event } }
 
             assertEquals(listOf(EventAdmission.DELIVERED, EventAdmission.DUPLICATE, EventAdmission.DUPLICATE), admissions, "kind $kind")
             assertEquals(listOf(genuine), handedOn, "kind $kind")
@@ -164,6 +164,117 @@ class NostrEventDeduplicatorTest {
     }
 
     @Test
+    fun `a subscription made later is handed an event the earlier ones had and they are not handed it again`() {
+        val deduplicator = NostrEventDeduplicator()
+        val genuine = sender.signed(NostrKind.TEXT_NOTE, "hello")
+
+        assertEquals(EventAdmission.DELIVERED to setOf(1L, 2L), deduplicator.handOn(genuine, setOf(1, 2)))
+        assertEquals(EventAdmission.DELIVERED to setOf(5L), deduplicator.handOn(genuine.copy(), setOf(1, 2, 5)))
+        assertEquals(EventAdmission.DUPLICATE to emptySet(), deduplicator.handOn(genuine.copy(), setOf(1, 2, 5)))
+        assertEquals(EventAdmission.DUPLICATE to emptySet(), deduplicator.handOn(genuine.copy(), setOf(2)))
+        assertEquals(EventAdmission.DELIVERED to setOf(6L, 9L), deduplicator.handOn(genuine.copy(), setOf(5, 6, 9)))
+    }
+
+    @Test
+    fun `an event nobody wants is neither verified nor recorded`() {
+        var checks = 0
+        val deduplicator = NostrEventDeduplicator(maxCapacity = 10) { event ->
+            checks++
+            event.isValidSignature()
+        }
+        val genuine = sender.signed(NostrKind.TEXT_NOTE, "hello")
+
+        assertEquals(EventAdmission.DUPLICATE to emptySet(), deduplicator.handOn(genuine, emptySet()))
+
+        assertEquals(0, checks)
+        assertEquals(0, deduplicator.size())
+        // Were it recorded, the subscription it is meant for would find it used up.
+        assertEquals(EventAdmission.DELIVERED to setOf(1L), deduplicator.handOn(genuine.copy(), setOf(1)))
+    }
+
+    @Test
+    fun `only a verified copy renews an id's place in the record`() {
+        val deduplicator = NostrEventDeduplicator(maxCapacity = 2)
+        val oldest = sender.signed(NostrKind.TEXT_NOTE, "oldest")
+        val newer = sender.signed(NostrKind.TEXT_NOTE, "newer")
+        deduplicator.handOn(oldest, setOf(1))
+        deduplicator.handOn(newer, setOf(1))
+
+        // Repeating an id proves nothing about what carries it: recognised, and no more.
+        repeat(3) { assertEquals(EventAdmission.DUPLICATE to emptySet(), deduplicator.handOn(oldest.copy(sig = null), setOf(1))) }
+        deduplicator.handOn(sender.signed(NostrKind.TEXT_NOTE, "newest"), setOf(1))
+
+        // The record was full: the id verified longest ago went, however often it was repeated since.
+        assertEquals(EventAdmission.DUPLICATE to emptySet(), deduplicator.handOn(newer.copy(), setOf(1)))
+        assertEquals(EventAdmission.DELIVERED to setOf(1L), deduplicator.handOn(oldest.copy(), setOf(1)))
+    }
+
+    @Test
+    fun `a copy verified for a later subscription renews its id's place in the record`() {
+        val deduplicator = NostrEventDeduplicator(maxCapacity = 2)
+        val oldest = sender.signed(NostrKind.TEXT_NOTE, "oldest")
+        val newer = sender.signed(NostrKind.TEXT_NOTE, "newer")
+        deduplicator.handOn(oldest, setOf(1))
+        deduplicator.handOn(newer, setOf(1))
+
+        assertEquals(EventAdmission.DELIVERED to setOf(2L), deduplicator.handOn(oldest.copy(), setOf(1, 2)))
+        deduplicator.handOn(sender.signed(NostrKind.TEXT_NOTE, "newest"), setOf(1, 2))
+
+        assertEquals(EventAdmission.DUPLICATE to emptySet(), deduplicator.handOn(oldest.copy(), setOf(1, 2)))
+        assertEquals(EventAdmission.DELIVERED to setOf(1L, 2L), deduplicator.handOn(newer.copy(), setOf(1, 2)))
+    }
+
+    @Test
+    fun `the number recorded stands for every lower one`() {
+        val deduplicator = NostrEventDeduplicator()
+        val genuine = sender.signed(NostrKind.TEXT_NOTE, "hello")
+
+        // Subscriptions 1 and 2 existed and did not want it, or they would have been named.
+        assertEquals(EventAdmission.DELIVERED to setOf(3L), deduplicator.handOn(genuine, setOf(3)))
+
+        assertEquals(EventAdmission.DUPLICATE to emptySet(), deduplicator.handOn(genuine.copy(), setOf(2)))
+        assertEquals(EventAdmission.DUPLICATE to emptySet(), deduplicator.handOn(genuine.copy(), setOf(1, 2, 3)))
+    }
+
+    @Test
+    fun `a copy is verified when a later subscription is owed it and not when nobody is`() {
+        var checks = 0
+        val deduplicator = NostrEventDeduplicator(maxCapacity = 10) { event ->
+            checks++
+            event.isValidSignature()
+        }
+        val genuine = sender.signed(NostrKind.TEXT_NOTE, "hello")
+
+        deduplicator.handOn(genuine, setOf(1))
+        deduplicator.handOn(genuine.copy(), setOf(1))
+        assertEquals(1, checks, "a copy for the subscription that had it")
+
+        // What arrives under an id known to be genuine need not be the genuine event.
+        deduplicator.handOn(genuine.copy(), setOf(1, 2))
+        assertEquals(2, checks, "a copy a later subscription is owed")
+        deduplicator.handOn(genuine.copy(), setOf(1, 2))
+        assertEquals(2, checks, "a copy for two subscriptions that both had it")
+    }
+
+    @Test
+    fun `a copy that does not verify is not handed to a later subscription and leaves it owed the real one`() {
+        val deduplicator = NostrEventDeduplicator()
+        val genuine = sender.signed(NostrKind.TEXT_NOTE, "hello")
+        deduplicator.handOn(genuine, setOf(1))
+
+        val copies = listOf(
+            genuine.copy(content = "something else"),
+            genuine.copy(sig = sender.signed(NostrKind.TEXT_NOTE, "other").sig),
+            impostor.signed(NostrKind.TEXT_NOTE, "an impostor's").copy(id = genuine.id),
+        )
+        copies.forEach { copy ->
+            assertEquals(EventAdmission.INVALID to emptySet(), deduplicator.handOn(copy, setOf(1, 2)))
+        }
+
+        assertEquals(EventAdmission.DELIVERED to setOf(2L), deduplicator.handOn(genuine.copy(), setOf(1, 2)))
+    }
+
+    @Test
     fun `an event with nothing in it verifies like any other`() {
         // A presence event has no content; verifying must not ask for more than the signature does.
         val presence = sender.signEvent(
@@ -186,12 +297,21 @@ class NostrEventDeduplicatorTest {
     /** What the gate said about [event], and what it handed on. */
     private fun NostrEventDeduplicator.admit(event: NostrEvent): Pair<EventAdmission, List<NostrEvent>> {
         val handedOn = mutableListOf<NostrEvent>()
-        return processEvent(event) { handedOn += it } to handedOn
+        return processEvent(event, ONE_SUBSCRIPTION) { handed, _ -> handedOn += handed } to handedOn
+    }
+
+    /** What the gate said about [event] for the subscriptions [wantedBy], and which of them it handed it to. */
+    private fun NostrEventDeduplicator.handOn(event: NostrEvent, wantedBy: Set<Long>): Pair<EventAdmission, Set<Long>> {
+        var handedTo = emptySet<Long>()
+        return processEvent(event, wantedBy) { handed, owed ->
+            assertEquals(event, handed)
+            handedTo = owed
+        } to handedTo
     }
 
     private fun NostrEventDeduplicator.processAll(vararg events: NostrEvent): List<NostrEvent> {
         val processed = mutableListOf<NostrEvent>()
-        events.forEach { event -> processEvent(event) { processed += it } }
+        events.forEach { event -> processEvent(event, ONE_SUBSCRIPTION) { handed, _ -> processed += handed } }
         return processed
     }
 
@@ -206,6 +326,9 @@ class NostrEventDeduplicatorTest {
     )
 
     private companion object {
+        /** What these tests ask as: the one subscription there is, wanting everything. */
+        val ONE_SUBSCRIPTION = setOf(1L)
+
         /** Every kind this app subscribes to, the presence kind the other clients send, and one it has never heard of. */
         val ALL_KINDS = listOf(
             NostrKind.METADATA,

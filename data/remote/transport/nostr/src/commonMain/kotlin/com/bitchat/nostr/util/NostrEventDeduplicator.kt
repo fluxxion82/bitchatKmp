@@ -8,14 +8,19 @@ import kotlin.math.roundToInt
 
 /**
  * The one gate every event a relay sends passes before any subscription handler sees it: it lets
- * an event through once, and only if the event is what it says it is.
+ * an event through to each subscription once, and only if the event is what it says it is.
  *
- * It keeps an LRU of up to 10,000 event ids. [processEvent] is the only way in, and it records an
- * id only after its event verified, so the ids held are those of genuine events already handed on,
- * and a copy from another relay is recognised without checking a signature again.
+ * It keeps up to 10,000 event ids. [processEvent] is the only way in, and it records an id only
+ * after its event verified, so the ids held are those of genuine events already handed on, and a
+ * copy from another relay is recognised without checking a signature again. With each id it keeps
+ * how far the event has been handed on: subscriptions are numbered in the order they are made, and
+ * one number per event says "every subscription up to here that wants this has had it".
  *
  * - Thread-safe
- * - LRU eviction when capacity is exceeded; an evicted id only costs one more verification
+ * - When full, the id that was verified longest ago goes. Only a verified copy renews an id's
+ *   place: a copy that was merely recognised did not prove it is the event, so a relay cannot keep
+ *   an id here by repeating it. An id that went costs one more verification, and the subscriptions
+ *   that had its event are handed it again
  * - O(1) lookup and insertion
  */
 class NostrEventDeduplicator internal constructor(
@@ -55,57 +60,64 @@ class NostrEventDeduplicator internal constructor(
     }
 
     /**
-     * Hand [event] to [processor] once, and only if its id and signature verify.
+     * Hand [event] to those of the subscriptions [wantedBy] that have not had it, once each, and
+     * only if its id and signature verify.
      *
      * A relay is not trusted: the id, key, timestamp, tags and content it sends are claims until
      * the id is recomputed from the fields and the signature checked against the key the event
      * names, which is what [NostrEvent.isValidSignature] does. This holds for every kind. The
      * order is the point:
      *
-     * 1. An id already recorded is dropped without being verified. Only verified events are
+     * 1. If every subscription in [wantedBy] has had the event with this id, or nobody wants it at
+     *    all, the copy is dropped without being verified or recorded. Only verified events are
      *    recorded, and a verified id is the hash of its event, so whatever carries that id now is
-     *    the same event again or a forgery of it, and neither is wanted. This is what keeps the
-     *    copies the other relays send from costing a signature check each.
-     * 2. Anything else is verified, and an event that fails leaves nothing behind. Were its id
-     *    recorded, a forged copy that got here first would have the real event dropped as its
-     *    duplicate.
-     * 3. Only then is the id recorded and the event handed on.
+     *    the same event again or a forgery of it, and nobody is waiting for either. This is what
+     *    keeps the copies the other relays send, and a relay's answer to a subscription asked
+     *    again, from costing a signature check.
+     * 2. Otherwise the copy is verified, also when the id is one already known to be genuine: a
+     *    relay answers a new subscription with what it stores, and what arrives under a genuine
+     *    id need not be the genuine event. A copy that fails leaves nothing behind. Were anything
+     *    recorded for it, a forged copy that got here first would have the real event dropped as
+     *    its duplicate.
+     * 3. Only then is it recorded as handed on, and handed to the subscriptions that were owed it.
      *
-     * @param event The Nostr event to process
-     * @param processor Called if the event verified and was not delivered before
+     * Subscriptions are numbered in the order they are made, and [wantedBy] has to name EVERY
+     * subscription there is at this moment that wants the event: what is recorded is the highest
+     * number in it, and that stands for all the lower ones.
+     *
+     * @param processor Called with the event and the subscriptions to hand it to
      * @return what became of the event
      */
-    fun processEvent(event: NostrEvent, processor: (NostrEvent) -> Unit): EventAdmission {
+    fun processEvent(event: NostrEvent, wantedBy: Set<Long>, processor: (NostrEvent, Set<Long>) -> Unit): EventAdmission {
         totalChecks++
-        if (isRecorded(event.id)) return EventAdmission.DUPLICATE
+        if (owedTo(event.id, wantedBy, recordThem = false).isEmpty()) return EventAdmission.DUPLICATE
         if (!verifies(event)) return EventAdmission.INVALID
         // Two relays can deliver the same event at once and both get this far; one of them records.
-        if (!recordIfNew(event.id)) return EventAdmission.DUPLICATE
-        processor(event)
+        val owed = owedTo(event.id, wantedBy, recordThem = true)
+        if (owed.isEmpty()) return EventAdmission.DUPLICATE
+        processor(event, owed)
         return EventAdmission.DELIVERED
     }
 
-    /** Whether [eventId] is recorded; a hit counts as a use, a miss records nothing. */
-    private fun isRecorded(eventId: String): Boolean = synchronized(lruLock) {
-        val existingNode = nodeMap[eventId] ?: return@synchronized false
-        moveToFront(existingNode)
-        duplicateCount++
-        true
-    }
-
-    /** Records [eventId] unless it is recorded already, in one step. Returns whether it was new. */
-    private fun recordIfNew(eventId: String): Boolean = synchronized(lruLock) {
-        val existingNode = nodeMap[eventId]
-        if (existingNode != null) {
-            moveToFront(existingNode)
+    /**
+     * Those of [wantedBy] that have not had the event with [eventId]. With [recordThem] they are
+     * recorded as having it in the same step, which is done only for a copy that verified; without,
+     * nothing changes at all, the id's place in the record included.
+     */
+    private fun owedTo(eventId: String, wantedBy: Set<Long>, recordThem: Boolean): Set<Long> = synchronized(lruLock) {
+        val known = nodeMap[eventId]
+        val handedOnUpTo = known?.handedOnUpTo ?: NOBODY
+        val owed = wantedBy.filterTo(mutableSetOf()) { it > handedOnUpTo }
+        if (owed.isEmpty()) {
             duplicateCount++
-            return@synchronized false
+        } else if (recordThem) {
+            val node = known?.also(::moveToFront) ?: addToFront(eventId)
+            node.handedOnUpTo = owed.max()
+            if (nodeMap.size > maxCapacity) {
+                evictOldest()
+            }
         }
-        addToFront(eventId)
-        if (nodeMap.size > maxCapacity) {
-            evictOldest()
-        }
-        true
+        owed
     }
 
     /**
@@ -159,7 +171,7 @@ class NostrEventDeduplicator internal constructor(
     /**
      * Add a new event ID to the front of the LRU list
      */
-    private fun addToFront(eventId: String) {
+    private fun addToFront(eventId: String): LRUNode {
         val newNode = LRUNode(eventId)
         nodeMap[eventId] = newNode
 
@@ -168,6 +180,7 @@ class NostrEventDeduplicator internal constructor(
         newNode.prev = head
         head.next?.prev = newNode
         head.next = newNode
+        return newNode
     }
 
     /**
@@ -227,24 +240,29 @@ class NostrEventDeduplicator internal constructor(
     companion object {
         private const val TAG = "NostrDeduplicator"
         private const val DEFAULT_CAPACITY = 10_000
+
+        /** Lower than any subscription's number: the event has been handed to nobody. */
+        private const val NOBODY = Long.MIN_VALUE
     }
 
     /**
-     * Node for the doubly-linked list used in LRU implementation
+     * Node for the doubly-linked list used in LRU implementation. [handedOnUpTo] is the highest
+     * numbered subscription the event was handed to: every lower one that wants it has had it.
      */
-    private data class LRUNode(
+    private class LRUNode(
         val eventId: String,
         var prev: LRUNode? = null,
-        var next: LRUNode? = null
+        var next: LRUNode? = null,
+        var handedOnUpTo: Long = NOBODY,
     )
 }
 
 /** What [NostrEventDeduplicator.processEvent] did with an event. */
 enum class EventAdmission {
-    /** Its id and signature verified and it had not been delivered before: the processor ran. */
+    /** Its id and signature verified and a subscription that wants it had not had it: the processor ran. */
     DELIVERED,
 
-    /** An event with this id verified and was delivered earlier; this copy was not looked at. */
+    /** An event with this id verified earlier and every subscription that wants it has had it; this copy was not looked at. */
     DUPLICATE,
 
     /** Its id is not the hash of its fields, or its signature is missing or wrong. Nothing was recorded. */

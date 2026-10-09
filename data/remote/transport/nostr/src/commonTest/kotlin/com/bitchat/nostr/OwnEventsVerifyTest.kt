@@ -67,7 +67,7 @@ class OwnEventsVerifyTest {
     private fun assertAdmitted(event: NostrEvent) {
         val handedOn = mutableListOf<NostrEvent>()
 
-        val admission = NostrEventDeduplicator().processEvent(event) { handedOn += it }
+        val admission = NostrEventDeduplicator().processEvent(event, setOf(1L)) { handed, _ -> handedOn += handed }
 
         assertEquals(EventAdmission.DELIVERED to listOf(event), admission to handedOn, "kind ${event.kind}")
     }
