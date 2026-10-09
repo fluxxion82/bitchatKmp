@@ -17,9 +17,13 @@ import android.bluetooth.le.AdvertiseSettings
 import android.bluetooth.le.BluetoothLeAdvertiser
 import android.content.Context
 import android.os.ParcelUuid
+import android.os.SystemClock
 import android.util.Log
+import com.bitchat.bluetooth.manager.UnsubscribedCentrals
 import com.bitchat.bluetooth.protocol.ChunkReassembler
 import com.bitchat.domain.base.CoroutineScopeFacade
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.*
@@ -43,13 +47,32 @@ class AndroidGattServerService(
     private var isActive = false
     private val subscribedDevices = mutableMapOf<String, BluetoothDevice>()
 
+    // Centrals that are connected and have not enabled notifications in this process. See the class
+    // for why they exist (an app restart keeps the links) and why they are asked to leave.
+    private val unsubscribedCentrals = UnsubscribedCentrals()
+    private var unsubscribedCentralsJob: Job? = null
+
+    // Held while a subscription is recorded and while a link is looked at one last time and
+    // dropped, so that a subscription cannot arrive between that look and the drop.
+    private val dropLock = Any()
+
+    // A start, a stop and the set-up of a server each happen as one step. The mesh service launches
+    // starts and stops independently, and two that overlapped could overwrite the reference of a
+    // running check for unsubscribed centrals (which then outlives a later stop) or leave an active
+    // service without one.
+    private val lifecycleLock = Any()
+
     private val reassembler = ChunkReassembler(log = { Log.w(TAG, it) })
 
     override fun setDelegate(delegate: GattServerDelegate) {
         this.delegate = delegate
     }
 
-    override suspend fun startAdvertising() {
+    override suspend fun startAdvertising() = synchronized(lifecycleLock) { start() }
+
+    override suspend fun stopAdvertising() = synchronized(lifecycleLock) { stop() }
+
+    private fun start() {
         if (isActive) {
             Log.d(TAG, "GATT server already active")
             return
@@ -73,10 +96,44 @@ class AndroidGattServerService(
             startBleAdvertising()
         }
 
+        unsubscribedCentralsJob?.cancel()
+        unsubscribedCentralsJob = coroutineScopeFacade.applicationScope.launch {
+            // `isActive` here is the service's own flag (the class member shadows the coroutine's);
+            // the job is cancelled when the service stops, which ends the delay.
+            var reported = UnsubscribedCentrals.Refusing(tracking = false, asking = false)
+            while (isActive) {
+                delay(UNSUBSCRIBED_CHECK_MS)
+                if (!isActive) break
+                // Each in a coroutine of its own: the wait inside must not put off the next look.
+                unsubscribedCentrals.due(SystemClock.elapsedRealtime()).forEach { due ->
+                    launch { askToLeave(due) }
+                }
+                // One line when a table fills and one when it has room again: a central left deaf
+                // for want of room should not have to be guessed at.
+                val refusing = unsubscribedCentrals.refusing()
+                if (refusing != reported) {
+                    reported = refusing
+                    when {
+                        refusing.tracking -> Log.w(
+                            TAG,
+                            "Server: more centrals than can be told apart (${UnsubscribedCentrals.MAX_TRACKED}); " +
+                                "none is asked to leave until the server is set up again"
+                        )
+                        refusing.asking -> Log.w(
+                            TAG,
+                            "Server: ${UnsubscribedCentrals.MAX_TRACKED} centrals were asked to leave in the last " +
+                                "${UnsubscribedCentrals.ASK_AGAIN_AFTER_MS / 60_000} min; others that have not subscribed wait"
+                        )
+                        else -> Log.i(TAG, "Server: centrals that have not subscribed are asked to leave again")
+                    }
+                }
+            }
+        }
+
         Log.i(TAG, "GATT server started")
     }
 
-    override suspend fun stopAdvertising() {
+    private fun stop() {
         if (!isActive) {
             stopBleAdvertising()
             gattServer?.close()
@@ -86,6 +143,12 @@ class AndroidGattServerService(
         }
 
         isActive = false
+        unsubscribedCentralsJob?.cancel()
+        unsubscribedCentralsJob = null
+        // Disconnections are not reported once the service is inactive, and whatever was subscribed
+        // was subscribed to the service this takes down; its callbacks still on their way report to
+        // nobody from here on.
+        unsubscribedCentrals.onServiceReset()
 
         coroutineScopeFacade.applicationScope.launch {
             stopBleAdvertising()
@@ -226,6 +289,92 @@ class AndroidGattServerService(
         return allSuccess
     }
 
+    /**
+     * Drops the link to a central that writes to us and has not subscribed, so that it connects
+     * and subscribes afresh; until then it hears nothing this device sends (see
+     * [UnsubscribedCentrals]).
+     *
+     * A link the central made belongs to no app on this side, and `cancelConnection()` only lets
+     * go of a link this server holds: hence the `connect()` first.
+     *
+     * That `connect()` is a claim: it makes this server a holder of the link or, if the link has
+     * just ended, starts a dial to that address. It is given back on every way out of here,
+     * a cancelled coroutine included, with one exception: the central has subscribed meanwhile,
+     * and letting go of its link would end it.
+     */
+    @Suppress("MissingPermission")
+    private suspend fun askToLeave(due: UnsubscribedCentrals.Due) {
+        val deviceAddress = due.address
+        val server = gattServer ?: return
+        if (!unsubscribedCentrals.isStillDue(due)) return
+        val device = subscribedDevices[deviceAddress]
+        if (device == null) {
+            // Gone already, and its disconnection was not reported to the tracker: the record goes.
+            unsubscribedCentrals.takeIfStillDue(due, SystemClock.elapsedRealtime())
+            return
+        }
+        Log.i(
+            TAG,
+            "Server: $deviceAddress has not subscribed ${UnsubscribedCentrals.SUBSCRIBE_GRACE_MS / 1000} s after its " +
+                "first write (a link from before this start?); dropping it so that it connects afresh"
+        )
+        var claimed = false
+        var dropped = false
+        try {
+            // Claimed under the lock a subscription is recorded under, and only for a connection
+            // that is still due: nothing is claimed for a central that has just subscribed.
+            claimed = synchronized(dropLock) {
+                if (unsubscribedCentrals.isStillDue(due)) {
+                    server.connect(device, false)
+                    true
+                } else {
+                    false
+                }
+            }
+            if (!claimed) return
+            delay(CLAIM_BEFORE_CANCEL_MS)
+            // Looked at again at the last moment, under the same lock: the decision is a few
+            // hundred milliseconds old, and a central that subscribed meanwhile, or a new
+            // connection from the same address, is not the one that was due.
+            dropped = synchronized(dropLock) {
+                if (unsubscribedCentrals.takeIfStillDue(due, SystemClock.elapsedRealtime())) {
+                    server.cancelConnection(device)
+                    true
+                } else {
+                    false
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Server: could not drop the link to $deviceAddress: ${e.message}")
+        } finally {
+            if (claimed && !dropped) giveBack(server, device)
+        }
+    }
+
+    /**
+     * Gives back what `connect()` claimed for a connection that was then not dropped: the central
+     * left (and the claim may be a dial under way to its address), or the coroutine was cancelled.
+     * Not when the central has, or may have, subscribed: its link is in use, and the claim ends
+     * with the link.
+     */
+    @Suppress("MissingPermission")
+    private fun giveBack(server: BluetoothGattServer, device: BluetoothDevice) {
+        try {
+            synchronized(dropLock) {
+                if (unsubscribedCentrals.mayHaveSubscribed(device.address)) {
+                    Log.i(TAG, "Server: ${device.address} subscribed meanwhile; leaving it alone")
+                } else {
+                    server.cancelConnection(device)
+                    Log.i(TAG, "Server: ${device.address} left meanwhile; letting go of it")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Server: could not let go of ${device.address}: ${e.message}")
+        }
+    }
+
     private fun handleIncomingData(deviceAddress: String, value: ByteArray) {
         if (value.isEmpty()) {
             Log.w(TAG, "Received empty data from $deviceAddress")
@@ -237,8 +386,19 @@ class AndroidGattServerService(
         delegate?.onDataReceived(frame, deviceAddress)
     }
 
+    // Under the lock a start and a stop take: two set-ups that overlapped (a start, a stop and a
+    // start in quick succession launch two) could leave the server of one open with the tracker
+    // listening to the other's callbacks.
+    private fun setupGattServer() = synchronized(lifecycleLock) { openGattServer() }
+
     @Suppress("DEPRECATION")
-    private fun setupGattServer() {
+    private fun openGattServer() {
+        // What this server's callbacks report to. Taken right before the server is opened, in
+        // the same locked step, so that the tracker always listens to the server that is open; a
+        // callback of an earlier server that is still on its way holds that server's own, which
+        // the tracker no longer listens to.
+        lateinit var centrals: UnsubscribedCentrals.Service
+
         val serverCallback = object : BluetoothGattServerCallback() {
             override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
                 if (!isActive) {
@@ -250,6 +410,10 @@ class AndroidGattServerService(
                     BluetoothProfile.STATE_CONNECTED -> {
                         Log.i(TAG, "Server: Device connected ${device.address}")
                         subscribedDevices[device.address] = device
+                        // Not reported to `centrals`: this callback also comes for a link this
+                        // device's own GATT client made, and the other end of such a link is no
+                        // central of ours and owes no subscription. A central is known by its
+                        // first write.
 
                         coroutineScopeFacade.applicationScope.launch {
                             delay(100)
@@ -262,6 +426,7 @@ class AndroidGattServerService(
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         Log.i(TAG, "Server: Device disconnected ${device.address}")
                         subscribedDevices.remove(device.address)
+                        centrals.onGone(device.address)
                         reassembler.forget(device.address)
                         delegate?.onClientDisconnected(device.address)
                     }
@@ -296,6 +461,10 @@ class AndroidGattServerService(
                 }
 
                 if (characteristic.uuid == CHARACTERISTIC_UUID) {
+                    // Whoever writes here uses this device as its peripheral: a central. Its
+                    // grace runs from its first write on this connection.
+                    centrals.onSeen(device.address, SystemClock.elapsedRealtime())
+
                     // Ensure device is in subscribedDevices so we can notify it back
                     // This handles cases where the connection event was missed or address changed
                     if (!subscribedDevices.containsKey(device.address)) {
@@ -333,6 +502,7 @@ class AndroidGattServerService(
 
                 if (BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE.contentEquals(value)) {
                     subscribedDevices[device.address] = device
+                    synchronized(dropLock) { centrals.onSubscribed(device.address) }
                     Log.d(TAG, "Server: Connection setup complete for ${device.address}")
 
                     coroutineScopeFacade.applicationScope.launch {
@@ -366,6 +536,8 @@ class AndroidGattServerService(
             return
         }
 
+        // A new service: no subscription to an earlier one counts for it.
+        centrals = unsubscribedCentrals.onServiceReset()
         gattServer = bluetoothManager.openGattServer(context, serverCallback)
 
         characteristic = BluetoothGattCharacteristic(
@@ -460,6 +632,9 @@ class AndroidGattServerService(
 
         private const val CHUNK_SIZE = 500
         private const val CHUNK_DELAY_MS = 25L
+
+        private const val UNSUBSCRIBED_CHECK_MS = 5_000L
+        private const val CLAIM_BEFORE_CANCEL_MS = 300L
 
         private val CHUNK_START: Byte = 0xFC.toByte()     // 252
         private val CHUNK_CONTINUE: Byte = 0xFD.toByte() // 253
