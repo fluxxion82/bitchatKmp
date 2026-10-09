@@ -20,7 +20,7 @@ one-commit change per fork (see [Next Kotlin bump](#next-kotlin-bump)).
 | 4 | Mosaic | [fluxxion82/mosaic](https://github.com/fluxxion82/mosaic) | `embedded` | `trunk` (`abc611c9`) | `0.19.0-embedded-SNAPSHOT` | all Mosaic publications |
 | 5 | MeshCore | [fluxxion82/MeshCore](https://github.com/fluxxion82/MeshCore) | `orangepi-zero3-sx1276` | `ggodlewski/MeshCore` `linux` | native binary | built on the device |
 | 6 | Meshtastic firmware | [fluxxion82/firmware](https://github.com/fluxxion82/firmware) | `orangepi-rfm95w` | `meshtastic/firmware` 2.7.x | native binary | built on the device |
-| 7 | gattlib | [fluxxion82/gattlib](https://github.com/fluxxion82/gattlib) | `bitchat-null-guards` (`8482263`) | `labapart/gattlib` @ `1580056` | static library (submodule) | `scripts/build-native-linux-arm64.sh` |
+| 7 | gattlib | [fluxxion82/gattlib](https://github.com/fluxxion82/gattlib) | `bitchat-null-guards` (`cfb6183`) | `labapart/gattlib` @ `1580056` | static library (submodule) | `scripts/build-native-linux-arm64.sh` |
 
 Skiko is **not** forked: `org.jetbrains.skiko:skiko-linuxarm64:0.150.1` comes from Maven Central (see [Skiko](#skiko)).
 
@@ -322,8 +322,35 @@ upstream `labapart/gattlib` @ `1580056`.
   already failed; the stale property handler then ran the success path against an attempt whose object path had
   been freed. The fork finishes tearing the failed attempt down, ignores a signal arriving for an abandoned attempt
   and NULLs `dbus_objects` after freeing it.
+- Objects that come and go under a scan or a connection (`e011b29`, 2026-10-08; both board apps crashed every 10 to
+  20 minutes with several phones around). (1) `dbus/gattlib_adapter.c`, `on_interface_proxy_properties_changed`: a
+  property change for a device gattlib does not know made a fresh `Device1` proxy and reported the device; for an
+  object BlueZ is creating or has just removed the address is `NULL` and the callback's allocator passed it to
+  `strdup()` (proven from a core dump). Upstream's "object added" path has that check; this path now has it too, and
+  the allocator (`common/gattlib_callback_discovered_device.c`) and `gattlib_handler_dispatch_to_thread`
+  (`common/gattlib_common.c`) no longer assume an address. (2) `gattlib_discover_primary`: the result array was
+  sized from `Device1.UUIDs` and filled per `GattService1` object without a bound (the UUID list can still hold only
+  what the peer advertised); it is sized by the objects the loop walks, with the library's usual "sanity check to
+  avoid buffer overflow". (3) `_on_device_connect` ignores a `ServicesResolved = true` for a device that is already
+  `CONNECTED` or `DISCONNECTING`: BlueZ repeats the signal, and one can be queued behind `gattlib_disconnect()`.
+  A completion in `DISCONNECTED` is still accepted on purpose (see below). (4) `dbus/gattlib_char.c`: the
+  characteristic lookup checks the two cached properties and the connection's own path before `strcmp()` and the
+  proxy constructor. (5) `common/gattlib_callback_connected_device.c`: the callback thread reads nothing of the
+  connection before checking it still exists, and hands the callback a copy of the address. (6)
+  `gattlib_disconnect()` does not read the state of a connection it found invalid.
+- Per-event leaks (`cfb6183`): the debug string, two looked-up variants and the variant `g_variant_dict_end()` builds in
+  the property-change handler, once per RSSI update; and one never-joined thread, stack included, per callback
+  (`handler->thread` was overwritten by the next dispatch; the reference is now dropped once the thread runs).
 
-**Behaviour change:** discovery now returns fewer entries where it used to crash. A peer missing the bitchat
+**Left as it is, deliberately:** `device_manager_on_added_device1_signal` still sets `DISCONNECTED` over an existing
+record whenever BlueZ re-announces an object, also in the middle of an attempt. It is the only thing that frees a
+record left in `CONNECTING` or `CONNECTED` after a missed transition (without it `gattlib_connect` answers `BUSY` for
+that device until the process restarts), and it is why `_on_device_connect` cannot require `CONNECTING`. There is no
+attempt generation: a connection is identified by its pointer, which a device reuses.
+
+**Behaviour change:** a device whose object has no address yet is reported at its next RSSI or manufacturer-data
+change (or its "added" signal) instead of at once; a repeated "services resolved" no longer raises the connection
+callback again; discovery now returns fewer entries where it used to crash. A peer missing the bitchat
 characteristic is already abandoned by `BlueZGattClientService.discoverCharacteristics()`, which is the correct
 outcome — the scanner re-offers it under the existing backoff.
 
@@ -347,7 +374,7 @@ submodule is ever pointed back at `labapart/gattlib`, recover with:
 cd data/remote/transport/bluetooth/native/gattlib
 git remote set-url origin https://github.com/fluxxion82/gattlib.git
 git fetch origin bitchat-null-guards
-git checkout 848226332b998ecb467b19f321b8156660b05602
+git checkout cfb61831b0515b4a6062c17d7b6c07bf4ca5f4da
 ```
 
 ## Staging repository and promotion

@@ -357,10 +357,18 @@ class BlueZGattClientService(
     // BlueZManager.GattDelegate implementation
 
     override fun onConnected(address: String, connection: CPointer<gattlib_connection_t>) {
-        logInfo(TAG, "Connected to $address")
-
         val entry = DeviceConnection(address, connection)
-        putConnection(entry)?.markDead()
+        val stored = putConnection(entry)
+        if (stored == null) {
+            // gattlib raises this callback from a thread of its own for every completion it
+            // sees, and BlueZ can report one link as resolved more than once. A second set-up
+            // on the connection the first one is still working on would mark that first entry
+            // dead and run two discoveries over one gattlib connection.
+            logInfo(TAG, "Connected to $address reported again for the link already held; ignoring")
+            return
+        }
+        logInfo(TAG, "Connected to $address")
+        stored.replaced?.markDead()
 
         // Register the disconnect handler BEFORE discovery. gattlib offers no other way to learn
         // that a peer went away, and without it nothing ever leaves `connections`: the entry stays
@@ -439,9 +447,18 @@ class BlueZGattClientService(
      * this never turns into a retry storm.
      */
     private fun abandon(entry: DeviceConnection, reason: String) {
-        removeConnection(entry.address)
-        reassembler.forget(entry.address)
+        if (!removeConnection(entry)) {
+            // The address has a newer entry, or none: this one was replaced or already taken out
+            // while its discovery ran. gattlib embeds the connection in its device, so the newer
+            // entry has the SAME connection pointer: disconnecting here, forgetting the address's
+            // half-received frame or reporting the address lost would all hit the live link.
+            // Its alive flag is left alone too: whoever took the entry out marks it dead, and
+            // `disconnect()` asks gattlib to drop the link only if it is the one to do so.
+            logInfo(TAG, "Leaving ${entry.address} alone: $reason, but this entry is no longer the one held")
+            return
+        }
         val wasAlive = entry.markDead()
+        reassembler.forget(entry.address)
         logInfo(TAG, "Abandoning ${entry.address}: $reason")
         if (wasAlive) {
             gattlib_disconnect(entry.connection, false)
@@ -622,13 +639,33 @@ class BlueZGattClientService(
 
     // Copy-on-write registry helpers
 
-    private fun putConnection(entry: DeviceConnection): DeviceConnection? {
+    /** The outcome of storing an entry: what it took the place of, if anything. */
+    private class Stored(val replaced: DeviceConnection?)
+
+    /**
+     * Stores [entry], unless the address already has a live entry for the same gattlib connection:
+     * then nothing changes and the answer is null. Decided in the step that stores, because two
+     * of gattlib's callback threads can arrive here together.
+     */
+    private fun putConnection(entry: DeviceConnection): Stored? {
         while (true) {
             val current = connections.value
             val previous = current[entry.address]
-            if (connections.compareAndSet(current, current + (entry.address to entry))) {
-                return previous
+            if (previous != null && previous.isAlive && previous.connection.rawValue == entry.connection.rawValue) {
+                return null
             }
+            if (connections.compareAndSet(current, current + (entry.address to entry))) {
+                return Stored(previous)
+            }
+        }
+    }
+
+    /** Takes [entry] out only if it is the very entry held for its address; says whether it was. */
+    private fun removeConnection(entry: DeviceConnection): Boolean {
+        while (true) {
+            val current = connections.value
+            if (current[entry.address] !== entry) return false
+            if (connections.compareAndSet(current, current - entry.address)) return true
         }
     }
 
