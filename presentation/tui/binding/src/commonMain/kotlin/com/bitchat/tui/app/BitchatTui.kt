@@ -157,6 +157,7 @@ fun BitchatTui(vms: TuiViewModels, background: CoroutineScope, notices: StateFlo
             // The terminal's answer to the Compose shield: with it off there is nothing on screen
             // that says proof of work is on at all.
             powBits = header.powDifficulty.takeIf { header.powEnabled && it > 0 },
+            isMining = header.isMining,
         ) { mode, size ->
             when (mode) {
                 Mode.Chat -> ChatScreen(

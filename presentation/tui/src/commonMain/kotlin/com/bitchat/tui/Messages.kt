@@ -81,6 +81,8 @@ private fun fileName(path: String) = path.substringAfterLast('/').substringAfter
  * shield after the timestamp. Only geohash messages ever carry one: proof of work is mined into the
  * Nostr event, so nothing on the mesh has it. The mark is ASCII, because the Linux console's font
  * has no shield and a missing glyph would take the wrong number of cells.
+ * While mining, the list scrambles eligible body characters after wrapping; cached offsets keep
+ * names, times, styles and terminal cell widths unchanged between animation ticks.
  */
 internal fun messageLines(
     message: BitchatMessage,
@@ -92,13 +94,29 @@ internal fun messageLines(
     formatTime: (Instant) -> String,
     theme: TuiTheme = DarkTuiTheme,
 ): List<AnnotatedString> {
+    return messageRows(message, nickname, myPeerId, width, consoleSafe, mediaSize, formatTime, theme).map { it.text }
+}
+
+/** A cached row and the body characters that can scramble without changing its terminal cells. */
+internal data class MessageLine(val text: AnnotatedString, val scrambleIndices: List<Int> = emptyList())
+
+internal fun messageRows(
+    message: BitchatMessage,
+    nickname: String,
+    myPeerId: String?,
+    width: Int,
+    consoleSafe: Boolean,
+    mediaSize: Long?,
+    formatTime: (Instant) -> String,
+    theme: TuiTheme,
+): List<MessageLine> {
     val time = formatTime(message.timestamp)
     val body = mediaPlaceholder(message, mediaSize)?.let { listOf(displayText(it, consoleSafe)) }
         ?: sanitizePeerLines(message.content).map { if (consoleSafe) consoleSafe(it) else it }
     if (message.sender == SYSTEM_SENDER || message.type == BitchatMessageType.System) {
         val dim = SpanStyle(color = theme.dim, textStyle = TextStyle.Dim)
         return body.flatMapIndexed { index, line ->
-            wrapCells(buildAnnotatedString { withStyle(dim) { append(if (index == 0) "$time * $line" else "  $line") } }, width)
+            wrapCells(buildAnnotatedString { withStyle(dim) { append(if (index == 0) "$time * $line" else "  $line") } }, width).map { MessageLine(it) }
         }
     }
     val nameStyle = if (isOwnMessage(message, nickname, myPeerId)) {
@@ -109,6 +127,7 @@ internal fun messageLines(
     val name = displayText(message.sender, consoleSafe).truncateCells(MAX_SENDER_CELLS)
     val mark = powMark(message.powDifficulty)
     return body.flatMapIndexed { index, line ->
+        var bodyStart = 0
         val text = buildAnnotatedString {
             if (index == 0) {
                 withStyle(SpanStyle(color = theme.dim, textStyle = TextStyle.Dim)) { append(time) }
@@ -118,6 +137,7 @@ internal fun messageLines(
             } else {
                 append("  ")
             }
+            bodyStart = length
             append(line)
             // On the last line of the message, as in the Compose apps, so a wrapped message is
             // marked once rather than on every row.
@@ -125,7 +145,19 @@ internal fun messageLines(
                 withStyle(SpanStyle(color = theme.dim, textStyle = TextStyle.Dim)) { append(mark) }
             }
         }
-        wrapCells(text, width)
+        wrapCells(text, width) { row, start ->
+            val indices = if (message.isMining && message.type == BitchatMessageType.Message) {
+                row.clusters().mapNotNull { cluster ->
+                    // Leave wide and combining clusters intact, and never scramble whitespace,
+                    // the sender, timestamp or completed-work mark. The console-safe body is ASCII.
+                    cluster.start.takeIf {
+                        start + it >= bodyStart && start + cluster.end <= bodyStart + line.length &&
+                            cluster.end == it + 1 && cluster.width == 1 && row[it] in '!'..'~'
+                    }
+                }
+            } else emptyList()
+            MessageLine(row, indices)
+        }
     }
 }
 

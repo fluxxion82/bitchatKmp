@@ -15,6 +15,7 @@ import com.jakewharton.mosaic.layout.height
 import com.jakewharton.mosaic.layout.size
 import com.jakewharton.mosaic.modifier.Modifier
 import com.jakewharton.mosaic.text.AnnotatedString
+import com.jakewharton.mosaic.text.buildAnnotatedString
 import com.jakewharton.mosaic.ui.Color
 import com.jakewharton.mosaic.ui.Column
 import com.jakewharton.mosaic.ui.Spacer
@@ -262,9 +263,13 @@ internal val NoHold: () -> String? = { null }
 
 /** Exactly [rows] rows: blank rows on top, then [visible]; while [scrolled], a marker takes the last row. */
 @Composable
-private fun MessageList(visible: List<AnnotatedString>, rows: Int, scrolled: Boolean) {
+private fun MessageList(visible: List<MessageLine>, rows: Int, scrolled: Boolean) {
     if (rows <= 0) return
     val theme = LocalTuiTheme.current
+    // The last row is replaced by the scrollback hint, so it cannot keep unseen animation alive.
+    val step = rememberScrambleStep(visible.withIndex().any { (index, line) ->
+        line.scrambleIndices.isNotEmpty() && !(scrolled && index == visible.lastIndex)
+    })
     Column {
         if (visible.size < rows) Spacer(Modifier.height(rows - visible.size))
         visible.forEachIndexed { index, line ->
@@ -273,11 +278,25 @@ private fun MessageList(visible: List<AnnotatedString>, rows: Int, scrolled: Boo
             if (scrolled && index == visible.lastIndex) {
                 Text(MORE_BELOW, color = theme.dim, textStyle = TextStyle.Dim)
             } else {
-                Text(line, color = theme.foreground)
+                Text(if (line.scrambleIndices.isNotEmpty()) scrambleText(line, step.value) else line.text, color = theme.foreground)
             }
         }
     }
 }
+
+/** Repeatedly scrambles and reveals body characters, preserving the cached line's styled ranges. */
+private fun scrambleText(line: MessageLine, step: Int): AnnotatedString = buildAnnotatedString {
+    val chars = line.text.text.toCharArray()
+    line.scrambleIndices.forEachIndexed { position, index ->
+        if ((step + position * 3) % SCRAMBLE_STEPS < 24) {
+            chars[index] = SCRAMBLE_CHARS[(step * 7 + position * 11) % SCRAMBLE_CHARS.length]
+        }
+    }
+    append(chars.concatToString())
+    for (span in line.text.spanStyles) addStyle(span.item, span.start, span.end)
+}
+
+private const val SCRAMBLE_CHARS = "!@$%^&*()_+-=[]{}|;:,<>?"
 
 /**
  * Laid-out lines per message, kept while everything that shapes them is unchanged: the message
@@ -289,12 +308,12 @@ private fun MessageList(visible: List<AnnotatedString>, rows: Int, scrolled: Boo
 internal class MessageLayouts {
     var layoutCalls = 0
         private set
-    private val cache = HashMap<String, Pair<LayoutKey, List<AnnotatedString>>>()
+    private val cache = HashMap<String, Pair<LayoutKey, List<MessageLine>>>()
 
-    fun lines(key: LayoutKey): List<AnnotatedString> {
+    fun lines(key: LayoutKey): List<MessageLine> {
         cache[key.message.id]?.let { (cachedKey, lines) -> if (cachedKey == key) return lines }
         layoutCalls++
-        val lines = with(key) { messageLines(message, nickname, myPeerId, width, consoleSafe, mediaSize, formatTime, theme) }
+        val lines = with(key) { messageRows(message, nickname, myPeerId, width, consoleSafe, mediaSize, formatTime, theme) }
         cache[key.message.id] = key to lines
         return lines
     }
@@ -341,10 +360,10 @@ internal class ChatLines(
     private val formatTime: (Instant) -> String,
     private val theme: TuiTheme = DarkTuiTheme,
 ) {
-    fun lines(index: Int): List<AnnotatedString> {
-        val message = messages[index]
-        return layouts.lines(LayoutKey(message, nickname, myPeerId, width, consoleSafe, mediaSizes[message.id], formatTime, theme))
-    }
+    fun lines(index: Int): List<MessageLine> = lines(messages[index])
+
+    private fun lines(message: BitchatMessage): List<MessageLine> =
+        layouts.lines(LayoutKey(message, nickname, myPeerId, width, consoleSafe, mediaSizes[message.id], formatTime, theme))
 
     fun last(): LinePos? = if (messages.isEmpty()) null else LinePos(messages.lastIndex, lines(messages.lastIndex).lastIndex)
 
@@ -383,9 +402,9 @@ internal class ChatLines(
     }
 
     /** Up to [rows] lines ending at [bottom] (the last line when null), oldest first. */
-    fun visible(bottom: LinePos?, rows: Int): List<AnnotatedString> {
+    fun visible(bottom: LinePos?, rows: Int): List<MessageLine> {
         var at: LinePos = bottom ?: last() ?: return emptyList()
-        val collected = ArrayDeque<AnnotatedString>()
+        val collected = ArrayDeque<MessageLine>()
         if (rows <= 0) return collected
         while (true) {
             collected.addFirst(lines(at.message)[at.line])

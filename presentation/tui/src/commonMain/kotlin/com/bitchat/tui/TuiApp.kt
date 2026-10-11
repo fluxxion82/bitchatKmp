@@ -45,6 +45,7 @@ enum class Mode { Chat, Peers, Dm, Locations, Notes, Settings, Wipe }
  *
  * @param unreadDms How many peers have unread private messages; shown in the header when non-zero.
  * @param powBits The proof-of-work difficulty, or null while the setting is off; shown in the header.
+ * @param isMining Whether a message is currently being mined; animates the header's PoW status.
  * @param size The frame, by default the terminal's (see [frameSize]); a host may pass a smaller area.
  * @param onRepaint What `Ctrl+L` does: by default it asks the running Mosaic to draw the next
  *   frame in full, which is what repairs a screen something else has written over. A host that
@@ -61,6 +62,7 @@ fun TuiApp(
     powBits: Int? = null,
     size: IntSize = frameSize(LocalTerminalState.current.size, LocalRenderMode.current),
     onRepaint: () -> Unit = LocalRepaint.current::request,
+    isMining: Boolean = false,
     body: @Composable (mode: Mode, size: IntSize) -> Unit,
 ) {
     // Mosaic returns as soon as the composition has no running effects, so hold one for as long as
@@ -93,7 +95,7 @@ fun TuiApp(
                 }
             },
     ) {
-        Header(nickname, peerCount, size.width, unreadDms, powBits)
+        Header(nickname, peerCount, size.width, unreadDms, powBits, isMining)
         Box(Modifier.size(bodySize.width, bodySize.height)) {
             val scope = remember(router, mode) { KeyScope(router, mode) }
             CompositionLocalProvider(LocalKeyScope provides scope, LocalFooterSlot provides footer) { body(mode, bodySize) }

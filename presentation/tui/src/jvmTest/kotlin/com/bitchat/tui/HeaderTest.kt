@@ -3,11 +3,15 @@ package com.bitchat.tui
 import com.jakewharton.mosaic.terminal.AnsiLevel
 import com.jakewharton.mosaic.testing.MosaicSnapshots
 import com.jakewharton.mosaic.testing.runMosaicTest
+import androidx.compose.runtime.mutableStateOf
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 
 class HeaderTest {
     @Test fun showsNicknameAndPeerCount() = runTest {
@@ -29,6 +33,47 @@ class HeaderTest {
         // The peer count is what the header is for; the DM count and then the difficulty go first.
         assertEquals("2 DM, 3 peers ", headerLine("anon1234", 3, 14, unreadDms = 2, powBits = 16))
         assertEquals("3 peers ", headerLine("anon1234", 3, 8, unreadDms = 2, powBits = 16))
+    }
+
+    @Test fun miningHeaderAnimatesAndStopsWhenMiningFinishes() = runTest {
+        val mining = mutableStateOf(true)
+        runMosaicTest {
+            val first = setContentAndSnapshot { Header("anon", 3, 40, powBits = 16, isMining = mining.value) }
+            assertTrue(first.contains("pow16 | mining, 3 peers"), first)
+            for (frame in "/-\\|") {
+                val next = awaitSnapshot()
+                assertTrue(next.contains("pow16 $frame mining, 3 peers"), next)
+                assertEquals(40, next.length)
+            }
+            mining.value = false
+            val done = awaitSnapshot()
+            assertEquals(headerLine("anon", 3, 40, powBits = 16), done)
+            assertNull(withTimeoutOrNull(500.milliseconds) { awaitSnapshot() })
+            mining.value = true
+            assertTrue(awaitSnapshot().contains("pow16 | mining"), "a new mining session restarts the spinner")
+        }
+    }
+
+    @Test fun miningHeaderDropsAnimationBeforeDifficultyAndCounts() = runTest {
+        for (width in 0..45) {
+            val line = headerLine("你好", 3, width, unreadDms = 2, powBits = 16, miningFrame = '|')
+            assertEquals(width, line.cellWidth(), "width $width: $line")
+        }
+        assertEquals("pow16, 2 DM, 3 peers ", headerLine("anon", 3, 21, unreadDms = 2, powBits = 16, miningFrame = '|'))
+        runMosaicTest {
+            val first = setContentAndSnapshot { Header("anon", 3, 21, unreadDms = 2, powBits = 16, isMining = true) }
+            assertFalse(first.contains("mining"))
+            assertTrue(first.contains("pow16"))
+            assertNull(withTimeoutOrNull(500.milliseconds) { awaitSnapshot() }, "a hidden header spinner does not tick")
+        }
+    }
+
+    @Test fun headerDoesNotAnimateWhenProofOfWorkIsOff() = runTest {
+        runMosaicTest {
+            val first = setContentAndSnapshot { Header("anon", 3, 40, isMining = true) }
+            assertFalse(first.contains("mining"))
+            assertNull(withTimeoutOrNull(500.milliseconds) { awaitSnapshot() })
+        }
     }
 
     @Test fun singlePeerIsSingular() = runTest {

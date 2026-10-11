@@ -10,10 +10,13 @@ import androidx.compose.runtime.Composable
  * @param powBits The difficulty proof of work is mining at, or null while it is off. It is the
  *   terminal's answer to the Compose apps' shield in the chat header: without it there is nothing
  *   on screen that says the setting is doing anything.
+ * @param isMining Animates a console-safe spinner beside the difficulty while work is in progress.
  */
 @Composable
-fun Header(nickname: String, peerCount: Int, width: Int, unreadDms: Int = 0, powBits: Int? = null) {
-    Bar(headerLine(displayText(nickname), peerCount, width, unreadDms, powBits), width)
+fun Header(nickname: String, peerCount: Int, width: Int, unreadDms: Int = 0, powBits: Int? = null, isMining: Boolean = false) {
+    val active = isMining && powBits != null && headerRight(peerCount, width, unreadDms, powBits, '|').contains("| mining")
+    val frame = rememberMiningFrame(active)
+    Bar(headerLine(displayText(nickname), peerCount, width, unreadDms, powBits, frame.value.takeIf { active }), width)
 }
 
 /**
@@ -23,14 +26,12 @@ fun Header(nickname: String, peerCount: Int, width: Int, unreadDms: Int = 0, pow
  * rightmost digits. Widths are terminal cells, so wide (CJK, emoji) nicknames fit too. With
  * [unreadDms] above zero, "N DM, " goes before the peer count while the whole count still fits.
  * With [powBits], "powN, " goes before those; it is the first thing dropped, then the DM count.
+ * [miningFrame] adds `| mining` after the difficulty, dropped first when it cannot fit.
  */
-internal fun headerLine(nickname: String, peerCount: Int, width: Int, unreadDms: Int = 0, powBits: Int? = null): String {
+internal fun headerLine(nickname: String, peerCount: Int, width: Int, unreadDms: Int = 0, powBits: Int? = null, miningFrame: Char? = null): String {
     if (width <= 0) return ""
     val left = " $nickname"
-    val peers = "$peerCount ${if (peerCount == 1) "peer" else "peers"} "
-    val withDms = if (unreadDms > 0) "$unreadDms DM, $peers" else peers
-    val withPow = if (powBits != null) "pow$powBits, $withDms" else withDms
-    val right = listOf(withPow, withDms, peers).first { it.cellWidth() <= width || it === peers }
+    val right = headerRight(peerCount, width, unreadDms, powBits, miningFrame)
     val room = width - right.cellWidth()
     return when {
         left.cellWidth() + 1 <= room -> left.padEndCells(room) + right
@@ -38,6 +39,14 @@ internal fun headerLine(nickname: String, peerCount: Int, width: Int, unreadDms:
         right.cellWidth() <= width -> right.padStartCells(width)
         else -> "$peerCount".takeLastCells(width).padStartCells(width)
     }
+}
+
+private fun headerRight(peerCount: Int, width: Int, unreadDms: Int, powBits: Int?, miningFrame: Char?): String {
+    val peers = "$peerCount ${if (peerCount == 1) "peer" else "peers"} "
+    val withDms = if (unreadDms > 0) "$unreadDms DM, $peers" else peers
+    val withPow = if (powBits != null) "pow$powBits, $withDms" else withDms
+    val withMining = if (powBits != null && miningFrame != null) "pow$powBits $miningFrame mining, $withDms" else withPow
+    return listOf(withMining, withPow, withDms, peers).first { it.cellWidth() <= width || it === peers }
 }
 
 private const val MIN_NICKNAME_COLUMNS = 6

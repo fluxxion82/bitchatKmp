@@ -96,7 +96,11 @@ internal fun wrapCells(text: String, width: Int): List<String> =
 
 /** [wrapCells] for styled text; each line keeps the styles of its range except links ([withoutLinks]). */
 internal fun wrapCells(text: AnnotatedString, width: Int): List<AnnotatedString> =
-    text.withoutLinks().let { plain -> wrapBounds(plain, width, words = true).map { plain.subSequence(it.start, it.end) } }
+    wrapCells(text, width) { line, _ -> line }
+
+/** Keeps source offsets while wrapping, so message-body metadata follows the same cell boundaries. */
+internal fun <T> wrapCells(text: AnnotatedString, width: Int, transform: (AnnotatedString, Int) -> T): List<T> =
+    text.withoutLinks().let { plain -> wrapBounds(plain, width, words = true).map { transform(plain.subSequence(it.start, it.end), it.start) } }
 
 /** Breaks one line of [text] into lines of at most [width] cells without regard to words. */
 internal fun hardWrapCells(text: String, width: Int): List<String> =

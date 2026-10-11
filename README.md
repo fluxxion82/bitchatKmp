@@ -159,6 +159,13 @@ The terminal UI shares the desktop GUI's identity, preferences, and Tor state (s
 
 Tor defaults ON when the bundled Arti library loads (in packaged distributions or `installDist`), and can be toggled in Settings. Use `bitchat-tui --version` to check the build. Verify with `scripts/verify.sh desktop-tui`.
 
+Both desktop and embedded TUIs scramble and reveal message text while mining a
+geohash/location message, with an ASCII spinner beside the header's PoW difficulty.
+Names, timestamps, spaces, wide characters and combining marks stay readable.
+When mining finishes, the message's `pow16` suffix (or its chosen difficulty) marks
+the completed proof of work. Enable PoW and choose its difficulty in Settings;
+mesh messages do not use it.
+
 For iOS, open `apps/iosApp/iosApp.xcodeproj` in Xcode. The shared framework is `BitchatApp` from `:iosdi`; Xcode's build phase runs `./gradlew :iosdi:embedAndSignAppleFrameworkForXcode` itself. To build it by hand:
 ```bash
 ./gradlew :iosdi:linkDebugFrameworkIosSimulatorArm64  # simulator

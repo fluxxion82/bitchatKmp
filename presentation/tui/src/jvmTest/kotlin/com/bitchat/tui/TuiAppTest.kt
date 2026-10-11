@@ -108,6 +108,16 @@ class TuiAppTest {
         }
     }
 
+    @Test fun miningStateReachesTheHeaderThroughTheApp() = runTest {
+        runMosaicTest {
+            val first = setContentAndSnapshot {
+                TuiApp("anon", 3, navigation, powBits = 16, isMining = true) { _, _ -> Text("body") }
+            }
+            assertTrue(first.lines().first().contains("pow16 | mining"))
+            assertTrue(awaitSnapshot().lines().first().contains("pow16 / mining"))
+        }
+    }
+
     @Test fun bodyGetsTheRemainingHeightAt40x12() = runTest {
         runMosaicTest {
             assertEquals("body Chat 40x9", app(40, 12).lines()[1].trimEnd())

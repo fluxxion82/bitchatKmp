@@ -16,9 +16,14 @@ import com.jakewharton.mosaic.testing.runMosaicTest
 import com.jakewharton.mosaic.ui.unit.IntSize
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Expected rows are written by hand. Colours are the 16-colour SGR codes Mosaic emits for the dark
@@ -134,6 +139,132 @@ class ChatScreenTest {
         assertEquals(" pow16", powMark(16))
         assertEquals(null, powMark(0))
         assertEquals(null, powMark(null))
+    }
+
+    @Test fun miningMessagesAnimateThenShowTheirCompletedProofOfWork() = runTest {
+        val messages = mutableStateListOf(msg("anon", "hi", 0).copy(isMining = true))
+        runMosaicTest {
+            val first = setContentAndSnapshot {
+                CompositionLocalProvider(LocalConsoleSafe provides true) {
+                    ChatScreen(messages, "anon", IntSize(40, 3), onSend = {})
+                }
+            }
+            var previous = first.lines()[1]
+            assertTrue(previous.startsWith("12:00 <anon> "), previous)
+            assertNotEquals("12:00 <anon> hi", previous, "the message body starts scrambled")
+            repeat(4) {
+                val next = awaitSnapshot().lines()[1]
+                assertTrue(next.startsWith("12:00 <anon> "), next)
+                assertEquals(previous.length, next.length)
+                assertNotEquals(previous, next, "the scrambled body changes between frames")
+                previous = next
+            }
+            messages[0] = messages[0].copy(id = "mined", isMining = false, powDifficulty = 16)
+            assertEquals("12:00 <anon> hi pow16", awaitSnapshot().lines()[1])
+            assertNull(withTimeoutOrNull(500.milliseconds) { awaitSnapshot() }, "completed messages stop ticking")
+        }
+    }
+
+    @Test fun miningTicksReuseLayoutsAndReadNoHistory() = runTest {
+        val many = CountingList((0 until 5000).map {
+            msg("alice", "m$it", it % 60, id = "id$it").copy(isMining = it == 4999)
+        })
+        val layouts = MessageLayouts()
+        runMosaicTest {
+            setContentAndSnapshot { ChatScreenContent(many, "anon", IntSize(40, 9), onSend = {}, layouts = layouts) }
+            assertEquals(8, layouts.layoutCalls)
+            many.reads = 0
+            repeat(4) { awaitSnapshot() }
+            assertEquals(8, layouts.layoutCalls, "ticks reuse every message layout")
+            assertEquals(0, many.reads, "ticks redraw visible rows without reading history")
+            press('x'.code)
+            assertEquals("> x ", awaitSnapshot().lines().last(), "typing still works while mining")
+            press(KeyboardEvent.PageUp)
+            val scrolled = awaitSnapshot()
+            assertTrue(scrolled.contains("-- more below (End) --"))
+            assertNull(withTimeoutOrNull(500.milliseconds) { awaitSnapshot() }, "offscreen mining does not tick")
+        }
+    }
+
+    @Test fun miningStopsWithoutClaimingProofOfWorkWhenCancelled() = runTest {
+        val messages = mutableStateListOf(msg("anon", "hi", 0).copy(isMining = true))
+        runMosaicTest {
+            assertNotEquals("12:00 <anon> hi", setContentAndSnapshot { ChatScreen(messages, "anon", IntSize(40, 3), onSend = {}) }.lines()[1])
+            messages[0] = messages[0].copy(isMining = false)
+            assertEquals("12:00 <anon> hi", awaitSnapshot().lines()[1])
+            assertNull(withTimeoutOrNull(500.milliseconds) { awaitSnapshot() })
+        }
+    }
+
+    @Test fun wrappedMiningTextScramblesOnlyTheBodyAndPreservesCellWidthsAndStyles() = runTest {
+        val original = messageLines(msg("anon", "hello 你好\nsecond line", 0), "anon", null, 20, false, null, ::utcClockTime)
+        runMosaicTest(MosaicSnapshots) {
+            setContentAndSnapshot {
+                ChatScreen(listOf(msg("anon", "hello 你好\nsecond line", 0).copy(isMining = true)), "anon", IntSize(20, 8), onSend = {})
+            }
+            val first = draw().render(AnsiLevel.ANSI16, false)
+            val firstPlain = draw().render(AnsiLevel.NONE, false).lines()
+            val next = awaitSnapshot().draw().render(AnsiLevel.ANSI16, false)
+            assertNotEquals(first, next)
+            val plain = draw().render(AnsiLevel.NONE, false).lines()
+            assertTrue(plain.all { it.cellWidth() <= 20 })
+            assertTrue(plain.any { it.contains("你好") }, "wide characters keep their cells")
+            assertFalse(plain.any { it.contains("second line") }, "continuation lines scramble too")
+            assertEquals(firstPlain.map { it.cellWidth() }, plain.map { it.cellWidth() })
+            val displayed = plain.dropLast(1).takeLast(original.size)
+            assertEquals(original.map { it.text.cellWidth() }, displayed.map { it.cellWidth() })
+            assertTrue(displayed.first().startsWith("12:00 <anon> "))
+            assertTrue(first.contains("${note}12:00"), "timestamp styling is unchanged")
+        }
+    }
+
+    @Test fun aVisibleContinuationAnimatesEvenWhenTheMessageHeaderIsOffscreen() = runTest {
+        val message = msg("anon", "hidden first line\nvisible continuation", 0).copy(isMining = true)
+        runMosaicTest {
+            val first = setContentAndSnapshot { ChatScreen(listOf(message), "anon", IntSize(40, 2), onSend = {}) }
+            assertFalse(first.contains("12:00"))
+            assertNotEquals("  visible continuation", first.lines()[0])
+            assertNotEquals(first, awaitSnapshot())
+        }
+    }
+
+    @Test fun scramblingPreservesWhitespaceWideGlyphsAndCombiningCharacters() = runTest {
+        val message = msg("anon", "e\u0301 你好 A B", 0).copy(isMining = true)
+        val original = "12:00 <anon> e\u0301 你好 A B"
+        runMosaicTest {
+            var row = setContentAndSnapshot { ChatScreen(listOf(message), "anon", IntSize(40, 2), onSend = {}) }.lines()[0]
+            repeat(4) {
+                assertTrue(row.startsWith("12:00 <anon> e\u0301 你好 "), row)
+                assertEquals(original.length, row.length)
+                assertEquals(original.cellWidth(), row.cellWidth())
+                assertEquals(original.indices.filter { original[it].isWhitespace() }, row.indices.filter { row[it].isWhitespace() })
+                row = awaitSnapshot().lines()[0]
+            }
+        }
+    }
+
+    @Test fun mediaAndBodiesWithNoScramblableCharactersDoNotRunMessageTimers() = runTest {
+        runMosaicTest {
+            val messages = listOf(
+                msg("anon", "你好 e\u0301", 0).copy(isMining = true),
+                msg("anon", "/data/photo.jpg", 1, BitchatMessageType.Image).copy(isMining = true),
+            )
+            val first = setContentAndSnapshot { ChatScreen(messages, "anon", IntSize(40, 3), onSend = {}) }
+            assertTrue(first.contains("你好 e\u0301"))
+            assertTrue(first.contains("[image photo.jpg]"))
+            assertNull(withTimeoutOrNull(500.milliseconds) { awaitSnapshot() })
+        }
+    }
+
+    @Test fun messageTextCannotStartAnAnimationByImitatingTheMiningLabel() = runTest {
+        runMosaicTest {
+            val first = setContentAndSnapshot {
+                ChatScreen(listOf(msg("alice", "| mining", 0), msg("system", "hi", 1).copy(isMining = true)), "anon", IntSize(40, 4), onSend = {})
+            }
+            assertTrue(first.contains("12:00 <alice> | mining"))
+            assertTrue(first.contains("12:01 * hi"))
+            assertNull(withTimeoutOrNull(500.milliseconds) { awaitSnapshot() })
+        }
     }
 
     @Test fun systemMessagesAreDimmed() = runTest {
