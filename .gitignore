@@ -94,13 +94,11 @@ presentation/iosApp/iosApp.xcodeproj/project.xcworkspace/xcuserdata/
 # Git worktrees for parallel work
 .worktrees/
 
-# Local design/planning notes, not part of the repo
-docs/superpowers/
+# Local documentation, not part of the repo
+/docs/
 
 # Quarantined Gradle output the ntfs3 driver corrupted and cannot delete
 data/remote/transport/bluetooth/build.corrupt*/
 
 # Local-only working notes and test fixtures
-docs/plans/
-docs/baseline/
 tests/
