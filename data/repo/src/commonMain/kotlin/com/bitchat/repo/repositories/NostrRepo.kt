@@ -4,6 +4,8 @@ import com.bitchat.domain.base.CoroutinesContextFacade
 import com.bitchat.domain.nostr.model.PowSettings
 import com.bitchat.domain.nostr.repository.NostrRepository
 import com.bitchat.nostr.NostrPreferences
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
@@ -25,10 +27,11 @@ class NostrRepo(
         withContext(coroutinesContextFacade.io) {
             nostrPreferences.setPowEnabled(settings.enabled)
             nostrPreferences.setPowDifficulty(settings.difficulty)
-            if (settings.isMining != nostrPreferences.getIsMiningFlow().first()) {
-                nostrPreferences.setIsMining(settings.isMining)
-            }
+            // isMining is a runtime projection owned by NostrClient. A settings snapshot may
+            // already be stale here, so saving preferences must never stop or restart its status.
         }
+
+    override fun observeMiningStatus(): Flow<Boolean> = nostrPreferences.getIsMiningFlow().distinctUntilChanged()
 
     override suspend fun clearData() = withContext(coroutinesContextFacade.io) {
         nostrPreferences.setPowEnabled(false)
