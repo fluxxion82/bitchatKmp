@@ -4,7 +4,6 @@ import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.base.CoroutinesContextFacade
 import com.bitchat.domain.user.model.AppUser
 import com.bitchat.domain.user.model.FavoriteRelationship
-import com.bitchat.domain.user.model.Profile
 import com.bitchat.domain.user.repository.UserRepository
 import com.bitchat.local.prefs.FavoritesUpdate
 import com.bitchat.local.prefs.UserPreferences
@@ -15,11 +14,6 @@ class UserRepo(
     private val coroutinesContextFacade: CoroutinesContextFacade,
     private val userPreferences: UserPreferences,
 ) : UserRepository {
-    var profile: Profile = Profile(
-        id = "1",
-        username = "",
-    )
-
     override suspend fun getAppUser(): AppUser = withContext(coroutinesContextFacade.io) {
         userPreferences.getAppUser()
     }
@@ -30,14 +24,6 @@ class UserRepo(
 
     override suspend fun setUserState(state: UserState) = withContext(coroutinesContextFacade.io) {
         userPreferences.setUserState(state)
-    }
-
-    override suspend fun getAppUserProfile(): Profile = withContext(coroutinesContextFacade.io) {
-        profile
-    }
-
-    override suspend fun updateAppUserProfile(profile: Profile) = withContext(coroutinesContextFacade.io) {
-        this@UserRepo.profile = profile
     }
 
     override suspend fun updateNickname(nickname: String) = withContext(coroutinesContextFacade.io) {

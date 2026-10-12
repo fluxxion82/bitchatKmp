@@ -7,7 +7,7 @@ import com.bitchat.domain.chat.ObserveSelectedPrivatePeer
 import com.bitchat.domain.chat.ObserveUnreadPrivatePeers
 import com.bitchat.domain.chat.SendMessage
 import com.bitchat.domain.location.model.Channel
-import com.bitchat.domain.user.GetUserNickname
+import com.bitchat.domain.user.ObserveUserNickname
 import com.bitchat.viewmodel.BaseViewModelTest
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -36,7 +36,7 @@ class DmViewModelSendToTest : BaseViewModelTest() {
         observeSelectedPrivatePeer = mockk<ObserveSelectedPrivatePeer> { coEvery { this@mockk.invoke(Unit) } returns emptyFlow() },
         markPrivateChatRead = mockk<MarkPrivateChatRead>(relaxed = true),
         sendMessage = sendMessage,
-        getUserNickname = mockk<GetUserNickname> { coEvery { this@mockk.invoke(Unit) } returns flowOf("anon") },
+        observeUserNickname = mockk<ObserveUserNickname> { coEvery { this@mockk.invoke(Unit) } returns flowOf("anon") },
     ).also { instantExecutorRule.scheduler.runCurrent() }
 
     @Test

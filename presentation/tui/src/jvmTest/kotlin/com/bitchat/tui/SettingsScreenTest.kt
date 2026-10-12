@@ -124,6 +124,16 @@ class SettingsScreenTest {
         )
     }
 
+    @Test fun protocolStepsOnlyThroughTheProtocolsThisAppCanRun() = runTest {
+        val down = KeyboardEvent.Down
+        val right = KeyboardEvent.Right
+        val withoutMeshCore = ready.copy(loraProtocols = listOf(LoRaProtocolType.BITCHAT, LoRaProtocolType.MESHTASTIC))
+        assertEquals(
+            listOf("protocol=MESHTASTIC", "protocol=BITCHAT"),
+            keys(withoutMeshCore, down, right, right),
+        )
+    }
+
     @Test fun repeatedStepsAddUpBeforeTheStateCatchesUp() = runTest {
         val down = KeyboardEvent.Down
         val right = KeyboardEvent.Right

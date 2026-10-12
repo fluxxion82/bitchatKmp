@@ -12,10 +12,10 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-class GetUserNicknameTest {
+class ObserveUserNicknameTest {
     private val userRepository = mockk<UserRepository>()
     private val userEventBus = InMemoryUserEventBus(defaultContextFacade)
-    private val useCase = GetUserNickname(userRepository, userEventBus)
+    private val useCase = ObserveUserNickname(userRepository, userEventBus)
 
     @Test
     fun `emits nickname for ActiveAnonymous user`() = runTest {

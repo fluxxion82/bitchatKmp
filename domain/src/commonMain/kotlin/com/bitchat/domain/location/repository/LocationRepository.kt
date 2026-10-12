@@ -15,8 +15,6 @@ interface LocationRepository {
     suspend fun getLocationGeohash(level: GeohashChannelLevel): String
     suspend fun getBookmarkedChannel(): List<GeohashChannel>
 
-    suspend fun sendGeohashMessage(content: String, channel: GeohashChannel, myPeerId: String)
-
     suspend fun getParticipantCounts(): Map<String, Int>
     suspend fun getCurrentGeohashPeople(): List<GeoPerson>
     suspend fun beginGeohashSampling(geohashes: List<String>)

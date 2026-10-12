@@ -19,7 +19,7 @@ import kotlin.test.assertEquals
  * The header shows its Tor indicator only when the reported mode is ON, so what this reports
  * decides whether a user can see that Tor is not working.
  */
-class GetTorStatusModeTest {
+class ObserveTorStatusModeTest {
 
     private val eventBus = mockk<TorEventBus>(relaxed = true).also {
         every { it.events() } returns emptyFlow()
@@ -49,7 +49,7 @@ class GetTorStatusModeTest {
             status = TorStatus(state = TorState.ERROR, errorMessage = "no native library"),
         )
 
-        val status = GetTorStatus(repository, eventBus)(Unit).first()
+        val status = ObserveTorStatus(repository, eventBus)(Unit).first()
 
         assertEquals(TorMode.ON, status.mode)
         assertEquals(false, status.running, "and it must render as not connected")
@@ -64,7 +64,7 @@ class GetTorStatusModeTest {
             status = TorStatus(state = TorState.RUNNING, running = true, bootstrapPercent = 100),
         )
 
-        val status = GetTorStatus(repository, eventBus)(Unit).first()
+        val status = ObserveTorStatus(repository, eventBus)(Unit).first()
 
         assertEquals(TorMode.ON, status.mode)
         assertEquals(true, status.running)
@@ -79,7 +79,7 @@ class GetTorStatusModeTest {
             status = TorStatus(),
         )
 
-        assertEquals(TorMode.OFF, GetTorStatus(repository, eventBus)(Unit).first().mode)
+        assertEquals(TorMode.OFF, ObserveTorStatus(repository, eventBus)(Unit).first().mode)
     }
 
     @Test
@@ -93,6 +93,6 @@ class GetTorStatusModeTest {
             status = TorStatus(),
         )
 
-        assertEquals(TorMode.OFF, GetTorStatus(repository, eventBus)(Unit).first().mode)
+        assertEquals(TorMode.OFF, ObserveTorStatus(repository, eventBus)(Unit).first().mode)
     }
 }

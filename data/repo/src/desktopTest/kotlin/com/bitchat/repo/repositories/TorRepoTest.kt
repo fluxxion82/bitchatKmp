@@ -44,7 +44,6 @@ class TorRepoTest {
     private val scopeFacade = object : CoroutineScopeFacade {
         override val applicationScope: CoroutineScope = TestScope(dispatcher)
         override val connectivityEventScope: CoroutineScope = applicationScope
-        override val bluetoothScope: CoroutineScope = applicationScope
         override val nostrScope: CoroutineScope = applicationScope
     }
 

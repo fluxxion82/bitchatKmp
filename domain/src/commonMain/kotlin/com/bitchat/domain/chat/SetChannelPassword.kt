@@ -6,6 +6,7 @@ import com.bitchat.domain.chat.eventbus.ChatEventBus
 import com.bitchat.domain.chat.model.ChatEvent
 import com.bitchat.domain.chat.model.failure.ChannelFailure
 import com.bitchat.domain.chat.repository.ChatRepository
+import kotlinx.coroutines.CancellationException
 
 class SetChannelPassword(
     private val chatRepository: ChatRepository,
@@ -50,6 +51,8 @@ class SetChannelPassword(
             chatRepository.setChannelPassword(channelName, password)
             chatEventBus.update(ChatEvent.ChannelOwnershipVerified(channelName))
             Outcome.Success(Unit)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Outcome.Error(
                 "Failed to set password: ${e.message}",
@@ -99,6 +102,8 @@ class SetChannelPassword(
             chatRepository.setChannelPassword(channelName, newPassword)
             chatEventBus.update(ChatEvent.ChannelOwnershipVerified(channelName))
             Outcome.Success(Unit)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Outcome.Error(
                 "Failed to change password: ${e.message}",

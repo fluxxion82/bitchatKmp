@@ -3,12 +3,12 @@ package com.bitchat.viewmodel.main
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bitchat.domain.app.ClearAllData
-import com.bitchat.domain.app.GetAppTheme
+import com.bitchat.domain.app.ObserveAppTheme
 import com.bitchat.domain.app.model.ActiveState
 import com.bitchat.domain.app.model.AppTheme
 import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.base.invoke
-import com.bitchat.domain.chat.GetJoinedChannels
+import com.bitchat.domain.chat.ObserveJoinedChannels
 import com.bitchat.domain.chat.LeaveChannel
 import com.bitchat.domain.chat.ClearSelectedPrivatePeer
 import com.bitchat.domain.chat.ResolveChatFallback
@@ -25,11 +25,11 @@ import com.bitchat.domain.location.ObserveLocationServicesEnabled
 import com.bitchat.domain.location.ObservePermissionState
 import com.bitchat.domain.location.ToggleBookmark
 import com.bitchat.domain.location.model.GeoPerson
-import com.bitchat.domain.nostr.GetPowSettings
-import com.bitchat.domain.tor.GetTorStatus
+import com.bitchat.domain.nostr.ObservePowSettings
+import com.bitchat.domain.tor.ObserveTorStatus
 import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.domain.user.GetAllFavorites
-import com.bitchat.domain.user.GetUserNickname
+import com.bitchat.domain.user.ObserveUserNickname
 import com.bitchat.domain.user.GetUserState
 import com.bitchat.domain.user.SaveUserStateAction
 import com.bitchat.domain.user.SetUserNickname
@@ -63,12 +63,12 @@ import com.bitchat.domain.location.model.Channel as BitchatChannel
 
 class MainViewModel(
     private val getUserState: GetUserState,
-    private val getAppTheme: GetAppTheme,
-    private val getPowSettings: GetPowSettings,
-    private val getTorStatus: GetTorStatus,
+    private val observeAppTheme: ObserveAppTheme,
+    private val observePowSettings: ObservePowSettings,
+    private val observeTorStatus: ObserveTorStatus,
     private val userEventBus: UserEventBus,
-    private val getJoinedChannels: GetJoinedChannels,
-    private val getUserNickname: GetUserNickname,
+    private val observeJoinedChannels: ObserveJoinedChannels,
+    private val observeUserNickname: ObserveUserNickname,
     private val observePrivateChats: ObservePrivateChats,
     private val observeUnreadPrivatePeers: ObserveUnreadPrivatePeers,
     private val observeLatestUnreadPrivatePeer: ObserveLatestUnreadPrivatePeer,
@@ -117,13 +117,13 @@ class MainViewModel(
         }
 
         viewModelScope.launch {
-            getAppTheme().collect {
+            observeAppTheme().collect {
                 appTheme.emit(it)
             }
         }
 
         viewModelScope.launch {
-            getPowSettings().collect { powSettings ->
+            observePowSettings().collect { powSettings ->
                 _headerState.update {
                     it.copy(
                         powEnabled = powSettings.enabled,
@@ -135,13 +135,13 @@ class MainViewModel(
         }
 
         viewModelScope.launch {
-            getJoinedChannels().collect { channels ->
+            observeJoinedChannels().collect { channels ->
                 _headerState.update { it.copy(joinedChannels = channels) }
             }
         }
 
         viewModelScope.launch {
-            getUserNickname().collect { nickname ->
+            observeUserNickname().collect { nickname ->
                 _headerState.update { it.copy(nickname = nickname) }
             }
         }
@@ -239,7 +239,7 @@ class MainViewModel(
         }
 
         viewModelScope.launch {
-            getTorStatus().collect { torStatus ->
+            observeTorStatus().collect { torStatus ->
                 _headerState.update {
                     it.copy(
                         torEnabled = torStatus.mode == TorMode.ON,

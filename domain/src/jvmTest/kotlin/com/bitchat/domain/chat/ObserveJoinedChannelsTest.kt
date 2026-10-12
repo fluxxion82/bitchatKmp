@@ -11,10 +11,10 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-class GetJoinedChannelsTest {
+class ObserveJoinedChannelsTest {
     private val chatRepository = mockk<ChatRepository>()
     private val chatEventBus = InMemoryChatEventBus(defaultContextFacade)
-    private val useCase = GetJoinedChannels(chatRepository, chatEventBus)
+    private val useCase = ObserveJoinedChannels(chatRepository, chatEventBus)
 
     @Test
     fun `emits initial joined channels on subscription`() = runTest {

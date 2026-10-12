@@ -1,6 +1,8 @@
 package com.bitchat.lora.meshcore.di
 
 import com.bitchat.lora.LoRaProtocol
+import com.bitchat.lora.LoRaProtocolType
+import com.bitchat.lora.RegisteredLoRaProtocol
 import com.bitchat.lora.di.LoRaQualifiers
 import com.bitchat.lora.meshcore.MeshCoreProtocol
 import com.bitchat.lora.meshcore.MeshCoreSerial
@@ -35,4 +37,6 @@ val meshcoreLoraModule = module {
 
     // Bind as LoRaProtocol with MeshCore qualifier
     single<LoRaProtocol>(LoRaQualifiers.MeshCore) { get<MeshCoreProtocol>() }
+
+    single(LoRaQualifiers.MeshCore) { RegisteredLoRaProtocol(LoRaProtocolType.MESHCORE) }
 }

@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.onStart
 
-class GetTorStatus(
+class ObserveTorStatus(
     private val torRepository: TorRepository,
     private val torEventBus: TorEventBus,
 ) : Usecase<Unit, Flow<TorStatus>> {

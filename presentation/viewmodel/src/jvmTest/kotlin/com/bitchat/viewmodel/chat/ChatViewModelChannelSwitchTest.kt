@@ -4,13 +4,13 @@ import com.bitchat.domain.app.model.ActiveState
 import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.base.CoroutinesContextFacade
 import com.bitchat.domain.chat.ObserveChannelMessages
-import com.bitchat.domain.chat.GetJoinedNamedChannels
+import com.bitchat.domain.chat.ObserveJoinedNamedChannels
 import com.bitchat.domain.chat.eventbus.InMemoryChatEventBus
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.ChatEvent
 import com.bitchat.domain.chat.model.failure.CommandFailure
 import com.bitchat.domain.location.model.Channel
-import com.bitchat.domain.user.GetUserNickname
+import com.bitchat.domain.user.ObserveUserNickname
 import com.bitchat.domain.user.GetUserState
 import com.bitchat.domain.user.model.UserStateAction
 import com.bitchat.viewmodel.BaseViewModelTest
@@ -94,7 +94,7 @@ class ChatViewModelChannelSwitchTest : BaseViewModelTest() {
             }
         },
         chatEventBus = bus,
-        getUserNickname = mockk<GetUserNickname> { coEvery { this@mockk.invoke(Unit) } returns flowOf("anon") },
+        observeUserNickname = mockk<ObserveUserNickname> { coEvery { this@mockk.invoke(Unit) } returns flowOf("anon") },
         saveUserStateAction = mockk<com.bitchat.domain.user.SaveUserStateAction>(relaxed = true) {
             coEvery { this@mockk.invoke(capture(switched)) } returns Unit
         },
@@ -103,7 +103,7 @@ class ChatViewModelChannelSwitchTest : BaseViewModelTest() {
             chatEventBus = bus,
             chatNotices = notices,
         ),
-        getJoinedNamedChannels = mockk<GetJoinedNamedChannels> { coEvery { this@mockk.invoke(Unit) } returns emptyFlow() },
+        observeJoinedNamedChannels = mockk<ObserveJoinedNamedChannels> { coEvery { this@mockk.invoke(Unit) } returns emptyFlow() },
         getGeohashParticipants = mockk(relaxed = true),
         getMeshPeers = mockk<com.bitchat.domain.chat.GetMeshPeers> {
             coEvery { this@mockk.invoke(Unit) } coAnswers { slowPeers.await() }

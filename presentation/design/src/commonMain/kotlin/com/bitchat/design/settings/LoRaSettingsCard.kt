@@ -43,6 +43,7 @@ fun LoRaSettingsCard(
     loraTxPower: LoRaTxPower,
     loraShowPeers: Boolean,
     loraProtocol: LoRaProtocolType,
+    loraProtocols: List<LoRaProtocolType>,
     loraOperation: LoRaSettingsOperation,
     loraSwitchStatus: LoRaSwitchStatus,
     loraSwitchError: String?,
@@ -136,7 +137,7 @@ fun LoRaSettingsCard(
                         title = "Protocol",
                         subtitle = "LoRa messaging protocol",
                         currentValue = loraProtocol.displayName,
-                        options = LoRaProtocolType.entries.map { it to it.displayName },
+                        options = loraProtocols.map { it to it.displayName },
                         onOptionSelected = { onLoRaProtocolSelected(it) },
                         enabled = !switching,
                     )

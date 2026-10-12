@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.onStart
 
-class GetJoinedChannels(
+class ObserveJoinedChannels(
     private val chatRepository: ChatRepository,
     private val chatEventBus: ChatEventBus,
 ) : Usecase<Unit, Flow<Set<String>>> {

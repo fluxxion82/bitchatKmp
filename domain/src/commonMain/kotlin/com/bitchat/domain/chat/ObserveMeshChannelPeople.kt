@@ -1,5 +1,6 @@
 package com.bitchat.domain.chat
 
+import com.bitchat.domain.base.Usecase
 import com.bitchat.domain.chat.eventbus.ChatEventBus
 import com.bitchat.domain.chat.model.ChatEvent
 import com.bitchat.domain.chat.model.LoRaPerson
@@ -56,8 +57,8 @@ class ObserveMeshChannelPeople(
     private val chatRepository: ChatRepository,
     private val chatEventBus: ChatEventBus,
     private val blockListRepository: BlockListRepository,
-) {
-    operator fun invoke(): Flow<List<MeshChannelPerson>> = channelFlow {
+) : Usecase<Unit, Flow<List<MeshChannelPerson>>> {
+    override suspend fun invoke(param: Unit): Flow<List<MeshChannelPerson>> = channelFlow {
         // The bus replays its latest event to a new subscriber. Treating that first event as a change
         // of everything closes the gap between the first read and the subscription: what changed in
         // it is picked up by one more read instead of waiting for the next relevant event.

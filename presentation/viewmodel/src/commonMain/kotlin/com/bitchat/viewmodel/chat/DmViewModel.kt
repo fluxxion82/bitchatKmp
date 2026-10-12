@@ -10,7 +10,7 @@ import com.bitchat.domain.chat.ObserveSelectedPrivatePeer
 import com.bitchat.domain.chat.ObserveUnreadPrivatePeers
 import com.bitchat.domain.chat.SendMessage
 import com.bitchat.domain.chat.model.PrivateMessageText
-import com.bitchat.domain.user.GetUserNickname
+import com.bitchat.domain.user.ObserveUserNickname
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.viewvo.chat.DmState
 import kotlinx.coroutines.CancellationException
@@ -28,7 +28,7 @@ class DmViewModel(
     private val observeSelectedPrivatePeer: ObserveSelectedPrivatePeer,
     private val markPrivateChatRead: MarkPrivateChatRead,
     private val sendMessage: SendMessage,
-    private val getUserNickname: GetUserNickname
+    private val observeUserNickname: ObserveUserNickname
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(DmState())
@@ -92,7 +92,7 @@ class DmViewModel(
 
     private suspend fun send(content: String, channel: Channel) {
         try {
-            val sender = getUserNickname(Unit).first()
+            val sender = observeUserNickname(Unit).first()
             sendMessage(
                 SendMessage.Params(
                     content = content,

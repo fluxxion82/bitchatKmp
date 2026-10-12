@@ -15,4 +15,7 @@ interface LoRaSettingsRepository {
     fun setLoRaTxPower(power: LoRaTxPower)
     fun setShowLoRaPeers(show: Boolean)
     fun setLoRaProtocol(protocol: LoRaProtocolType)
+
+    /** Empty where the app has no LoRa stack. */
+    fun getAvailableLoRaProtocols(): List<LoRaProtocolType>
 }

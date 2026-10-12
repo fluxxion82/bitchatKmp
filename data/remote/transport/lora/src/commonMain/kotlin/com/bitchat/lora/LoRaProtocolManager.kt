@@ -28,7 +28,9 @@ class LoRaProtocolManager(
     private val meshtasticProtocol: Lazy<LoRaProtocol>,
     private val meshcoreProtocol: Lazy<LoRaProtocol>,
     private val scope: CoroutineScope,
-    private val readinessTimeoutMs: Long = 20_000
+    private val readinessTimeoutMs: Long = 20_000,
+    /** The protocols this app registered. */
+    val availableTypes: Set<LoRaProtocolType> = LoRaProtocolType.entries.toSet(),
 ) : LoRaProtocol {
     private val mutex = Mutex()
     private val _activeType = MutableStateFlow(LoRaProtocolType.BITCHAT)
@@ -76,15 +78,21 @@ class LoRaProtocolManager(
     /** Initialization only, before any start, stop or switch request. */
     fun setActiveType(type: LoRaProtocolType) {
         check(!lifecycleUsed && !mutex.isLocked)
+        if (type !in availableTypes) return
         _activeType.value = type
     }
 
-    suspend fun switchProtocol(type: LoRaProtocolType, config: LoRaConfig? = null): Boolean =
-        mutex.withLock {
+    suspend fun switchProtocol(type: LoRaProtocolType, config: LoRaConfig? = null): Boolean {
+        if (type !in availableTypes) {
+            println("LoRa $type is not registered in this app; staying on ${_activeType.value}")
+            return false
+        }
+        return mutex.withLock {
             lifecycleUsed = true
             if (config != null) requestedRadioConfig = config
             switchLocked(type, requestedRadioConfig)
         }
+    }
 
     override suspend fun start(config: LoRaConfig): Boolean =
         mutex.withLock {

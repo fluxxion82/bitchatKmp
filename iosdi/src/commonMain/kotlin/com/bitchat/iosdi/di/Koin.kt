@@ -30,8 +30,6 @@ internal fun iosKoinModules(appModule: Module): List<Module> = listOf(
     viewModelModule,
     domainModule,
     bluetoothModule,
-    commonLocal,
-    localModule,
     clientModule,
     nostrModule,
     torModule,

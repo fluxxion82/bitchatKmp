@@ -2,9 +2,7 @@ package com.bitchat.domain.app.model
 
 import com.bitchat.domain.location.model.Channel
 
-sealed interface AppState
-
-sealed interface UserState : AppState {
+sealed interface UserState {
     data object PermissionsRequired : UserState
     data object BluetoothDisabled : UserState
     data object LocationServicesDisabled : UserState
@@ -12,7 +10,7 @@ sealed interface UserState : AppState {
     data class Active(val activeState: ActiveState) : UserState
 }
 
-sealed interface ActiveState : AppState {
+sealed interface ActiveState {
     data class Chat(
         val channel: Channel,
         val previousChannel: Channel? = null

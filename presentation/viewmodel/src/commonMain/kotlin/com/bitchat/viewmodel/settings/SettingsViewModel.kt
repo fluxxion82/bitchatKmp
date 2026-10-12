@@ -4,13 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bitchat.domain.app.DisableBackgroundMode
 import com.bitchat.domain.app.EnableBackgroundMode
-import com.bitchat.domain.app.GetAppTheme
-import com.bitchat.domain.app.GetBackgroundMode
+import com.bitchat.domain.app.ObserveAppTheme
+import com.bitchat.domain.app.ObserveBackgroundMode
 import com.bitchat.domain.app.SetAppTheme
 import com.bitchat.domain.app.model.AppTheme
 import com.bitchat.domain.app.model.BackgroundMode
 import com.bitchat.domain.base.invoke
 import com.bitchat.domain.initialization.GetAppInformation
+import com.bitchat.domain.lora.GetAvailableLoRaProtocols
 import com.bitchat.domain.lora.GetLoRaSettings
 import com.bitchat.domain.lora.SetLoRaEnabled
 import com.bitchat.domain.lora.SetLoRaRegion
@@ -22,13 +23,11 @@ import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.domain.nostr.GetPowSettings
 import com.bitchat.domain.nostr.SetPowSettings
-import com.bitchat.domain.nostr.model.PowSettings
 import com.bitchat.domain.tor.DisableTor
 import com.bitchat.domain.tor.EnableTor
 import com.bitchat.domain.tor.GetTorAvailability
 import com.bitchat.domain.tor.ObserveRequestedTorMode
-import com.bitchat.domain.tor.GetTorStatus
-import com.bitchat.domain.tor.model.TorMode
+import com.bitchat.domain.tor.ObserveTorStatus
 import com.bitchat.viewvo.settings.LoRaSwitchStatus
 import com.bitchat.viewvo.settings.LoRaSettingsOperation
 import com.bitchat.viewvo.settings.SettingsState
@@ -51,15 +50,15 @@ import kotlinx.coroutines.sync.withLock
 
 class SettingsViewModel(
     private val setAppTheme: SetAppTheme,
-    private val getAppTheme: GetAppTheme,
+    private val observeAppTheme: ObserveAppTheme,
     private val setPowSettings: SetPowSettings,
     private val getPowSettings: GetPowSettings,
-    private val getTorStatus: GetTorStatus,
+    private val observeTorStatus: ObserveTorStatus,
     private val observeRequestedTorMode: ObserveRequestedTorMode,
     private val enableTor: EnableTor,
     private val disableTor: DisableTor,
     private val getTorAvailability: GetTorAvailability,
-    private val getBackgroundMode: GetBackgroundMode,
+    private val observeBackgroundMode: ObserveBackgroundMode,
     private val enableBackgroundMode: EnableBackgroundMode,
     private val disableBackgroundMode: DisableBackgroundMode,
     private val showBackgroundModeSetting: Boolean,
@@ -69,6 +68,7 @@ class SettingsViewModel(
     private val setLoRaTxPower: SetLoRaTxPower,
     private val setShowLoRaPeers: SetShowLoRaPeers,
     private val switchLoRaProtocol: SwitchLoRaProtocol,
+    private val getAvailableLoRaProtocols: GetAvailableLoRaProtocols,
     private val getAppInformation: GetAppInformation,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsState())
@@ -77,21 +77,22 @@ class SettingsViewModel(
 
     init {
         loadInitialState()
-        observeTorStatus()
+        collectTorStatus()
         bindTorSwitchToIntent()
-        observeBackgroundMode()
+        collectBackgroundMode()
     }
 
     private fun loadInitialState() {
         viewModelScope.launch {
-            val theme = getAppTheme().firstOrNull() ?: AppTheme.SYSTEM
+            val theme = observeAppTheme().firstOrNull() ?: AppTheme.SYSTEM
             val themePreference = theme.toThemePreference()
 
-            val powSettings = getPowSettings().firstOrNull() ?: PowSettings()
+            val powSettings = getPowSettings()
 
-            val backgroundMode = getBackgroundMode().firstOrNull() ?: BackgroundMode.OFF
+            val backgroundMode = observeBackgroundMode().firstOrNull() ?: BackgroundMode.OFF
 
-            val loraSettings = getLoRaSettings?.invoke()
+            val loraSettings = getLoRaSettings()
+            val loraProtocols = getAvailableLoRaProtocols()
 
             // Static for the process: whether this build can route through Tor at all, and if
             // not, why - a missing native library, or an HTTP engine that ignores the proxy.
@@ -110,20 +111,21 @@ class SettingsViewModel(
                     powDifficulty = powSettings.difficulty,
                     backgroundModeEnabled = backgroundMode == BackgroundMode.ON,
                     torAvailability = torAvailability,
-                    loraAvailable = getLoRaSettings != null,
-                    loraEnabled = loraSettings?.enabled ?: true,
-                    loraRegion = loraSettings?.region ?: LoRaRegion.US_915,
-                    loraTxPower = loraSettings?.txPower ?: LoRaTxPower.MEDIUM,
-                    loraShowPeers = loraSettings?.showPeers ?: true,
-                    loraProtocol = loraSettings?.protocol ?: LoRaProtocolType.BITCHAT,
+                    loraAvailable = loraProtocols.isNotEmpty(),
+                    loraEnabled = loraSettings.enabled,
+                    loraRegion = loraSettings.region,
+                    loraTxPower = loraSettings.txPower,
+                    loraShowPeers = loraSettings.showPeers,
+                    loraProtocol = loraSettings.protocol,
+                    loraProtocols = loraProtocols,
                 )
             }
         }
     }
 
-    private fun observeTorStatus() {
+    private fun collectTorStatus() {
         viewModelScope.launch {
-            getTorStatus().collect { torStatus ->
+            observeTorStatus().collect { torStatus ->
                 _state.update {
                     it.copy(
                         torRunning = torStatus.running,
@@ -152,9 +154,9 @@ class SettingsViewModel(
         }
     }
 
-    private fun observeBackgroundMode() {
+    private fun collectBackgroundMode() {
         viewModelScope.launch {
-            getBackgroundMode().collect { backgroundMode ->
+            observeBackgroundMode().collect { backgroundMode ->
                 _state.update {
                     it.copy(
                         backgroundModeEnabled = backgroundMode == BackgroundMode.ON
@@ -183,7 +185,7 @@ class SettingsViewModel(
 
     fun onProofOfWorkToggled(enabled: Boolean) {
         viewModelScope.launch {
-            val currentSettings = getPowSettings().firstOrNull() ?: PowSettings()
+            val currentSettings = getPowSettings()
             setPowSettings(currentSettings.copy(enabled = enabled))
             _state.update { it.copy(proofOfWorkEnabled = enabled) }
         }
@@ -228,7 +230,7 @@ class SettingsViewModel(
 
     fun onPowDifficultyChanged(difficulty: Int) {
         viewModelScope.launch {
-            val currentSettings = getPowSettings().firstOrNull() ?: PowSettings()
+            val currentSettings = getPowSettings()
             setPowSettings(currentSettings.copy(difficulty = difficulty))
             _state.update { it.copy(powDifficulty = difficulty.coerceIn(0, 32)) }
         }

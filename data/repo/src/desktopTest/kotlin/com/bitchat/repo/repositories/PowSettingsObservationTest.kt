@@ -7,7 +7,7 @@ import com.bitchat.domain.chat.eventbus.InMemoryChatEventBus
 import com.bitchat.domain.chat.model.BitchatMessageType
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.GeohashChannelLevel
-import com.bitchat.domain.nostr.GetPowSettings
+import com.bitchat.domain.nostr.ObservePowSettings
 import com.bitchat.domain.nostr.SetPowSettings
 import com.bitchat.domain.nostr.eventbus.InMemoryNostrEventBus
 import com.bitchat.domain.nostr.model.PowSettings
@@ -36,7 +36,7 @@ import kotlin.test.assertTrue
 class PowSettingsObservationTest {
     @Test fun miningStartAndStopReachTheHeaderWithoutASettingsEvent() = runTest {
         val fixture = Fixture(UnconfinedTestDispatcher(testScheduler))
-        fixture.getSettings().test {
+        fixture.observeSettings(Unit).test {
             assertEquals(PowSettings(true, 8, false), awaitItem())
             fixture.preferences.setIsMining(true)
             assertEquals(PowSettings(true, 8, true), awaitItem())
@@ -62,7 +62,7 @@ class PowSettingsObservationTest {
         // An explicit sender identity means this call never needs the device identity store.
         val client = NostrClient(fixture.preferences, mockk())
         val identity = NostrIdentity.generate()
-        fixture.getSettings().test {
+        fixture.observeSettings(Unit).test {
             assertFalse(awaitItem().isMining)
             val send = async {
                 client.createEphemeralGeohashEvent("test message", "u4pruy", identity, nickname = "me", tempId = "local-echo")
@@ -127,7 +127,7 @@ class PowSettingsObservationTest {
         }
         val repository = NostrRepo(contexts, preferences)
         private val events = InMemoryNostrEventBus(contexts)
-        val getSettings = GetPowSettings(repository, events)
+        val observeSettings = ObservePowSettings(repository, events)
         val setSettings = SetPowSettings(repository, events)
     }
 

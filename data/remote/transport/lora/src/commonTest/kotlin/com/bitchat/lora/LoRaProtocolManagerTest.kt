@@ -253,6 +253,27 @@ class LoRaProtocolManagerTest {
         assertTrue(f.manager.peers === peers)
     }
 
+    @Test fun aProtocolTheAppDidNotRegisterIsRefusedWithoutBeingResolved() = runTest {
+        val bit = FakeProtocol("BitChat", peerIdsAreMeshIds = true)
+        val meshtastic = FakeProtocol("Meshtastic")
+        val manager = LoRaProtocolManager(
+            lazy { bit },
+            lazy { meshtastic },
+            lazy { error("MeshCore is not registered and must never be resolved") },
+            backgroundScope,
+            readinessTimeoutMs = 500,
+            availableTypes = setOf(LoRaProtocolType.BITCHAT, LoRaProtocolType.MESHTASTIC),
+        )
+
+        manager.setActiveType(LoRaProtocolType.MESHCORE)
+        assertEquals(LoRaProtocolType.BITCHAT, manager.activeType.value)
+
+        assertFalse(manager.switchProtocol(LoRaProtocolType.MESHCORE))
+        assertEquals(LoRaProtocolType.BITCHAT, manager.activeType.value)
+        assertTrue(manager.switchProtocol(LoRaProtocolType.MESHTASTIC))
+        assertEquals(LoRaProtocolType.MESHTASTIC, manager.activeType.value)
+    }
+
     @Test fun initializationSelectorCannotBypassLifecycleAfterStop() = runTest {
         val f = Fixture(backgroundScope)
         f.manager.start()

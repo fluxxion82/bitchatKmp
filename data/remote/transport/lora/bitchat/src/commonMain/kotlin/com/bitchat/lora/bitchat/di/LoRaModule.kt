@@ -1,6 +1,8 @@
 package com.bitchat.lora.bitchat.di
 
 import com.bitchat.lora.LoRaProtocol
+import com.bitchat.lora.LoRaProtocolType
+import com.bitchat.lora.RegisteredLoRaProtocol
 import com.bitchat.lora.bitchat.radio.LoRaRadio
 import com.bitchat.lora.bitchat.BitChatLoRaProtocol
 import com.bitchat.lora.bitchat.protocol.LoRaAssembler
@@ -59,4 +61,6 @@ val bitChatLoraModule = module {
 
     // Named binding for protocol manager
     single<LoRaProtocol>(LoRaQualifiers.BitChat) { get<BitChatLoRaProtocol>() }
+
+    single(LoRaQualifiers.BitChat) { RegisteredLoRaProtocol(LoRaProtocolType.BITCHAT) }
 }

@@ -7,6 +7,7 @@ import com.bitchat.domain.chat.model.ChannelInfo
 import com.bitchat.domain.chat.model.ChatEvent
 import com.bitchat.domain.chat.model.failure.ChannelFailure
 import com.bitchat.domain.chat.repository.ChatRepository
+import kotlinx.coroutines.CancellationException
 
 class JoinChannel(
     private val chatRepository: ChatRepository,
@@ -114,6 +115,8 @@ class JoinChannel(
         return try {
             val channelInfo = chatRepository.createNamedChannel(channelName, password)
             Outcome.Success(JoinChannelResult(channelInfo, isNewChannel = true))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Outcome.Error(
                 "Failed to create channel: ${e.message}",

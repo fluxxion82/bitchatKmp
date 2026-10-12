@@ -39,7 +39,6 @@ kotlin {
                 api(compose.runtime)
                 implementation(project(":domain"))
                 implementation(project(":data:mediautils"))
-//                implementation(project(":logging:logger"))
                 implementation(project(":presentation:viewvo"))
                 implementation(libs.koin.core)
                 implementation(libs.koin.coreVM)

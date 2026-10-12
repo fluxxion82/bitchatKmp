@@ -22,7 +22,6 @@ import com.bitchat.lora.LoRaProtocol
 import com.bitchat.nostr.NostrClient
 import com.bitchat.nostr.NostrPreferences
 import com.bitchat.nostr.NostrRelay
-import com.bitchat.nostr.NostrSubscriptionId
 import com.bitchat.nostr.NostrTransport
 import com.bitchat.nostr.model.NostrEvent
 import com.bitchat.nostr.model.NostrFilter
@@ -76,7 +75,6 @@ internal fun chatRepo(
     val scopeFacade = object : CoroutineScopeFacade {
         override val applicationScope: CoroutineScope = scope
         override val connectivityEventScope: CoroutineScope = scope
-        override val bluetoothScope: CoroutineScope = scope
         override val nostrScope: CoroutineScope = scope
     }
     val channelPreferences = mockk<ChannelPreferences>(relaxed = true).also {

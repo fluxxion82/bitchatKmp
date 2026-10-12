@@ -78,7 +78,7 @@ fun SettingsScreen(
     val powOn = pending.current(PROOF_OF_WORK, state.proofOfWorkEnabled)
     val rows = listOf(
         row("LoRa radio", state.loraEnabled, lora, { if (lora) onOff(it) else "no radio" }, { on, _ -> !on }, onLoRaEnabled),
-        row("Protocol", state.loraProtocol, lora, { it.displayName }, { value, by -> step(value, by) }, onLoRaProtocol),
+        row("Protocol", state.loraProtocol, lora, { it.displayName }, { value, by -> stepWithin(state.loraProtocols, value, by) }, onLoRaProtocol),
         row("Region", state.loraRegion, lora, ::regionLabel, { value, by -> step(value, by) }, onLoRaRegion),
         row("TX power", state.loraTxPower, lora, ::txPowerLabel, { value, by -> step(value, by) }, onLoRaTxPower),
         row("Show LoRa peers", state.loraShowPeers, lora, ::onOff, { on, _ -> !on }, onLoRaShowPeers),
@@ -220,6 +220,13 @@ private fun onOff(on: Boolean) = if (on) "on" else "off"
 private inline fun <reified T : Enum<T>> step(value: T, by: Int): T {
     val all = enumValues<T>()
     return all[(value.ordinal + by).mod(all.size)]
+}
+
+private fun <T> stepWithin(options: List<T>, value: T, by: Int): T {
+    if (options.isEmpty()) return value
+    val index = options.indexOf(value)
+    if (index < 0) return if (by > 0) options.first() else options.last()
+    return options[(index + by).mod(options.size)]
 }
 
 /** How the emergency wipe is reached, shown in Settings; the keys themselves are in [WipeShortcut]. */

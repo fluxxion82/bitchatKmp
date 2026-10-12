@@ -2,6 +2,7 @@ package com.bitchat.domain.chat
 
 import app.cash.turbine.test
 import com.bitchat.domain.base.defaultContextFacade
+import com.bitchat.domain.base.invoke
 import com.bitchat.domain.chat.eventbus.InMemoryChatEventBus
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.ChatEvent
@@ -500,7 +501,7 @@ class ObserveMeshChannelPeopleTest {
             override fun observeBlockList(): Flow<List<BlockedUser>> = blockListChanges
         }
 
-        fun observe() = ObserveMeshChannelPeople(repository, events, blockList)()
+        suspend fun observe() = ObserveMeshChannelPeople(repository, events, blockList)()
     }
 
     private fun person(id: String, name: String) = GeoPerson(id, name, seen)

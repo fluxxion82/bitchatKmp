@@ -164,7 +164,7 @@ val commonRepoModule = module {
     }
     single<TorRepository> { get<TorRepo>() }
     single<LoRaSettingsRepository> {
-        LoRaSettingsRepo(loraPreferences = get())
+        LoRaSettingsRepo(loraPreferences = get(), loraProtocolManager = getOrNull())
     }
     single<RelayLogSink> {
         TorRelayLogSink(

@@ -10,7 +10,6 @@ import kotlin.coroutines.CoroutineContext
 interface CoroutineScopeFacade {
     val applicationScope: CoroutineScope
     val connectivityEventScope: CoroutineScope
-    val bluetoothScope: CoroutineScope
     val nostrScope: CoroutineScope
 }
 
@@ -27,7 +26,6 @@ class DefaultScopeFacade(
         CoroutineScope(appJob + contextFacade.default + handler + CoroutineName("app"))
 
     override val connectivityEventScope: CoroutineScope = childScope("connectivity", contextFacade.io)
-    override val bluetoothScope: CoroutineScope = childScope("bluetooth", contextFacade.io)
     override val nostrScope: CoroutineScope = childScope("nostr", contextFacade.io)
 
     private fun childScope(

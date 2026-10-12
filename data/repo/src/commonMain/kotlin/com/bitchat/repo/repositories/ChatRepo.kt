@@ -73,7 +73,6 @@ import com.bitchat.nostr.participant.NostrParticipantTracker
 import com.bitchat.nostr.util.HandledGiftWraps
 import com.bitchat.nostr.util.hexStringToByteArray
 import com.bitchat.nostr.util.toHexString
-import com.bitchat.lora.LoRaPeer
 import com.bitchat.lora.loRaHeartbeatNickname
 import com.bitchat.lora.mayBeCutLoRaNickname
 import com.bitchat.local.prefs.FavoritesUpdate
@@ -123,7 +122,6 @@ import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -456,11 +454,6 @@ class ChatRepo(
             )
             manager.reconfigure(config)
         }
-
-    override fun getActiveLoRaProtocol(): String {
-        val manager = lora as? LoRaProtocolManager
-        return manager?.activeType?.value?.name ?: lora?.protocolName ?: "BITCHAT"
-    }
 
     override suspend fun getGeohashParticipants(geohash: String): Map<String, String> = withContext(coroutinesContextFacade.io) {
         val cutoff = Clock.System.now() - 5.minutes
@@ -1919,45 +1912,8 @@ class ChatRepo(
             }
         }
 
-    override suspend fun addChannelMessage(
-        channel: String,
-        message: BitchatMessage,
-        senderPeerID: String?
-    ): Unit = withContext(coroutinesContextFacade.io) {
-        // Currently just tracking members, not storing messages
-        // In future, this could interact with a message storage layer
-        senderPeerID?.let { peerID ->
-            // Note: ChannelPreferences doesn't have member tracking yet
-        }
-    }
-
-    override suspend fun removeChannelMember(channel: String, peerID: String) = withContext(coroutinesContextFacade.io) {
-
-    }
-
-    override suspend fun cleanupDisconnectedMembers(connectedPeers: List<String>, myPeerID: String) =
-        withContext(coroutinesContextFacade.io) {
-
-        }
-
-    override suspend fun hasChannelKey(channel: String): Boolean = withContext(coroutinesContextFacade.io) {
-        channelKeys.containsKey(normalizeChannelName(channel))
-    }
-
-    override suspend fun isChannelCreator(channel: String, peerID: String): Boolean = withContext(coroutinesContextFacade.io) {
-        val normalized = normalizeChannelName(channel)
-        val creators = channelPreferences.getChannelCreators()
-        creators[normalized] == peerID
-    }
-
     override suspend fun getJoinedChannelsList(): List<String> = withContext(coroutinesContextFacade.io) {
         channelPreferences.getJoinedChannelsList().toList().sorted()
-    }
-
-    override suspend fun loadChannelData(): Pair<Set<String>, Set<String>> = withContext(coroutinesContextFacade.io) {
-        val joined = channelPreferences.getJoinedChannelsList()
-        val protected = channelPreferences.getSavedProtectedChannels()
-        Pair(joined, protected)
     }
 
     override suspend fun setChannelPassword(channel: String, password: String) = withContext(coroutinesContextFacade.io) {
@@ -1965,10 +1921,6 @@ class ChatRepo(
         val key = Cryptography.createAESSecretKey(password, normalized.encodeToByteArray())
         channelKeys[normalized] = key
         channelPreferences.setSavedProtectedChannel(normalized)
-    }
-
-    override suspend fun clearAllChannels() = withContext(coroutinesContextFacade.io) {
-        channelKeys.clear()
     }
 
     override suspend fun clearMessages(channel: Channel) = withContext(coroutinesContextFacade.io) {
@@ -2932,14 +2884,6 @@ class ChatRepo(
         namedChannelMembers[normalized]?.toList().orEmpty()
     }
 
-    override suspend fun addChannelMember(channelName: String, member: ChannelMember) = withContext(coroutinesContextFacade.io) {
-        val normalized = normalizeChannelName(channelName)
-        val members = namedChannelMembers.getOrPut(normalized) { mutableSetOf() }
-        members.removeAll { it.peerID == member.peerID }
-        members.add(member)
-        chatEventBus.update(ChatEvent.ChannelMembersUpdated(normalized))
-    }
-
     override suspend fun isChannelOwner(channelName: String): Boolean = withContext(coroutinesContextFacade.io) {
         val normalized = normalizeChannelName(channelName)
         val myNpub = try {
@@ -2969,25 +2913,9 @@ class ChatRepo(
         false
     }
 
-    override suspend fun getChannelCreatorNpub(channelName: String): String? = withContext(coroutinesContextFacade.io) {
-        channelCreatorNpubs[normalizeChannelName(channelName)]
-    }
-
     override suspend fun getChannelKeyCommitment(channelName: String): String? = withContext(coroutinesContextFacade.io) {
         channelKeyCommitments[normalizeChannelName(channelName)]
     }
-
-    override suspend fun encryptChannelMessage(plaintext: String, channelName: String): ByteArray? =
-        withContext(coroutinesContextFacade.io) {
-            val normalized = normalizeChannelName(channelName)
-            val key = channelKeys[normalized] ?: return@withContext null
-            try {
-                Cryptography.encryptAESGCM(plaintext, key)
-            } catch (e: Exception) {
-                println("❌ ChatRepo: Failed to encrypt channel message: ${e.message}")
-                null
-            }
-        }
 
     override suspend fun deriveChannelKey(channelName: String, password: String): ByteArray = withContext(coroutinesContextFacade.io) {
         val salt = normalizeChannelName(channelName).encodeToByteArray()
@@ -3019,15 +2947,6 @@ class ChatRepo(
             )
         }
     }
-
-    override fun observeJoinedNamedChannels(): Flow<List<ChannelInfo>> = chatEventBus.events()
-        .onStart { emit(ChatEvent.ChannelListUpdated) }
-        .filter { event ->
-            event is ChatEvent.ChannelListUpdated ||
-                    event is ChatEvent.ChannelJoined ||
-                    event is ChatEvent.ChannelLeft
-        }
-        .map { getAvailableChannels() }
 
     override suspend fun createNamedChannel(channelName: String, password: String?): ChannelInfo = withContext(coroutinesContextFacade.io) {
         val normalizedName = normalizeChannelName(channelName)

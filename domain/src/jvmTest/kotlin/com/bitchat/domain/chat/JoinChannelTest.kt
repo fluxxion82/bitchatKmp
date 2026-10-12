@@ -8,8 +8,10 @@ import io.mockk.coEvery
 import io.mockk.coJustRun
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -45,5 +47,15 @@ class JoinChannelTest {
         coVerify(exactly = 1) { chatRepository.joinChannel("#test", null) }
         coVerify(exactly = 1) { chatRepository.ensureNamedChannelMetadata(discovered) }
         coVerify(exactly = 0) { chatRepository.createNamedChannel(any(), any()) }
+    }
+
+    @Test
+    fun `a cancelled create is not reported as a failed one`() = runTest {
+        coEvery { chatRepository.getJoinedChannelsList() } returns emptyList()
+        coEvery { chatRepository.getAvailableChannels() } returns emptyList()
+        coEvery { chatRepository.discoverNamedChannel("#test") } returns null
+        coEvery { chatRepository.createNamedChannel("#test", null) } throws CancellationException("left the screen")
+
+        assertFailsWith<CancellationException> { joinChannel(JoinChannel.Params("test")) }
     }
 }

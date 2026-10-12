@@ -12,7 +12,9 @@ import com.bitchat.domain.initialization.models.AppInformation
 import com.bitchat.domain.initialization.models.Version
 import com.bitchat.local.di.commonLocal
 import com.bitchat.local.di.localModule
+import com.bitchat.lora.LoRaProtocolManager
 import com.bitchat.lora.LoRaProtocolType
+import com.bitchat.lora.RegisteredLoRaProtocol
 import com.bitchat.repo.di.commonRepoModule
 import com.bitchat.tor.di.torModule
 import com.bitchat.viewmodel.permissions.PermissionsErrorViewModel
@@ -53,8 +55,23 @@ class DesktopModulesTest {
                 definition<InitializeApplication>(Set::class),
                 definition<NostrGeoRelayClient>(BaseApiClient::class),
                 definition<PermissionsErrorViewModel>(List::class),
+                definition<RegisteredLoRaProtocol>(LoRaProtocolType::class),
             ),
         )
+    }
+
+    @Test
+    fun desktopOffersOnlyTheLoRaProtocolsItRegisters() {
+        val application = koinApplication(createEagerInstances = false) { modules(modules) }
+
+        try {
+            assertEquals(
+                setOf(LoRaProtocolType.BITCHAT, LoRaProtocolType.MESHTASTIC),
+                application.koin.get<LoRaProtocolManager>().availableTypes,
+            )
+        } finally {
+            application.close()
+        }
     }
 
     @Test

@@ -3,15 +3,11 @@ package com.bitchat.domain.user.repository
 import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.user.model.AppUser
 import com.bitchat.domain.user.model.FavoriteRelationship
-import com.bitchat.domain.user.model.Profile
 
 interface UserRepository {
     suspend fun getAppUser(): AppUser
     suspend fun getUserState(): UserState?
     suspend fun setUserState(state: UserState)
-
-    suspend fun getAppUserProfile(): Profile
-    suspend fun updateAppUserProfile(profile: Profile)
 
     suspend fun updateNickname(nickname: String)
 

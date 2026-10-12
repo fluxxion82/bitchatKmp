@@ -5,8 +5,8 @@ import com.bitchat.domain.app.AppForegroundState
 import com.bitchat.domain.app.DisableBackgroundMode
 import com.bitchat.domain.app.DisableBatteryOptimization
 import com.bitchat.domain.app.EnableBackgroundMode
-import com.bitchat.domain.app.GetAppTheme
-import com.bitchat.domain.app.GetBackgroundMode
+import com.bitchat.domain.app.ObserveAppTheme
+import com.bitchat.domain.app.ObserveBackgroundMode
 import com.bitchat.domain.app.SetAppTheme
 import com.bitchat.domain.app.SkipBatteryOptimization
 import com.bitchat.domain.app.eventbus.AppEventBus
@@ -20,8 +20,8 @@ import com.bitchat.domain.chat.GetAvailableNamedChannels
 import com.bitchat.domain.chat.GetChannelKeyCommitment
 import com.bitchat.domain.chat.GetChannelMembers
 import com.bitchat.domain.chat.GetGeohashParticipants
-import com.bitchat.domain.chat.GetJoinedChannels
-import com.bitchat.domain.chat.GetJoinedNamedChannels
+import com.bitchat.domain.chat.ObserveJoinedChannels
+import com.bitchat.domain.chat.ObserveJoinedNamedChannels
 import com.bitchat.domain.chat.FindMeshPeerByName
 import com.bitchat.domain.chat.GetMeshPeers
 import com.bitchat.domain.chat.JoinChannel
@@ -39,7 +39,6 @@ import com.bitchat.domain.chat.ObserveSelectedPrivatePeer
 import com.bitchat.domain.chat.ObserveUnreadPrivatePeers
 import com.bitchat.domain.chat.ProcessChatCommand
 import com.bitchat.domain.chat.SendMessage
-import com.bitchat.domain.chat.SendPrivateMessage
 import com.bitchat.domain.chat.SetChannelPassword
 import com.bitchat.domain.chat.eventbus.ChatEventBus
 import com.bitchat.domain.chat.eventbus.InMemoryChatEventBus
@@ -71,6 +70,7 @@ import com.bitchat.domain.location.ToggleBookmark
 import com.bitchat.domain.location.ToggleLocationServices
 import com.bitchat.domain.location.eventbus.InMemoryLocationEventBus
 import com.bitchat.domain.location.eventbus.LocationEventBus
+import com.bitchat.domain.lora.GetAvailableLoRaProtocols
 import com.bitchat.domain.lora.GetLoRaSettings
 import com.bitchat.domain.lora.SetLoRaEnabled
 import com.bitchat.domain.lora.SetLoRaRegion
@@ -78,23 +78,22 @@ import com.bitchat.domain.lora.SetLoRaTxPower
 import com.bitchat.domain.lora.SetShowLoRaPeers
 import com.bitchat.domain.lora.SwitchLoRaProtocol
 import com.bitchat.domain.nostr.GetPowSettings
+import com.bitchat.domain.nostr.ObservePowSettings
 import com.bitchat.domain.nostr.SetPowSettings
 import com.bitchat.domain.nostr.eventbus.InMemoryNostrEventBus
 import com.bitchat.domain.nostr.eventbus.NostrEventBus
 import com.bitchat.domain.tor.DisableTor
 import com.bitchat.domain.tor.EnableTor
 import com.bitchat.domain.tor.GetTorAvailability
-import com.bitchat.domain.tor.GetTorMode
 import com.bitchat.domain.tor.ObserveRequestedTorMode
-import com.bitchat.domain.tor.GetTorStatus
+import com.bitchat.domain.tor.ObserveTorStatus
 import com.bitchat.domain.tor.eventbus.InMemoryTorEventBus
 import com.bitchat.domain.tor.eventbus.TorEventBus
 import com.bitchat.domain.user.BlockUser
 import com.bitchat.domain.user.GetAllFavorites
 import com.bitchat.domain.user.GetBlockedUsers
-import com.bitchat.domain.user.GetUserNickname
+import com.bitchat.domain.user.ObserveUserNickname
 import com.bitchat.domain.user.GetUserState
-import com.bitchat.domain.user.IsUserBlocked
 import com.bitchat.domain.user.SaveUserStateAction
 import com.bitchat.domain.user.SetUserNickname
 import com.bitchat.domain.user.ToggleFavorite
@@ -112,7 +111,7 @@ val domainModule = module {
     single { InMemoryNostrEventBus(contextFacade = get()) } bind NostrEventBus::class
 
     single { SetAppTheme(repository = get(), eventBus = get()) }
-    single { GetAppTheme(repository = get(), eventBus = get()) }
+    single { ObserveAppTheme(repository = get(), eventBus = get()) }
     single { SkipBatteryOptimization(repository = get()) }
     single { DisableBatteryOptimization(repository = get()) }
     single {
@@ -129,11 +128,12 @@ val domainModule = module {
         )
     }
 
-    single { GetBackgroundMode(repository = get(), eventBus = get()) }
+    single { ObserveBackgroundMode(repository = get(), eventBus = get()) }
     single { EnableBackgroundMode(repository = get(), eventBus = get()) }
     single { DisableBackgroundMode(repository = get(), eventBus = get()) }
 
-    single { GetPowSettings(repository = get(), eventBus = get()) }
+    single { ObservePowSettings(repository = get(), eventBus = get()) }
+    single { GetPowSettings(repository = get()) }
     single { SetPowSettings(repository = get(), eventBus = get()) }
 
     single { InitializeApplication(initializers = getKoin().getAll<AppInitializer>().toSet(), contextFacade = get()) }
@@ -157,25 +157,24 @@ val domainModule = module {
         )
     }
 
-    single { GetUserNickname(userRepository = get(), userEventBus = get()) }
+    single { ObserveUserNickname(userRepository = get(), userEventBus = get()) }
 
     single { SetUserNickname(userRepository = get(), userEventBus = get()) }
 
     single { BlockUser(blockListRepository = get()) }
     single { UnblockUser(blockListRepository = get()) }
     single { GetBlockedUsers(blockListRepository = get()) }
-    single { IsUserBlocked(blockListRepository = get()) }
 
     single<ChatEventBus> { InMemoryChatEventBus(contextFacade = get()) }
     single<LocationEventBus> { InMemoryLocationEventBus(contextFacade = get()) }
     single<TorEventBus> { InMemoryTorEventBus(contextFacade = get()) }
 
-    single { GetJoinedChannels(chatRepository = get(), chatEventBus = get()) }
+    single { ObserveJoinedChannels(chatRepository = get(), chatEventBus = get()) }
     single { JoinChannel(chatRepository = get(), chatEventBus = get()) }
     single { SetChannelPassword(chatRepository = get(), chatEventBus = get()) }
 
     single { LeaveChannel(chatRepository = get(), chatEventBus = get(), chatNotices = get()) }
-    single { GetJoinedNamedChannels(chatRepository = get(), chatEventBus = get()) }
+    single { ObserveJoinedNamedChannels(chatRepository = get(), chatEventBus = get()) }
     single { GetGeohashParticipants(chatRepository = get()) }
     single { GetMeshPeers(chatRepository = get()) }
     single { FindMeshPeerByName(chatRepository = get()) }
@@ -198,7 +197,6 @@ val domainModule = module {
     // One store for the whole app: command feedback outlives the screen that produced it.
     single { ChatNotices() }
     single { ResolveChatFallback(userRepository = get(), chatRepository = get()) }
-    single { SendPrivateMessage(chatRepository = get()) }
 
     single { GetAvailableChannels(locationRepository = get()) }
     single { GetParticipantCounts(locationRepository = get(), chatRepository = get()) }
@@ -236,8 +234,7 @@ val domainModule = module {
     single { ObserveNotes(repository = get(), locationEventBus = get()) }
     single { GetLocationGeohash(repository = get()) }
 
-    single { GetTorStatus(torRepository = get(), torEventBus = get()) }
-    single { GetTorMode(torRepository = get(), torEventBus = get()) }
+    single { ObserveTorStatus(torRepository = get(), torEventBus = get()) }
     single { EnableTor(torRepository = get(), requestedIntent = get(), torEventBus = get(), coroutineScopeFacade = get(), routeLifecycle = getOrNull()) }
     single { ObserveRequestedTorMode(requestedIntent = get()) }
     single { DisableTor(torRepository = get(), requestedIntent = get(), torEventBus = get(), routeLifecycle = getOrNull()) }
@@ -247,6 +244,7 @@ val domainModule = module {
     single { ToggleFavorite(userRepository = get(), chatRepository = get(), userEventBus = get()) }
 
     single { GetLoRaSettings(loraSettingsRepository = get()) }
+    single { GetAvailableLoRaProtocols(loraSettingsRepository = get()) }
     single { SetLoRaEnabled(loraSettingsRepository = get()) }
     single { SetLoRaRegion(loraSettingsRepository = get(), chatRepository = get()) }
     single { SetLoRaTxPower(loraSettingsRepository = get(), chatRepository = get()) }

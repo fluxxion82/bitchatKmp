@@ -18,8 +18,6 @@ data class BitchatMessage(
     val senderPeerID: String? = null,
     val mentions: List<String>? = null,
     val channel: String? = null,
-    val encryptedContent: ByteArray? = null,
-    val isEncrypted: Boolean = false,
     val deliveryStatus: DeliveryStatus? = null,
     val powDifficulty: Int? = null,
     val filePacket: BitchatFilePacket? = null,

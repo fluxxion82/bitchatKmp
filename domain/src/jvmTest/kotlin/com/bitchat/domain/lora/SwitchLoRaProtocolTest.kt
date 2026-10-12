@@ -23,6 +23,7 @@ class SwitchLoRaProtocolTest {
         override fun setLoRaTxPower(power: LoRaTxPower) { value = value.copy(txPower = power) }
         override fun setShowLoRaPeers(show: Boolean) { value = value.copy(showPeers = show) }
         override fun setLoRaProtocol(protocol: LoRaProtocolType) { value = value.copy(protocol = protocol) }
+        override fun getAvailableLoRaProtocols() = LoRaProtocolType.entries
     }
 
     @Test

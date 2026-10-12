@@ -17,11 +17,11 @@ val viewModelModule = module {
     viewModel {
         MainViewModel(
             getUserState = get(),
-            getAppTheme = get(),
-            getPowSettings = get(),
+            observeAppTheme = get(),
+            observePowSettings = get(),
             userEventBus = get(),
-            getJoinedChannels = get(),
-            getUserNickname = get(),
+            observeJoinedChannels = get(),
+            observeUserNickname = get(),
             observePrivateChats = get(),
             observeUnreadPrivatePeers = get(),
             observeLatestUnreadPrivatePeer = get(),
@@ -33,7 +33,7 @@ val viewModelModule = module {
             observeChannelParticipants = get(),
             getAllFavorites = get(),
             toggleFavoriteUseCase = get(),
-            getTorStatus = get(),
+            observeTorStatus = get(),
             leaveChannel = get(),
             setUserNickname = get(),
             toggleBookmarkUseCase = get(),
@@ -75,10 +75,10 @@ val viewModelModule = module {
             processChatCommand = get(),
             getUserState = get(),
             chatEventBus = get(),
-            getUserNickname = get(),
+            observeUserNickname = get(),
             saveUserStateAction = get(),
             leaveChannel = get(),
-            getJoinedNamedChannels = get(),
+            observeJoinedNamedChannels = get(),
             getGeohashParticipants = get(),
             getMeshPeers = get(),
             findMeshPeerByName = get(),
@@ -103,7 +103,7 @@ val viewModelModule = module {
             observeSelectedPrivatePeer = get(),
             markPrivateChatRead = get(),
             sendMessage = get(),
-            getUserNickname = get()
+            observeUserNickname = get()
         )
     }
 
@@ -131,15 +131,15 @@ val viewModelModule = module {
     viewModel { params ->
         SettingsViewModel(
             setAppTheme = get(),
-            getAppTheme = get(),
+            observeAppTheme = get(),
             setPowSettings = get(),
             getPowSettings = get(),
-            getTorStatus = get(),
+            observeTorStatus = get(),
             observeRequestedTorMode = get(),
             enableTor = get(),
             disableTor = get(),
             getTorAvailability = get(),
-            getBackgroundMode = get(),
+            observeBackgroundMode = get(),
             enableBackgroundMode = get(),
             disableBackgroundMode = get(),
             showBackgroundModeSetting = params[0],
@@ -149,6 +149,7 @@ val viewModelModule = module {
             setLoRaTxPower = get(),
             setShowLoRaPeers = get(),
             switchLoRaProtocol = get(),
+            getAvailableLoRaProtocols = get(),
             getAppInformation = get(),
         )
     }
@@ -159,7 +160,7 @@ val viewModelModule = module {
         LocationNotesViewModel(
             observeNotes = get(),
             sendNote = get(),
-            getUserNickname = get(),
+            observeUserNickname = get(),
             getLocationGeohash = get(),
             resolveLocationName = get(),
             geohash = geohash,

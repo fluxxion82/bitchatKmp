@@ -44,6 +44,7 @@ data class SettingsState(
     val loraTxPower: LoRaTxPower = LoRaTxPower.MEDIUM,
     val loraShowPeers: Boolean = true,
     val loraProtocol: LoRaProtocolType = LoRaProtocolType.BITCHAT,
+    val loraProtocols: List<LoRaProtocolType> = LoRaProtocolType.entries,
     val loraOperation: LoRaSettingsOperation = LoRaSettingsOperation.PROTOCOL,
     val loraSwitchStatus: LoRaSwitchStatus = LoRaSwitchStatus.IDLE,
     val loraSwitchError: String? = null,

@@ -17,7 +17,7 @@ import com.bitchat.domain.chat.GetAvailableNamedChannels
 import com.bitchat.domain.chat.GetChannelKeyCommitment
 import com.bitchat.domain.chat.GetChannelMembers
 import com.bitchat.domain.chat.GetGeohashParticipants
-import com.bitchat.domain.chat.GetJoinedNamedChannels
+import com.bitchat.domain.chat.ObserveJoinedNamedChannels
 import com.bitchat.domain.chat.FindMeshPeerByName
 import com.bitchat.domain.chat.GetMeshPeers
 import com.bitchat.domain.chat.JoinChannel
@@ -36,7 +36,7 @@ import com.bitchat.domain.chat.model.failure.ChannelFailure
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.user.BlockUser
 import com.bitchat.domain.user.GetBlockedUsers
-import com.bitchat.domain.user.GetUserNickname
+import com.bitchat.domain.user.ObserveUserNickname
 import com.bitchat.domain.user.GetUserState
 import com.bitchat.domain.user.SaveUserStateAction
 import com.bitchat.domain.user.UnblockUser
@@ -70,10 +70,10 @@ class ChatViewModel(
     private val processChatCommand: ProcessChatCommand,
     private val getUserState: GetUserState,
     private val chatEventBus: ChatEventBus,
-    private val getUserNickname: GetUserNickname,
+    private val observeUserNickname: ObserveUserNickname,
     private val saveUserStateAction: SaveUserStateAction,
     private val leaveChannel: LeaveChannel,
-    private val getJoinedNamedChannels: GetJoinedNamedChannels,
+    private val observeJoinedNamedChannels: ObserveJoinedNamedChannels,
     private val getGeohashParticipants: GetGeohashParticipants,
     private val getMeshPeers: GetMeshPeers,
     private val findMeshPeerByName: FindMeshPeerByName,
@@ -159,13 +159,13 @@ class ChatViewModel(
         }
 
         viewModelScope.launch {
-            getUserNickname().collect { nickname ->
+            observeUserNickname().collect { nickname ->
                 _state.update { it.copy(nickname = nickname) }
             }
         }
 
         viewModelScope.launch {
-            getJoinedNamedChannels().collect { channels ->
+            observeJoinedNamedChannels().collect { channels ->
                 _state.update { it.copy(joinedNamedChannels = channels) }
             }
         }

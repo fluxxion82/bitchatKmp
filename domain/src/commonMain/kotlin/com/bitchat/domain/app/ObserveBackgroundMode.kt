@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.onStart
 
-class GetBackgroundMode(
+class ObserveBackgroundMode(
     private val repository: AppRepository,
     private val eventBus: AppEventBus,
 ) : Usecase<Unit, Flow<BackgroundMode>> {

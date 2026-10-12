@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.onStart
 
-class GetUserNickname(
+class ObserveUserNickname(
     private val userRepository: UserRepository,
     private val userEventBus: UserEventBus,
 ) : Usecase<Unit, Flow<String>> {

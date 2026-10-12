@@ -1,6 +1,8 @@
 package com.bitchat.lora.meshtastic.di
 
 import com.bitchat.lora.LoRaProtocol
+import com.bitchat.lora.LoRaProtocolType
+import com.bitchat.lora.RegisteredLoRaProtocol
 import com.bitchat.lora.di.LoRaQualifiers
 import com.bitchat.lora.meshtastic.MeshtasticProtocol
 import com.bitchat.lora.meshtastic.MeshtasticSerial
@@ -48,6 +50,8 @@ val meshtasticLoraModule = module {
      * Named binding for protocol manager.
      */
     single<LoRaProtocol>(LoRaQualifiers.Meshtastic) { get<MeshtasticProtocol>() }
+
+    single(LoRaQualifiers.Meshtastic) { RegisteredLoRaProtocol(LoRaProtocolType.MESHTASTIC) }
 }
 
 /**

@@ -3,20 +3,22 @@ package com.bitchat.viewmodel.settings
 import app.cash.turbine.test
 import com.bitchat.domain.app.DisableBackgroundMode
 import com.bitchat.domain.app.EnableBackgroundMode
-import com.bitchat.domain.app.GetAppTheme
-import com.bitchat.domain.app.GetBackgroundMode
+import com.bitchat.domain.app.ObserveAppTheme
+import com.bitchat.domain.app.ObserveBackgroundMode
 import com.bitchat.domain.app.SetAppTheme
 import com.bitchat.domain.app.model.AppTheme
 import com.bitchat.domain.app.model.BackgroundMode
 import com.bitchat.domain.initialization.GetAppInformation
 import com.bitchat.domain.initialization.models.AppInformation
 import com.bitchat.domain.initialization.models.Version
+import com.bitchat.domain.lora.GetAvailableLoRaProtocols
 import com.bitchat.domain.lora.GetLoRaSettings
 import com.bitchat.domain.lora.SetLoRaEnabled
 import com.bitchat.domain.lora.SetLoRaRegion
 import com.bitchat.domain.lora.SetLoRaTxPower
 import com.bitchat.domain.lora.SetShowLoRaPeers
 import com.bitchat.domain.lora.SwitchLoRaProtocol
+import com.bitchat.domain.lora.model.LoRaProtocolType
 import com.bitchat.domain.lora.model.LoRaSettings
 import com.bitchat.domain.nostr.GetPowSettings
 import com.bitchat.domain.nostr.SetPowSettings
@@ -25,7 +27,7 @@ import com.bitchat.domain.tor.DisableTor
 import com.bitchat.domain.tor.EnableTor
 import com.bitchat.domain.tor.GetTorAvailability
 import com.bitchat.domain.tor.ObserveRequestedTorMode
-import com.bitchat.domain.tor.GetTorStatus
+import com.bitchat.domain.tor.ObserveTorStatus
 import com.bitchat.domain.tor.model.TorAvailability
 import com.bitchat.domain.tor.model.TorMode
 import com.bitchat.domain.tor.model.TorState
@@ -54,7 +56,7 @@ class SettingsViewModelTorTest : BaseViewModelTest() {
         "Tor unavailable: native library libarti_desktop.so not found on java.library.path=/nowhere. " +
                 "Build it with data/remote/tor/native/build-desktop.sh, or leave Tor off."
 
-    private val getTorStatus = mockk<GetTorStatus>()
+    private val observeTorStatus = mockk<ObserveTorStatus>()
     private val observeRequestedTorMode = mockk<ObserveRequestedTorMode>()
     private val getTorAvailability = mockk<GetTorAvailability>()
     private val enableTor = mockk<EnableTor>(relaxed = true)
@@ -67,28 +69,28 @@ class SettingsViewModelTorTest : BaseViewModelTest() {
     ): SettingsViewModel {
         coEvery { getTorAvailability(Unit) } returns torAvailability
         coEvery { observeRequestedTorMode(Unit) } returns MutableStateFlow(torMode)
-        coEvery { getTorStatus(Unit) } returns flowOf(torStatus)
+        coEvery { observeTorStatus(Unit) } returns flowOf(torStatus)
 
-        val getAppTheme = mockk<GetAppTheme>()
-        coEvery { getAppTheme(Unit) } returns flowOf(AppTheme.SYSTEM)
+        val observeAppTheme = mockk<ObserveAppTheme>()
+        coEvery { observeAppTheme(Unit) } returns flowOf(AppTheme.SYSTEM)
         val getPowSettings = mockk<GetPowSettings>()
-        coEvery { getPowSettings() } returns flowOf(PowSettings())
-        val getBackgroundMode = mockk<GetBackgroundMode>()
-        coEvery { getBackgroundMode(Unit) } returns flowOf(BackgroundMode.OFF)
+        coEvery { getPowSettings(Unit) } returns PowSettings()
+        val observeBackgroundMode = mockk<ObserveBackgroundMode>()
+        coEvery { observeBackgroundMode(Unit) } returns flowOf(BackgroundMode.OFF)
         val getLoRaSettings = mockk<GetLoRaSettings>()
         coEvery { getLoRaSettings(Unit) } returns LoRaSettings()
 
         return SettingsViewModel(
             setAppTheme = mockk<SetAppTheme>(relaxed = true),
-            getAppTheme = getAppTheme,
+            observeAppTheme = observeAppTheme,
             setPowSettings = mockk<SetPowSettings>(relaxed = true),
             getPowSettings = getPowSettings,
-            getTorStatus = getTorStatus,
+            observeTorStatus = observeTorStatus,
             observeRequestedTorMode = observeRequestedTorMode,
             enableTor = enableTor,
             disableTor = disableTor,
             getTorAvailability = getTorAvailability,
-            getBackgroundMode = getBackgroundMode,
+            observeBackgroundMode = observeBackgroundMode,
             enableBackgroundMode = mockk<EnableBackgroundMode>(relaxed = true),
             disableBackgroundMode = mockk<DisableBackgroundMode>(relaxed = true),
             showBackgroundModeSetting = false,
@@ -98,6 +100,7 @@ class SettingsViewModelTorTest : BaseViewModelTest() {
             setLoRaTxPower = mockk<SetLoRaTxPower>(relaxed = true),
             setShowLoRaPeers = mockk<SetShowLoRaPeers>(relaxed = true),
             switchLoRaProtocol = mockk<SwitchLoRaProtocol>(relaxed = true),
+            getAvailableLoRaProtocols = mockk<GetAvailableLoRaProtocols> { coEvery { this@mockk.invoke(Unit) } returns LoRaProtocolType.entries },
             getAppInformation = GetAppInformation(AppInformation(Version("1.0.0", "0", ""), versionCode = 1, id = "test", debug = true)),
         )
     }

@@ -108,7 +108,6 @@ class LaterSubscriptionRepoTest {
         coroutineScopeFacade = object : CoroutineScopeFacade {
             override val applicationScope: CoroutineScope = scope
             override val connectivityEventScope: CoroutineScope = scope
-            override val bluetoothScope: CoroutineScope = scope
             override val nostrScope: CoroutineScope = scope
         },
         locationEventBus = mockk(relaxed = true),

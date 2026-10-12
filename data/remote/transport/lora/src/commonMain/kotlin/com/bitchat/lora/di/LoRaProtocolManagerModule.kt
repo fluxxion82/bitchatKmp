@@ -3,6 +3,7 @@ package com.bitchat.lora.di
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.LoRaProtocolManager
 import com.bitchat.lora.LoRaProtocolType
+import com.bitchat.lora.RegisteredLoRaProtocol
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,7 +47,8 @@ fun loraProtocolManagerModule(initialProtocol: LoRaProtocolType = LoRaProtocolTy
             bitChatProtocol = lazy { get<LoRaProtocol>(LoRaQualifiers.BitChat) },
             meshtasticProtocol = lazy { get<LoRaProtocol>(LoRaQualifiers.Meshtastic) },
             meshcoreProtocol = lazy { get<LoRaProtocol>(LoRaQualifiers.MeshCore) },
-            scope = get(named("loraManagerScope"))
+            scope = get(named("loraManagerScope")),
+            availableTypes = getAll<RegisteredLoRaProtocol>().map { it.type }.toSet(),
         ).apply {
             setActiveType(initialProtocol)
         }

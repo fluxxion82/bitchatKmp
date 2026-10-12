@@ -193,18 +193,6 @@ class LocationRepo(
         TODO("Not yet implemented")
     }
 
-    override suspend fun sendGeohashMessage(
-        content: String,
-        channel: GeohashChannel,
-        myPeerId: String
-    ) = withContext(coroutinesContextFacade.io) {
-        val identity = nostrClient.deriveIdentity(channel.geohash)
-        val teleported = false
-        val event = nostrClient.createEphemeralGeohashEvent(content, channel.geohash, identity, myPeerId, teleported)
-
-        nostrRelay.sendEventToGeohash(event, channel.geohash, includeDefaults = false, nRelays = 5)
-    }
-
     override suspend fun getParticipantCounts(): Map<String, Int> = withContext(coroutinesContextFacade.io) {
         participantTracker.participantCounts.value
     }

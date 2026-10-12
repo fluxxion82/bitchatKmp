@@ -130,6 +130,7 @@ fun SettingsContent(
                         loraTxPower = state.loraTxPower,
                         loraShowPeers = state.loraShowPeers,
                         loraProtocol = state.loraProtocol,
+                        loraProtocols = state.loraProtocols,
                         loraOperation = state.loraOperation,
                         loraSwitchStatus = state.loraSwitchStatus,
                         loraSwitchError = state.loraSwitchError,

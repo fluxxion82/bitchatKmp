@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.Flow
 /**
  * What the user has asked for, for the settings switch to render.
  *
- * Distinct from [GetTorMode], which reports the *effective* mode and so answers OFF whenever
+ * Distinct from `TorRepository.getTorMode`, which reports the *effective* mode and so answers OFF whenever
  * protection is not real. Driving the switch from that meant a failed start left it unchecked and
  * — being disabled at the same time — unable to express OFF at all.
  */
