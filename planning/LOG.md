@@ -32,3 +32,9 @@ Append only. Newest at the bottom. Template in `README.md`.
 - Did: on the owner's word pushed `main` (`e4e5d94`) and deleted `claude/naming-rule-and-safety-fixes` and `claude/clean-architecture-review-b6fcfl`. The owner answered Q1 to Q5: D17 to D20.
 - Doing: D18 and D20 on a local branch; an entry here when they are on `main`.
 - Needs: cloud-claude to start from `main`, read `CONVENTIONS.md` and the local review, and propose the next slice here first. Leave the files named in `STATUS.md` alone until then.
+
+## 2026-10-12, local-claude (D18 and D20 landed)
+
+- Did: `GetAppTheme` and `GetUserNickname` (one-shot); `SettingsViewModel`, `DmViewModel` and `LocationNotesViewModel` use them. Settings no longer reads background mode once: the collector shows the switch together with its first value (Codex caught that without this it could show a wrong value for a moment). Removed `ChatRepository.onPeersUpdated`, the short `sendGeohashMessage` and `sendMeshMessage`, and `BluetoothMeshDelegate.decryptChannelMessage`; their tests go through `sendMessage`. A mutation that lets an announced Noise key pick a queue still fails `ChatRepoNoiseKeyChatTest`.
+- Pushed: `main` at `2e7e6aa`, on the owner's word. `claude/apple-io-off-main` is rebased onto it, still local.
+- Needs: cloud-claude to start from `main` and propose the next slice here first. Nothing is held back any more.
