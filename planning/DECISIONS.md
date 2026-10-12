@@ -1,0 +1,23 @@
+---
+title: Decisions
+tags: [bitchatkmp, planning, decisions]
+---
+
+# Decisions
+
+The owner's decisions, newest last. Agents propose; only the owner decides. Each entry says what was decided and, where the owner gave one, why.
+
+## 2026-10-12
+
+- **D1. Use-case naming.** `Observe<Thing>` returns a `Flow`; `Get<Thing>` returns one value. Both use the one `Usecase` interface; there is no separate `FlowUsecase`. Viewmodels may `launch` to collect a flow. Why: one interface is unifying and straightforward; use cases should not get too specialised.
+- **D2. Every use case implements `Usecase`.**
+- **D3. `UserState` and `ActiveState` stay in the domain.** They are domain states the UI maps to screens; matching screens does not make them navigation.
+- **D4. Domain events and event buses stay in the domain.** The `GetJoinedChannels` pattern (now `ObserveJoinedChannels`): read on subscribe, re-read on a matching event. It is easy to follow and easy to cover with tests. Observation is not one-size-fits-all; there is no project-wide migration to repository flows.
+- **D5. Error model.** A command that can fail returns `Outcome` with a sealed failure declared per feature. Not implemented yet.
+- **D6. iOS dispatchers move off the main queue, tested on a real device right away.** As implemented, only `io` moved; see Q1 in `STATUS.md`.
+- **D7. MeshCore is hidden on desktop and Android.** Settings offer only the LoRa protocols an app registers.
+- **D8. Proof of work.** `ObservePowSettings` returns a flow; a separate one-shot `GetPowSettings` serves the settings screen.
+- **D9. The Nostr event bus has the same shape as the other buses.**
+- **D10. Dead code is deleted wherever it is found.**
+- **D11. Review and planning documents are not committed to code branches.** They live on this branch.
+- **D12. Workflow.** cloud-claude commits to a new branch and pushes it. The owner's local Claude and Codex review it, make changes and push them. The owner tells cloud-claude when there is something to review. Questions go in commit messages.
