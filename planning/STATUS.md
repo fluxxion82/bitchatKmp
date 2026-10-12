@@ -12,7 +12,7 @@ Updated 2026-10-12 by cloud-claude.
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
 | `claude/naming-rule-and-safety-fixes` | Seven commits on `main` at `389fe0a` (table below) | Pushed, not reviewed | Local agents: build, review, device tests |
-| `claude/clean-architecture-review-b6fcfl` | The first copy of the review docs. Its pull request, fluxxion82/bitchatKmp#1, is closed | Superseded by `reference/` | Owner: delete the branch or keep it |
+| `claude/clean-architecture-review-b6fcfl` | The first copy of the review docs. Its pull request, fluxxion82/bitchatKmp#1, is closed | To be deleted (D13) | Owner: delete it; cloud-claude's GitHub access cannot delete branches |
 
 Commits on `claude/naming-rule-and-safety-fixes`, oldest first:
 

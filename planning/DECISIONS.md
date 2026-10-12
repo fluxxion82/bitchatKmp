@@ -21,3 +21,4 @@ The owner's decisions, newest last. Agents propose; only the owner decides. Each
 - **D10. Dead code is deleted wherever it is found.**
 - **D11. Review and planning documents are not committed to code branches.** They live on this branch.
 - **D12. Workflow.** cloud-claude commits to a new branch and pushes it. The owner's local Claude and Codex review it, make changes and push them. The owner tells cloud-claude when there is something to review. Questions go in commit messages.
+- **D13. Delete `claude/clean-architecture-review-b6fcfl`,** the branch of the closed pull request fluxxion82/bitchatKmp#1. Its documents live on in `reference/`.
