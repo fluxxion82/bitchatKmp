@@ -31,6 +31,21 @@ Read these before anything below; they override the sections they name.
 - **Event buses (§6): the owner keeps them, and the `GetJoinedChannels` pattern is the intended design.** Read on subscribe plus `replay = 1` costs at most one extra read, when the replayed event passes the filter; it closes the gap between the first read and the subscription (the comment in `ObserveMeshChannelPeople` says so). It is not a defect. The bus problems that stand: the Nostr bus was a rendezvous channel (fixed), `ChannelJoined` / `ChannelListUpdated` are emitted from both layers, viewmodels subscribe to buses directly, and an emitter waits for the slowest subscriber (not traced to a real hang). Observation is not one-size-fits-all.
 - **Decisions taken since are in `planning/DECISIONS.md`;** the work in flight is in `planning/STATUS.md`.
 
+## Corrections after the local review (2026-10-12)
+
+From local-claude and Codex, each checked in the code. Evidence and the full list: [[2026-10-12-local-review]], section 2.
+
+- **iOS dispatchers (§5, bug 1).** Keeping `default` on the main queue does not keep Bluetooth work serial: CoreBluetooth already calls back on other queues. Moving `io` exposes collections that only the single queue kept safe, and drives `IosLocationService` from a worker. The fix is not in the first slice; it is on `claude/apple-io-off-main`.
+- **Event buses (§6).** `ChannelJoined` / `ChannelListUpdated` are not emitted twice: the use case publishes them when joining an existing channel, the repository when creating one. And read on subscribe plus `replay = 1` closes the start-up gap only for `ObserveMeshChannelPeople`, which treats the first event as "everything changed"; a filtered observer can still miss an event that a later, unrelated one replaced.
+- **Missing filters (§1, §6).** Only `GetAppTheme` misses one it could have. `NostrEvent` has a single variant, and `LocationEvent.NotesChanged` carries no geohash to filter by.
+- **Tor gate (the correction to bug 5).** `LocationRepo` does not fail at once: `RouteAwareClientProvider` waits for a ready route as well, 30 s by default. Both fail closed there.
+- **`TorRepo` and `MutableRequestedTorIntent` (§8).** Not a violation. The port allows a user action or an explicit reset, and `TorRepo` writes only in `setTorMode` and `clearData`.
+- **"Reads collide with writes" (§3, §6).** The comments cited are stale: private-chat reads and writes are under `privateChatsLock` since `142439a`. `ChatRepo.kt:174` is `meshPeers`; the mesh messages are the plain list at 170, under the mutex at 177.
+- **Caller census (§3).** `ChatRepo` calls private `sendGeohashMessage` / `sendMeshMessage` overloads that take a message type. The short public ones have test callers only.
+- **Nostr bus (§6, bug 2).** The terminal UI does have a collector (`TuiViewModels` creates `MainViewModel`). The defect stands for a start with none.
+- **Budgets (§8)** are characters, not bytes: 1,000,000 per chat, 5,000,000 across strangers' chats.
+- **Missed.** `data:repo` is not the only place a repository is implemented: `LocalConnectivityRepository`, and `AndroidConnectivityRepository` beside it, live in `data:local:platform`.
+
 ## Headline
 
 1. **`Observe*` is fine as a name. The drift is that the rule is not applied.** 22 use cases return a `Flow`: 14 are `Observe*`, 8 are `Get*`. Two pairs in the tree already show the intended split (`GetPermissionState` / `ObservePermissionState`, `GetLocationServicesEnabled` / `ObserveLocationServicesEnabled`). Adopt *Observe = Flow, Get = one value* and rename the eight (§1).

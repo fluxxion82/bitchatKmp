@@ -14,7 +14,7 @@ related:
 - **Date:** 2026-10-12, against `389fe0a`.
 - **Input:** the findings in [[2026-10-12-clean-architecture-review]] (section numbers below refer to it as "review §n") and the per-class table in [[2026-10-12-domain-usecase-inventory]].
 - **Scope:** a plan the owner can run incrementally on a live, four-platform app with limited review bandwidth. Nothing here has been implemented. Sizes: S = hours, M = a day or two, L = a week or more.
-- **Why the drift happened, in one line:** nothing executable said no. The only workflow is `.github/workflows/desktop-release.yml` and it runs no tests; there is no Konsist, detekt or ktlint; there is no `CLAUDE.md` or `AGENTS.md`; the rules exist only as prose in `docs/architecture-summary.md`. The guardrails in §3 are therefore not the last step but the first.
+- **Why the drift happened, in one line:** nothing executable said no. The only workflow is `.github/workflows/desktop-release.yml` and it runs no tests; there is no Konsist, detekt or ktlint; there is no tracked `CLAUDE.md` or `AGENTS.md` (the owner keeps local, gitignored ones); the rules exist only as prose in `docs/architecture-summary.md`, which has since left the repository. The guardrails in §3 are therefore not the last step but the first.
 
 ## Status after the owner's review (2026-10-12)
 
@@ -26,6 +26,25 @@ The owner has decided parts of §1; `planning/DECISIONS.md` is the record and wi
 - **(d), (e), (f):** open.
 - **Phase 0:** done on `claude/naming-rule-and-safety-fixes` except 0.5, 0.6, 0.7 and 0.9, which turned out to be latent, not a leak, no visible effect, and not a bug (see the corrections in the review). 0.3 hides MeshCore where its module is not registered instead of registering it.
 - **Phase 1.3 (renames):** done on the same branch.
+
+## Status after the local review (2026-10-12)
+
+From local-claude and Codex; evidence in [[2026-10-12-local-review]]. Read these with the phases they name.
+
+- **The first slice is on `main`** without 0.1. As pushed it did not compile above `:domain` (a viewmodel function shadowed a renamed use case) and failed the desktop Koin `verify()`; both are fixed.
+- **0.1, iOS dispatchers, is not done.** It is on `claude/apple-io-off-main` with `io` limited to one worker, as 0.1 itself proposed, and waits for the owner's iPhone. `default` cannot follow yet: `IosAppLifecycleObserver.initialize` requires the main thread and runs on `default`.
+- **0.3** went further than hiding MeshCore: Settings hide LoRa where no protocol is registered, and a saved protocol the app cannot run reads as BitChat.
+- **Decision (e)** recommends deleting the dispatcher facade because the project "does not use" it for tests. It does: the `data:repo` tests put the test dispatcher into every context and scope. Whatever replaces the facade stays injectable.
+- **1.1, §3.2, §3.6** put the rules in `docs/architecture.md` and a root `CLAUDE.md`. `docs/` has left the repository and `CLAUDE.md` is gitignored on purpose. Where tracked rules live is the owner's call; until then they are in `planning/CONVENTIONS.md`.
+- **1.8 and 1.9** are not one mechanical change. Split them. `ChannelTransport` (MESH, NOSTR, BOTH) and `MeshChannelTransport` (a set of MESH, LORA) mean different things. `:apps:common` contradicts the owner's rule that `apps/` holds only apps.
+- **2.3, notices.** The epoch is captured before a command starts and the send is refused while a wipe runs. Capturing it when the notice is posted is too late. Move command execution and notices together, or neither.
+- **3.3, `AppLifecycle`.** A `StateFlow` alone conflates; `TorLifecycleCoordinator` needs every background edge. Keep ordered edges and the first synchronous value.
+- **4.3.** The two emit sites are two paths, not a duplicate.
+- **5, `ChatRepo`.** "Must not change" is too short. The lock domains, single writers, bounds and "no derived copy of repository state" in `planning/CONVENTIONS.md` all hold; a budget decision made on a snapshot must not be applied to state that changed since. Start with narrow interfaces bound to the one `ChatRepo` and move no state.
+- **5.1.** `deriveChannelKey` / `calculateKeyCommitment` cannot simply give way to `verifyPasswordOwnership`: that one refuses a channel with no commitment, which `JoinChannel` accepts, and it records ownership as a side effect.
+- **§3.** The list still requires `FlowUsecase` (rejected by D1), forbids viewmodel parameters that exist for good reason, and its layering rule fails `data:repo`, which composes the transports by design. Rewrite it before building a check from it.
+- **"Ship as separate PRs"** gives way to D16: one branch per slice, squash-merged.
+- **Each of 2.3, 3.1, 3.3, 5 and the Apple dispatchers needs a short written design reviewed locally before code.** The cloud session builds only `:domain`, so slices that stay inside it suit it best.
 
 ## 0. What drifted, on one screen
 
