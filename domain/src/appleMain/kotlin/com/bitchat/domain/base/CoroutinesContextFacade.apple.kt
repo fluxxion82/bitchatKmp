@@ -1,32 +1,17 @@
 package com.bitchat.domain.base
 
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Runnable
-import platform.darwin.dispatch_async
-import platform.darwin.dispatch_get_main_queue
-import platform.darwin.dispatch_queue_t
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.IO
 import kotlin.coroutines.CoroutineContext
 
 class DefaultContextFacade : CoroutinesContextFacade {
-    override val io = NsQueueDispatcher(dispatch_get_main_queue()) as CoroutineContext
-    override val main = NsQueueDispatcher(dispatch_get_main_queue()) as CoroutineContext
-    override val default = NsQueueDispatcher(dispatch_get_main_queue()) as CoroutineContext
-    override val unconfined = NsQueueDispatcher(dispatch_get_main_queue()) as CoroutineContext
-//    override val errorHandler = CoroutineExceptionHandler { _, error ->
-//        when (error.cause) {
-//            else -> throw error
-//        }
-//    }
-}
+    // One worker: the repositories hold collections that only running one at a time keeps safe.
+    override val io: CoroutineContext = Dispatchers.IO.limitedParallelism(1)
+    override val main: CoroutineContext = Dispatchers.Main
 
-class NsQueueDispatcher(
-    private val dispatchQueue: dispatch_queue_t,
-) : CoroutineDispatcher() {
-    override fun dispatch(context: CoroutineContext, block: Runnable) {
-        dispatch_async(dispatchQueue) {
-            block.run()
-        }
-    }
+    // Initializers and the Bluetooth services' application-scope jobs need the main queue.
+    override val default: CoroutineContext = Dispatchers.Main
+    override val unconfined: CoroutineContext = Dispatchers.Unconfined
 }
 
 actual val defaultContextFacade: CoroutinesContextFacade = DefaultContextFacade()

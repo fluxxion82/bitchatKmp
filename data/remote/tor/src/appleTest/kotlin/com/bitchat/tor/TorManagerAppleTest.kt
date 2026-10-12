@@ -261,8 +261,8 @@ class TorManagerAppleTest {
         val manager = TorManager(tempDir(), fake)
         runBlocking { fake.bringUp(manager, 41240) }
 
-        // Production calls start/stop from the facade's contexts, which are all the main queue on Apple.
-        val mainQueueScope = CoroutineScope(defaultContextFacade.io + SupervisorJob())
+        // EnableTor launches start on the application scope, which is the main queue on Apple.
+        val mainQueueScope = CoroutineScope(defaultContextFacade.main + SupervisorJob())
         val stopped = CompletableDeferred<Result<Unit>>()
         mainQueueScope.launch { stopped.complete(runCatching { manager.stop() }) }
         val dispatched = TimeSource.Monotonic.markNow()

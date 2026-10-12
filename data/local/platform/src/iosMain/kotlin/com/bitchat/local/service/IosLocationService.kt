@@ -5,10 +5,13 @@ import com.bitchat.domain.location.model.LocationUnavailableException
 import kotlinx.cinterop.CValue
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.useContents
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import platform.CoreLocation.CLAuthorizationStatus
 import platform.CoreLocation.CLLocation
 import platform.CoreLocation.CLLocationCoordinate2D
@@ -22,13 +25,18 @@ import platform.CoreLocation.kCLAuthorizationStatusRestricted
 import platform.CoreLocation.kCLLocationAccuracyHundredMeters
 import platform.Foundation.NSError
 import platform.darwin.NSObject
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_main_queue
 import kotlin.coroutines.resumeWithException
 
 @OptIn(ExperimentalForeignApi::class)
 class IosLocationService : LocationService {
-    private val manager = CLLocationManager().apply {
-        desiredAccuracy = kCLLocationAccuracyHundredMeters
-        distanceFilter = 50.0
+    // Made and used on the main queue only: CoreLocation calls the delegate on the thread that made it.
+    private val manager by lazy {
+        CLLocationManager().apply {
+            desiredAccuracy = kCLLocationAccuracyHundredMeters
+            distanceFilter = 50.0
+        }
     }
 
     private fun authStatusString(status: CLAuthorizationStatus): String {
@@ -42,7 +50,9 @@ class IosLocationService : LocationService {
         }
     }
 
-    override suspend fun getCurrentLocation(): GeoPoint {
+    override suspend fun getCurrentLocation(): GeoPoint = withContext(Dispatchers.Main) { requestLocation() }
+
+    private suspend fun requestLocation(): GeoPoint {
         return suspendCancellableCoroutine { cont ->
             var resumed = false
 
@@ -156,8 +166,10 @@ class IosLocationService : LocationService {
 
             cont.invokeOnCancellation {
                 println("📍 [IosLocationService] Request cancelled")
-                manager.stopUpdatingLocation()
-                resumed = true
+                dispatch_async(dispatch_get_main_queue()) {
+                    manager.stopUpdatingLocation()
+                    resumed = true
+                }
             }
         }
     }
@@ -175,12 +187,12 @@ class IosLocationService : LocationService {
         manager.delegate = delegate
         manager.startUpdatingLocation()
         awaitClose { manager.stopUpdatingLocation() }
-    }
+    }.flowOn(Dispatchers.Main)
 
-    override suspend fun hasLocationPermission(): Boolean {
+    override suspend fun hasLocationPermission(): Boolean = withContext(Dispatchers.Main) {
         val status = manager.authorizationStatus
-        return status == kCLAuthorizationStatusAuthorizedWhenInUse ||
-                status == kCLAuthorizationStatusAuthorizedAlways
+        status == kCLAuthorizationStatusAuthorizedWhenInUse ||
+            status == kCLAuthorizationStatusAuthorizedAlways
     }
 
     override suspend fun requestLocationPermission() {
