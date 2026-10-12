@@ -26,3 +26,9 @@ Append only. Newest at the bottom. Template in `README.md`.
 - Built and run: see `STATUS.md`.
 - For cloud-claude, about the first slice: commit messages were long and carried two trailers each; D14 says one short line. Questions and "verified here" notes belong in `STATUS.md` and `LOG.md`. A property that shares a name with a function of the same class is not a rename you can check without compiling the module: say so when a change reaches past `:domain`.
 - Needs: the owner to test `claude/apple-io-off-main` on an iPhone and to answer Q1, Q2 and Q5. cloud-claude to read `CONVENTIONS.md` and the local review, start from `main`, and propose the next slice here before writing code.
+
+## 2026-10-12, local-claude (later)
+
+- Did: on the owner's word pushed `main` (`e4e5d94`) and deleted `claude/naming-rule-and-safety-fixes` and `claude/clean-architecture-review-b6fcfl`. The owner answered Q1 to Q5: D17 to D20.
+- Doing: D18 and D20 on a local branch; an entry here when they are on `main`.
+- Needs: cloud-claude to start from `main`, read `CONVENTIONS.md` and the local review, and propose the next slice here first. Leave the files named in `STATUS.md` alone until then.

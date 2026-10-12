@@ -28,3 +28,8 @@ The owner's decisions, newest last. Agents propose; only the owner decides. Each
 - **D14. Commit messages are simple and concise, with no trailers** such as a session id or a co-author tag. *local-claude's reading, for the owner to confirm:* this replaces "Questions go in commit messages" in D12; questions live in `STATUS.md`.
 - **D15. Code comments are few and simple.** Why: a lot of comments makes the code hard to review and understand, the opposite of what comments are for.
 - **D16. A branch is squash-merged, and the number of commits kept minimal.** Why: agents tend to make excessive commits.
+- **D17. On iOS `default` stays on the main queue for now** (Q1). Before it can move: `IosAppLifecycleObserver` gets itself onto the main queue, and the Apple Bluetooth services' state has one owner each.
+- **D18. One-shot `GetAppTheme` and `GetUserNickname`; no `GetBackgroundMode`** (Q2). Settings stops reading background mode once and keeps the collector.
+- **D19. Settings hide LoRa where no protocol is registered, and a saved protocol the app cannot run reads as the one it falls back to** (Q3, Q4). As implemented on `main`.
+- **D20. The `ChatRepository` methods only tests call are removed now, by a local agent** (Q5): `onPeersUpdated`, the short `sendGeohashMessage` and `sendMeshMessage`, and `BluetoothMeshDelegate.decryptChannelMessage`.
+- D13 is done: both old branches are deleted.
