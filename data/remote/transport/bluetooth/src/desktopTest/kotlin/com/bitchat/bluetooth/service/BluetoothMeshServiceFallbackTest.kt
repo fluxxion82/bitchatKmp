@@ -2226,7 +2226,6 @@ private class FallbackDelegate : BluetoothMeshDelegate {
         delivered += messageID to recipientPeerID
     }
     override fun didReceiveAuthenticatedReadReceipt(messageID: String, recipientPeerID: String) = Unit
-    override suspend fun decryptChannelMessage(encryptedContent: ByteArray, channel: String): String? = null
     override fun getNickname(): String? = null
     override fun isFavorite(peerID: String) = false
     override suspend fun onSessionEstablished(peerID: String) = Unit

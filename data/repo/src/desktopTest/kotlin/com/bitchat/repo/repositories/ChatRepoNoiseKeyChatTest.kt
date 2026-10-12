@@ -38,7 +38,6 @@ class ChatRepoNoiseKeyChatTest {
 
         aPeerWithItsOwnSessionAnnouncesTheKey(mesh, peers)
         repo.onSessionEstablished(IMPOSTOR)
-        repo.onPeersUpdated(listOf(IMPOSTOR))
         repo.didUpdatePeerList(listOf(IMPOSTOR))
 
         assertTrue(sent.isEmpty(), "a text for the holder of a key went to a peer that only claimed the key: $sent")
@@ -53,7 +52,6 @@ class ChatRepoNoiseKeyChatTest {
 
             aPeerWithItsOwnSessionAnnouncesTheKey(mesh, peers)
             repo.onSessionEstablished(IMPOSTOR)
-            repo.onPeersUpdated(listOf(IMPOSTOR))
             repo.didUpdatePeerList(listOf(IMPOSTOR))
 
             verify(exactly = 0) { nostr.sendPrivateMessage(any(), any(), any(), any(), any()) }
@@ -70,7 +68,6 @@ class ChatRepoNoiseKeyChatTest {
             // Nor is the length of the key an announcement carries checked: eight bytes, the id of the peer that is away.
             aPeerWithItsOwnSessionAnnounces(AWAY.chunked(2).map { it.toInt(16).toByte() }.toByteArray(), mesh, peers)
             repo.onSessionEstablished(IMPOSTOR)
-            repo.onPeersUpdated(listOf(IMPOSTOR))
             repo.didUpdatePeerList(listOf(IMPOSTOR))
 
             verify(exactly = 0) { nostr.sendPrivateMessage(any(), any(), any(), any(), any()) }

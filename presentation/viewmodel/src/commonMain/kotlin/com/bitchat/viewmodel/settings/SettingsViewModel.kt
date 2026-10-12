@@ -4,10 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bitchat.domain.app.DisableBackgroundMode
 import com.bitchat.domain.app.EnableBackgroundMode
-import com.bitchat.domain.app.ObserveAppTheme
+import com.bitchat.domain.app.GetAppTheme
 import com.bitchat.domain.app.ObserveBackgroundMode
 import com.bitchat.domain.app.SetAppTheme
-import com.bitchat.domain.app.model.AppTheme
 import com.bitchat.domain.app.model.BackgroundMode
 import com.bitchat.domain.base.invoke
 import com.bitchat.domain.initialization.GetAppInformation
@@ -42,7 +41,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -50,7 +48,7 @@ import kotlinx.coroutines.sync.withLock
 
 class SettingsViewModel(
     private val setAppTheme: SetAppTheme,
-    private val observeAppTheme: ObserveAppTheme,
+    private val getAppTheme: GetAppTheme,
     private val setPowSettings: SetPowSettings,
     private val getPowSettings: GetPowSettings,
     private val observeTorStatus: ObserveTorStatus,
@@ -84,12 +82,9 @@ class SettingsViewModel(
 
     private fun loadInitialState() {
         viewModelScope.launch {
-            val theme = observeAppTheme().firstOrNull() ?: AppTheme.SYSTEM
-            val themePreference = theme.toThemePreference()
+            val themePreference = getAppTheme().toThemePreference()
 
             val powSettings = getPowSettings()
-
-            val backgroundMode = observeBackgroundMode().firstOrNull() ?: BackgroundMode.OFF
 
             val loraSettings = getLoRaSettings()
             val loraProtocols = getAvailableLoRaProtocols()
@@ -106,10 +101,8 @@ class SettingsViewModel(
                     appVersion = appInformation.toVersionLabel(),
                     buildIdentity = appInformation.toBuildIdentity(),
                     selectedTheme = themePreference,
-                    showBackgroundModeSetting = showBackgroundModeSetting,
                     proofOfWorkEnabled = powSettings.enabled,
                     powDifficulty = powSettings.difficulty,
-                    backgroundModeEnabled = backgroundMode == BackgroundMode.ON,
                     torAvailability = torAvailability,
                     loraAvailable = loraProtocols.isNotEmpty(),
                     loraEnabled = loraSettings.enabled,
@@ -157,9 +150,11 @@ class SettingsViewModel(
     private fun collectBackgroundMode() {
         viewModelScope.launch {
             observeBackgroundMode().collect { backgroundMode ->
+                // The switch appears with its first value, not before it.
                 _state.update {
                     it.copy(
-                        backgroundModeEnabled = backgroundMode == BackgroundMode.ON
+                        showBackgroundModeSetting = showBackgroundModeSetting,
+                        backgroundModeEnabled = backgroundMode == BackgroundMode.ON,
                     )
                 }
             }

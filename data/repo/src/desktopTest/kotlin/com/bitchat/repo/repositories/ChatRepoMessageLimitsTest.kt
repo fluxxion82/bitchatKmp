@@ -6,6 +6,7 @@ import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.PrivateMessageText
 import com.bitchat.domain.chat.model.BitchatMessageType
 import com.bitchat.domain.location.model.Channel
+import com.bitchat.domain.location.model.GeohashChannelLevel
 import com.bitchat.cache.impl.InMemoryCache
 import com.bitchat.nostr.NostrEmbeddedBitChat
 import com.bitchat.nostr.NostrSubscriptionId
@@ -572,9 +573,8 @@ class ChatRepoMessageLimitsTest {
         val failures = listOf(
             assertFailsWith<IllegalArgumentException> { repo.sendMessage(tooLong, Channel.Mesh, "me", BitchatMessageType.Message) },
             assertFailsWith<IllegalArgumentException> { repo.sendMessage(tooLong, Channel.MeshDM("friend"), "me", BitchatMessageType.Message) },
-            assertFailsWith<IllegalArgumentException> { repo.sendMeshMessage(tooLong, "me") },
             assertFailsWith<IllegalArgumentException> { repo.sendPrivate(tooLong, "friend", "friend") },
-            assertFailsWith<IllegalArgumentException> { repo.sendGeohashMessage(tooLong, "9q8yy", "me") },
+            assertFailsWith<IllegalArgumentException> { repo.sendMessage(tooLong, Channel.Location(GeohashChannelLevel.CITY, "9q8yy"), "me", BitchatMessageType.Message) },
         )
 
         for (failure in failures) assertEquals(expected, failure.message)

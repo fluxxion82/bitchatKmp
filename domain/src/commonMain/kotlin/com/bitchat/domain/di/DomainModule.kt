@@ -5,6 +5,7 @@ import com.bitchat.domain.app.AppForegroundState
 import com.bitchat.domain.app.DisableBackgroundMode
 import com.bitchat.domain.app.DisableBatteryOptimization
 import com.bitchat.domain.app.EnableBackgroundMode
+import com.bitchat.domain.app.GetAppTheme
 import com.bitchat.domain.app.ObserveAppTheme
 import com.bitchat.domain.app.ObserveBackgroundMode
 import com.bitchat.domain.app.SetAppTheme
@@ -92,6 +93,7 @@ import com.bitchat.domain.tor.eventbus.TorEventBus
 import com.bitchat.domain.user.BlockUser
 import com.bitchat.domain.user.GetAllFavorites
 import com.bitchat.domain.user.GetBlockedUsers
+import com.bitchat.domain.user.GetUserNickname
 import com.bitchat.domain.user.ObserveUserNickname
 import com.bitchat.domain.user.GetUserState
 import com.bitchat.domain.user.SaveUserStateAction
@@ -112,6 +114,7 @@ val domainModule = module {
 
     single { SetAppTheme(repository = get(), eventBus = get()) }
     single { ObserveAppTheme(repository = get(), eventBus = get()) }
+    single { GetAppTheme(repository = get()) }
     single { SkipBatteryOptimization(repository = get()) }
     single { DisableBatteryOptimization(repository = get()) }
     single {
@@ -158,6 +161,7 @@ val domainModule = module {
     }
 
     single { ObserveUserNickname(userRepository = get(), userEventBus = get()) }
+    single { GetUserNickname(userRepository = get()) }
 
     single { SetUserNickname(userRepository = get(), userEventBus = get()) }
 

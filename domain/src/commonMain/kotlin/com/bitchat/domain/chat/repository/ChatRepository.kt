@@ -55,14 +55,10 @@ interface ChatRepository {
     suspend fun getSelectedPrivatePeer(): String?
     suspend fun setSelectedPrivatePeer(peerID: String?)
     suspend fun markPrivateChatRead(peerID: String)
-    suspend fun sendGeohashMessage(content: String, geohash: String, nickname: String)
-    suspend fun sendMeshMessage(content: String, nickname: String)
-
     suspend fun sendPrivate(content: String, toPeerID: String, recipientNickname: String)
     suspend fun sendReadReceipt(originalMessageID: String, readerPeerID: String?, toPeerID: String)
     suspend fun sendDeliveryAck(messageID: String, toPeerID: String)
     suspend fun sendFavoriteNotification(toPeerID: String, isFavorite: Boolean)
-    suspend fun onPeersUpdated(peers: List<String>)
     suspend fun onSessionEstablished(peerID: String)
 
     suspend fun joinChannel(channel: String, password: String? = null): Boolean

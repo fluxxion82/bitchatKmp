@@ -7,14 +7,13 @@ import com.bitchat.domain.location.ObserveNotes
 import com.bitchat.domain.location.ResolveLocationName
 import com.bitchat.domain.location.SendNote
 import com.bitchat.domain.location.model.GeohashChannelLevel
-import com.bitchat.domain.user.ObserveUserNickname
+import com.bitchat.domain.user.GetUserNickname
 import com.bitchat.viewvo.location.LocationNotesState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -31,7 +30,7 @@ import kotlinx.coroutines.launch
 class LocationNotesViewModel(
     private val observeNotes: ObserveNotes,
     private val sendNote: SendNote,
-    private val observeUserNickname: ObserveUserNickname,
+    private val getUserNickname: GetUserNickname,
     private val getLocationGeohash: GetLocationGeohash,
     private val resolveLocationName: ResolveLocationName,
     private val geohash: String? = null,
@@ -99,7 +98,7 @@ class LocationNotesViewModel(
         viewModelScope.launch {
             _state.update { it.copy(isSending = true) }
             try {
-                val nickname = observeUserNickname(Unit).first()
+                val nickname = getUserNickname(Unit)
                 sendNote(
                     SendNote.Params(
                         content = content,

@@ -3,6 +3,9 @@ package com.bitchat.repo.repositories
 import com.bitchat.bluetooth.service.BluetoothMeshService
 import com.bitchat.bluetooth.model.PeerInfo
 import com.bitchat.domain.chat.model.BitchatMessage
+import com.bitchat.domain.chat.model.BitchatMessageType
+import com.bitchat.domain.location.model.Channel
+import com.bitchat.domain.location.model.GeohashChannelLevel
 import com.bitchat.domain.user.eventbus.UserEventBus
 import com.bitchat.domain.user.model.FavoriteRelationship
 import com.bitchat.domain.user.model.UserEvent
@@ -223,7 +226,7 @@ class ChatRepoLearnedNamesTest {
             relay(geohashEvent("event-1", other, nickname = "alice", createdAt = start))
 
             clock.advance(4.minutes)
-            repo.sendGeohashMessage("hi", GEOHASH, "me")
+            repo.sendMessage("hi", Channel.Location(GeohashChannelLevel.CITY, GEOHASH), "me", BitchatMessageType.Message)
             // The relay echoes the user's message, and hands over a copy of the other event, both
             // dated now and under another name. Neither is new: neither is looked at.
             relay(geohashEvent("own-1", ME.publicKeyHex, nickname = "renamed", createdAt = start + 240))

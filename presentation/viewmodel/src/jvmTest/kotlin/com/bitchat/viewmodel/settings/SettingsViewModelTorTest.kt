@@ -3,7 +3,7 @@ package com.bitchat.viewmodel.settings
 import app.cash.turbine.test
 import com.bitchat.domain.app.DisableBackgroundMode
 import com.bitchat.domain.app.EnableBackgroundMode
-import com.bitchat.domain.app.ObserveAppTheme
+import com.bitchat.domain.app.GetAppTheme
 import com.bitchat.domain.app.ObserveBackgroundMode
 import com.bitchat.domain.app.SetAppTheme
 import com.bitchat.domain.app.model.AppTheme
@@ -71,8 +71,8 @@ class SettingsViewModelTorTest : BaseViewModelTest() {
         coEvery { observeRequestedTorMode(Unit) } returns MutableStateFlow(torMode)
         coEvery { observeTorStatus(Unit) } returns flowOf(torStatus)
 
-        val observeAppTheme = mockk<ObserveAppTheme>()
-        coEvery { observeAppTheme(Unit) } returns flowOf(AppTheme.SYSTEM)
+        val getAppTheme = mockk<GetAppTheme>()
+        coEvery { getAppTheme(Unit) } returns AppTheme.SYSTEM
         val getPowSettings = mockk<GetPowSettings>()
         coEvery { getPowSettings(Unit) } returns PowSettings()
         val observeBackgroundMode = mockk<ObserveBackgroundMode>()
@@ -82,7 +82,7 @@ class SettingsViewModelTorTest : BaseViewModelTest() {
 
         return SettingsViewModel(
             setAppTheme = mockk<SetAppTheme>(relaxed = true),
-            observeAppTheme = observeAppTheme,
+            getAppTheme = getAppTheme,
             setPowSettings = mockk<SetPowSettings>(relaxed = true),
             getPowSettings = getPowSettings,
             observeTorStatus = observeTorStatus,

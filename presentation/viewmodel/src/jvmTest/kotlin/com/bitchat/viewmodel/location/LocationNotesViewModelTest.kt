@@ -4,14 +4,13 @@ import com.bitchat.domain.location.GetLocationGeohash
 import com.bitchat.domain.location.ObserveNotes
 import com.bitchat.domain.location.ResolveLocationName
 import com.bitchat.domain.location.SendNote
-import com.bitchat.domain.user.ObserveUserNickname
+import com.bitchat.domain.user.GetUserNickname
 import com.bitchat.viewmodel.BaseViewModelTest
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.emptyFlow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -34,7 +33,7 @@ class LocationNotesViewModelTest : BaseViewModelTest() {
         sendNote = mockk<SendNote> {
             coEvery { this@mockk.invoke(any()) } answers { sent += firstArg<SendNote.Params>().content }
         },
-        observeUserNickname = mockk<ObserveUserNickname> { coEvery { this@mockk.invoke(Unit) } returns flowOf("anon") },
+        getUserNickname = mockk<GetUserNickname> { coEvery { this@mockk.invoke(Unit) } returns "anon" },
         getLocationGeohash = mockk<GetLocationGeohash> {
             coEvery { this@mockk.invoke(any()) } throws IllegalStateException("no location source")
         },

@@ -1731,7 +1731,6 @@ interface BluetoothMeshDelegate {
     fun didReceiveChannelLeave(channel: String, fromPeer: String)
     fun didReceiveAuthenticatedDeliveryAck(messageID: String, recipientPeerID: String)
     fun didReceiveAuthenticatedReadReceipt(messageID: String, recipientPeerID: String)
-    suspend fun decryptChannelMessage(encryptedContent: ByteArray, channel: String): String?
     fun getNickname(): String?
     fun isFavorite(peerID: String): Boolean
     suspend fun onSessionEstablished(peerID: String)

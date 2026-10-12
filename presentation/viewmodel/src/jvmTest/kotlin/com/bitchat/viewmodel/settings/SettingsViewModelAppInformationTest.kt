@@ -2,7 +2,7 @@ package com.bitchat.viewmodel.settings
 
 import com.bitchat.domain.app.DisableBackgroundMode
 import com.bitchat.domain.app.EnableBackgroundMode
-import com.bitchat.domain.app.ObserveAppTheme
+import com.bitchat.domain.app.GetAppTheme
 import com.bitchat.domain.app.ObserveBackgroundMode
 import com.bitchat.domain.app.SetAppTheme
 import com.bitchat.domain.app.model.AppTheme
@@ -34,10 +34,14 @@ import com.bitchat.viewmodel.BaseViewModelTest
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.test.assertNull
 
 /**
@@ -52,23 +56,27 @@ class SettingsViewModelAppInformationTest : BaseViewModelTest() {
     private val identityLine =
         "bitchat-tui 1.0.0 (65d65087cd41, main, dirty, release, built 2026-09-30T10:11:12-07:00)"
 
-    private fun buildViewModel(appInformation: AppInformation): SettingsViewModel {
-        val theme = mockk<ObserveAppTheme> { coEvery { this@mockk.invoke(Unit) } returns flowOf(AppTheme.SYSTEM) }
+    private fun buildViewModel(
+        appInformation: AppInformation,
+        backgroundMode: Flow<BackgroundMode> = flowOf(BackgroundMode.OFF),
+        showBackgroundModeSetting: Boolean = false,
+    ): SettingsViewModel {
+        val theme = mockk<GetAppTheme> { coEvery { this@mockk.invoke(Unit) } returns AppTheme.SYSTEM }
         val pow = mockk<GetPowSettings> { coEvery { this@mockk.invoke(Unit) } returns PowSettings() }
-        val background = mockk<ObserveBackgroundMode> { coEvery { this@mockk.invoke(Unit) } returns flowOf(BackgroundMode.OFF) }
+        val background = mockk<ObserveBackgroundMode> { coEvery { this@mockk.invoke(Unit) } returns backgroundMode }
         val lora = mockk<GetLoRaSettings> { coEvery { this@mockk.invoke(Unit) } returns LoRaSettings() }
         val torStatus = mockk<ObserveTorStatus> { coEvery { this@mockk.invoke(Unit) } returns flowOf(TorStatus()) }
         val torMode = mockk<ObserveRequestedTorMode> { coEvery { this@mockk.invoke(Unit) } returns flowOf(TorMode.OFF) }
         val torAvailable = mockk<GetTorAvailability> { coEvery { this@mockk.invoke(Unit) } returns TorAvailability.AVAILABLE }
         return SettingsViewModel(
-            setAppTheme = mockk<SetAppTheme>(relaxed = true), observeAppTheme = theme,
+            setAppTheme = mockk<SetAppTheme>(relaxed = true), getAppTheme = theme,
             setPowSettings = mockk<SetPowSettings>(relaxed = true), getPowSettings = pow,
             observeTorStatus = torStatus, observeRequestedTorMode = torMode,
             enableTor = mockk<EnableTor>(relaxed = true), disableTor = mockk<DisableTor>(relaxed = true),
             getTorAvailability = torAvailable, observeBackgroundMode = background,
             enableBackgroundMode = mockk<EnableBackgroundMode>(relaxed = true),
             disableBackgroundMode = mockk<DisableBackgroundMode>(relaxed = true),
-            showBackgroundModeSetting = false, getLoRaSettings = lora,
+            showBackgroundModeSetting = showBackgroundModeSetting, getLoRaSettings = lora,
             setLoRaEnabled = mockk<SetLoRaEnabled>(relaxed = true),
             setLoRaRegion = mockk<SetLoRaRegion>(relaxed = true),
             setLoRaTxPower = mockk<SetLoRaTxPower>(relaxed = true),
@@ -85,6 +93,19 @@ class SettingsViewModelAppInformationTest : BaseViewModelTest() {
         id = "com.bitchat.tui",
         debug = false,
     )
+
+    @Test
+    fun `the background switch appears with the saved value and not before it is known`() = runTest {
+        val saved = MutableSharedFlow<BackgroundMode>(extraBufferCapacity = 1)
+        val viewModel = buildViewModel(information("1.0.0", identityLine), saved, showBackgroundModeSetting = true)
+        assertFalse(viewModel.state.value.showBackgroundModeSetting)
+
+        saved.tryEmit(BackgroundMode.ON)
+        instantExecutorRule.scheduler.runCurrent()
+
+        assertTrue(viewModel.state.value.showBackgroundModeSetting)
+        assertTrue(viewModel.state.value.backgroundModeEnabled)
+    }
 
     @Test
     fun `an embedded build's identity reaches the settings state as it was written`() = runTest {

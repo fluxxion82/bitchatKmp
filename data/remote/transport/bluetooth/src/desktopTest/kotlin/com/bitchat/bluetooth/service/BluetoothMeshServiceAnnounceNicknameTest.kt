@@ -103,7 +103,6 @@ private class NicknameDelegate : BluetoothMeshDelegate {
     override fun didReceiveChannelLeave(channel: String, fromPeer: String) = Unit
     override fun didReceiveAuthenticatedDeliveryAck(messageID: String, recipientPeerID: String) = Unit
     override fun didReceiveAuthenticatedReadReceipt(messageID: String, recipientPeerID: String) = Unit
-    override suspend fun decryptChannelMessage(encryptedContent: ByteArray, channel: String): String? = null
     override fun isFavorite(peerID: String) = false
     override suspend fun onSessionEstablished(peerID: String) = Unit
     override fun didReceivePublicFile(peerID: String, filePacket: BitchatFilePacket) = Unit

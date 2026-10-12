@@ -607,11 +607,6 @@ class ChatRepo(
         }
     }
 
-    override suspend fun sendGeohashMessage(content: String, geohash: String, nickname: String): Unit {
-        requireSendable(content)
-        sendGeohashMessage(content, geohash, nickname, BitchatMessageType.Message)
-    }
-
     private suspend fun sendGeohashMessage(
         content: String,
         geohash: String,
@@ -743,11 +738,6 @@ class ChatRepo(
                 throw e // Re-throw so ViewModel can show error to user
             }
         }
-
-    override suspend fun sendMeshMessage(content: String, nickname: String): Unit {
-        requireSendable(content)
-        sendMeshMessage(content, nickname, BitchatMessageType.Message)
-    }
 
     private suspend fun sendMeshMessage(
         content: String,
@@ -1839,10 +1829,6 @@ class ChatRepo(
 
     // What is queued for a peer is queued under its mesh id, and only that id says whose queue is
     // sent. The Noise key a peer announces is checked against nothing: it names no queue.
-    override suspend fun onPeersUpdated(peers: List<String>) = withContext(coroutinesContextFacade.io) {
-        peers.forEach { pid -> flushOutboxFor(pid) }
-    }
-
     override suspend fun onSessionEstablished(peerID: String): Unit = withContext(coroutinesContextFacade.io) {
         println("🔐 Session established for: $peerID")
         flushOutboxFor(peerID)
@@ -1897,20 +1883,6 @@ class ChatRepo(
         }
         channelPreferences.removeChannelEventId(normalized)
     }
-
-    override suspend fun decryptChannelMessage(encryptedContent: ByteArray, channel: String): String? =
-        withContext(coroutinesContextFacade.io) {
-            val normalized = normalizeChannelName(channel)
-            val key = channelKeys[normalized] ?: return@withContext null
-
-            try {
-                if (encryptedContent.size < 12) return@withContext null // Minimum: 12 bytes IV
-
-                Cryptography.decryptAESGCM(encryptedContent, key)
-            } catch (e: Exception) {
-                null
-            }
-        }
 
     override suspend fun getJoinedChannelsList(): List<String> = withContext(coroutinesContextFacade.io) {
         channelPreferences.getJoinedChannelsList().toList().sorted()

@@ -103,7 +103,7 @@ val viewModelModule = module {
             observeSelectedPrivatePeer = get(),
             markPrivateChatRead = get(),
             sendMessage = get(),
-            observeUserNickname = get()
+            getUserNickname = get()
         )
     }
 
@@ -131,7 +131,7 @@ val viewModelModule = module {
     viewModel { params ->
         SettingsViewModel(
             setAppTheme = get(),
-            observeAppTheme = get(),
+            getAppTheme = get(),
             setPowSettings = get(),
             getPowSettings = get(),
             observeTorStatus = get(),
@@ -160,7 +160,7 @@ val viewModelModule = module {
         LocationNotesViewModel(
             observeNotes = get(),
             sendNote = get(),
-            observeUserNickname = get(),
+            getUserNickname = get(),
             getLocationGeohash = get(),
             resolveLocationName = get(),
             geohash = geohash,

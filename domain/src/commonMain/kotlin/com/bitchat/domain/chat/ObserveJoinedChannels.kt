@@ -21,9 +21,7 @@ class ObserveJoinedChannels(
             .collect { event ->
                 when (event) {
                     ChatEvent.ChannelJoined,
-                    ChatEvent.ChannelLeft -> {
-                        send(chatRepository.getJoinedChannelsList().toSet())
-                    }
+                    ChatEvent.ChannelLeft -> send(chatRepository.getJoinedChannelsList().toSet())
 
                     else -> Unit
                 }

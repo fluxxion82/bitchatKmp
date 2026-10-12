@@ -2,7 +2,7 @@ package com.bitchat.viewmodel.settings
 
 import com.bitchat.domain.app.DisableBackgroundMode
 import com.bitchat.domain.app.EnableBackgroundMode
-import com.bitchat.domain.app.ObserveAppTheme
+import com.bitchat.domain.app.GetAppTheme
 import com.bitchat.domain.app.ObserveBackgroundMode
 import com.bitchat.domain.app.SetAppTheme
 import com.bitchat.domain.app.model.AppTheme
@@ -60,7 +60,7 @@ class SettingsViewModelLoRaTest : BaseViewModelTest() {
         protocol: LoRaProtocolType = LoRaProtocolType.MESHCORE,
         available: List<LoRaProtocolType> = LoRaProtocolType.entries,
     ): SettingsViewModel {
-        val theme = mockk<ObserveAppTheme> { coEvery { this@mockk.invoke(Unit) } returns flowOf(AppTheme.SYSTEM) }
+        val theme = mockk<GetAppTheme> { coEvery { this@mockk.invoke(Unit) } returns AppTheme.SYSTEM }
         val pow = mockk<GetPowSettings> { coEvery { this@mockk.invoke(Unit) } returns PowSettings() }
         val background = mockk<ObserveBackgroundMode> { coEvery { this@mockk.invoke(Unit) } returns flowOf(BackgroundMode.OFF) }
         val lora = mockk<GetLoRaSettings> { coEvery { this@mockk.invoke(Unit) } returns LoRaSettings(protocol = protocol) }
@@ -68,7 +68,7 @@ class SettingsViewModelLoRaTest : BaseViewModelTest() {
         val torMode = mockk<ObserveRequestedTorMode> { coEvery { this@mockk.invoke(Unit) } returns flowOf(TorMode.OFF) }
         val torAvailable = mockk<GetTorAvailability> { coEvery { this@mockk.invoke(Unit) } returns TorAvailability.NO_PROXY_SUPPORT }
         return SettingsViewModel(
-            setAppTheme = mockk<SetAppTheme>(relaxed = true), observeAppTheme = theme,
+            setAppTheme = mockk<SetAppTheme>(relaxed = true), getAppTheme = theme,
             setPowSettings = mockk<SetPowSettings>(relaxed = true), getPowSettings = pow,
             observeTorStatus = torStatus, observeRequestedTorMode = torMode,
             enableTor = mockk<EnableTor>(relaxed = true), disableTor = mockk<DisableTor>(relaxed = true),
