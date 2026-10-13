@@ -97,3 +97,45 @@ Append only. Newest at the bottom. Template in `README.md`.
 
 - Did: on the owner's word pushed `main` (`d1d6d67`) and deleted `claude/konsist-architecture-tests` and `claude/error-model`. The owner accepted the changed texts (D26) and chose the next slice (D27).
 - Needs: cloud-claude to fetch `main` and start D27 as described under Asks in `STATUS.md`: the test list here first, then the branch.
+
+## 2026-10-13, cloud-claude (D27 test list)
+
+- Read: `STATUS.md`, `reference/2026-10-13-local-review.md`, the Failures section of `CONVENTIONS.md`, D26 and D27, and `main` at `d1d6d67`. Taken on board: a failure carries the fact from where it happened; list every changed text by path; name the input commits and the tasks of a scratch build, and do not call a stubbed build by a module's task name.
+- Plan: two branches from `d1d6d67`, both inside `:domain`, in this order. Each test is checked to bite: for each case, a mutation of the use case that breaks it must fail it.
+
+**1. `claude/error-contract-tests`.** Tests only; no file under `commonMain` changes.
+
+`SetChannelPasswordTest` (new). "No commitment" means `getChannelKeyCommitment` returns null.
+- No commitment, not the owner: `OnlyCreatorCanSetPassword`. Nothing written, no event.
+- No commitment, the owner: the new password is written, `ChannelOwnershipVerified(name)` is published, success.
+- No commitment, the write throws with a message, and without one: `PasswordNotSaved(message)` and `PasswordNotSaved(null)`. No event.
+- A commitment, no current password, ownership verifies: success, nothing written. It does not verify: `WrongPassword`.
+- A commitment and a current password whose commitment differs: `WrongPassword`. Nothing written, `verifyPasswordOwnership` not called.
+- The current password matches, the owner: the new password is written, the event is published, `verifyPasswordOwnership` is not called.
+- The current password matches, not the owner: `verifyPasswordOwnership(name, current)` is called before the write, then success. The stub returns true; the test does not pin what a false result does (it is called for its side effect, see the 2026-10-12 review).
+- The change's write throws: `PasswordNotSaved(message)`.
+- Cancellation out of the write, on the initial path and on the change path: rethrown, not a failure.
+
+`JoinChannelTest` (added):
+- A protected channel without a password: `WrongPassword`. No key derived, nothing written, no join, no event.
+- A protected channel and a password whose commitment differs from the advertised one: `WrongPassword`. Nothing written, no join.
+- A protected channel with no advertised commitment: any password is taken (plan §5.1 records this). It is written, the join is made with it, `ChannelJoined` and `ChannelListUpdated` are published, and the result is an existing channel.
+- A protected channel and the right password: written, joined, success.
+
+`SwitchLoRaProtocolTest`: each of `NoRadio`, `NotRegistered`, `KeepsOwnRadioSettings(MESHTASTIC)` and `NotApplied` is returned as it came, with the preference saved before the call. An exception that is not cancellation propagates, after the save.
+
+`ReconfigureLoRaSettingsTest`: the same four failures and success, for region and for power, saved before the call. An exception that is not cancellation propagates, after the save.
+
+Not tested on purpose: an exception from discovery, key derivation or verification (D5 is not finished, see `STATUS.md` Next), and the event publish inside the write's `try` (local review §3).
+
+**2. `claude/observer-fixes`.**
+- `ObserveAppTheme` re-reads only on `ThemeUpdated`. This is the one change to `commonMain`. Its pattern stays (D4): read on start, re-read on a matching event, no shared helper.
+- `ObserveAppThemeTest` (new):
+  - With `BackgroundModeChanged` in the replay slot, the start emits one theme from one read. This fails on `main` and is the defect being fixed.
+  - `ThemeUpdated` re-reads.
+  - A later `BackgroundModeChanged` does not.
+- `ObserveJoinedChannelsTest`: with `ChannelChanged` in the replay slot, the start emits once from one read.
+- `ObserveUserNicknameTest`: with `StateChanged` in the replay slot, the start emits once from one read.
+- A matching event in the replay slot still causes one re-read at the start. That is today's behaviour on every bus (D4) and is left as it is.
+
+Each branch: one commit with a one-line message, then a LOG entry naming the input commit, the scratch build's tasks and what was not run.
