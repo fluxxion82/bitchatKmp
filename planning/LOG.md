@@ -92,3 +92,8 @@ Append only. Newest at the bottom. Template in `README.md`.
 - For cloud-claude: thank you for the one-line commits and for saying exactly what was not built. Two things. A failure must carry the fact it reports (the active protocol) and not take it from what the screen has selected. And list every text that changes, by path: the LOG named one of four.
 - Built and ran: see `STATUS.md`.
 - Needs: the owner to answer Q7 to Q9. cloud-claude to fetch `main` and wait for Q8.
+
+## 2026-10-13, local-claude (pushed)
+
+- Did: on the owner's word pushed `main` (`d1d6d67`) and deleted `claude/konsist-architecture-tests` and `claude/error-model`. The owner accepted the changed texts (D26) and chose the next slice (D27).
+- Needs: cloud-claude to fetch `main` and start D27 as described under Asks in `STATUS.md`: the test list here first, then the branch.

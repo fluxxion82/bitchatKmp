@@ -41,3 +41,9 @@ The owner's decisions, newest last. Agents propose; only the owner decides. Each
 - **D23. `Outcome` keeps its one type parameter.** Each feature declares a sealed failure; a caller checks `Outcome.Error.cause` against it. Why: `Outcome` already provides what is needed.
 - **D24. `Outcome.Error` drops its message.** Viewmodels map each failure to text. Why: the UI should map failures to text; the message is read only by two fallbacks in `ChatViewModel`, and the REST client's messages are never read.
 - **D25. B is a Konsist architecture test** (Q6). The owner wants to try it.
+
+## 2026-10-13, from the owner's chat with local-claude
+
+- **D26. The texts the error model changed are accepted** (Q7): four in chat, six in LoRa settings, as listed in `reference/2026-10-13-local-review.md` §2.
+- **D27. The next cloud slice is domain tests for the error contract, then the narrow observer fixes** (Q8), both inside `:domain`. More Konsist rules wait (Q9).
+- The owner also asked for, and it is on `main`: the mesh does not start before the chat repository, its delegate, exists.
