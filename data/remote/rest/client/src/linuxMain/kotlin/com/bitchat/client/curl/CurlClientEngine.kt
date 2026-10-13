@@ -76,6 +76,8 @@ internal class CurlClientEngine(
         curlProcessor.close()
     }
 
+    override val teardownStage: String? get() = curlProcessor.teardownStage
+
     override suspend fun awaitRouteTeardown() {
         curlProcessor.awaitTeardown()
     }

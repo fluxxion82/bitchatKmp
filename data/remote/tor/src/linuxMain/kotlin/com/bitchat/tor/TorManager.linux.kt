@@ -90,6 +90,7 @@ actual class TorManager internal constructor(
     }
 
     actual suspend fun start() = lifecycle.withLock {
+        removeEmptyArtiCacheFiles(dataDir) { println("TorManager: $it") }
         stopping = false
         activeGeneration += 1UL
         currentPort = null
@@ -174,6 +175,7 @@ actual class TorManager internal constructor(
                         val generation = activeGeneration
                         currentPort = null
                         _statusFlow.value = outcome.status
+                        removeEmptyArtiCacheFiles(dataDir) { println("TorManager: $it") }
                         val result = arti_start(dataDir, 0, generation)
                         if (result != 0) {
                             nativeError(generation, "Arti start call failed: $result")

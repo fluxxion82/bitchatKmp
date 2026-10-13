@@ -123,6 +123,7 @@ actual class TorManager internal constructor(
         val generation = activeGeneration
         currentPort = null
         _statusFlow.value = starting
+        removeEmptyArtiCacheFiles(dataDir, log = ::logArtiLine)
         val result = native.start(dataDir, 0, generation)
         if (result != 0) {
             nativeError(generation, "Arti start call failed: $result")

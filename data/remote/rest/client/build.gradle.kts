@@ -64,6 +64,7 @@ kotlin {
             dependencies {
                 implementation("org.jetbrains.kotlin:kotlin-test")
                 implementation("org.jetbrains.kotlin:kotlin-test-junit")
+                implementation(libs.kotlinx.coroutines.test)
 
             }
         }

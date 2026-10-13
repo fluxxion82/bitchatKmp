@@ -29,6 +29,10 @@ internal class CurlProcessor(coroutineContext: CoroutineContext) {
     private var curlApi: CurlMultiApiHandler? by atomic(null)
     private val closed = atomic(false)
     private val teardown = CompletableDeferred<Unit>()
+    private val stage = atomic<String?>(null)
+
+    /** Where [close] is waiting, null until it is called. */
+    val teardownStage: String? get() = stage.value
 
     private val curlScope = CoroutineScope(coroutineContext + curlDispatcher)
     private val requestQueue: Channel<RequestContainer> = Channel(Channel.UNLIMITED)
@@ -93,12 +97,16 @@ internal class CurlProcessor(coroutineContext: CoroutineContext) {
         if (!closed.compareAndSet(false, true)) return
 
         requestQueue.close()
+        stage.value = "waiting for the event loop to stop"
         curlApi!!.wakeup()
 
         GlobalScope.launch(curlDispatcher) {
             try {
+                stage.value = "waiting for the engine's work to end"
                 curlScope.coroutineContext[Job]!!.join()
-                curlApi!!.close()
+                stage.value = "releasing libcurl handles"
+                curlApi!!.close { stage.value = "releasing libcurl handles: $it" }
+                stage.value = "released"
                 teardown.complete(Unit)
             } catch (error: Throwable) {
                 teardown.completeExceptionally(error)

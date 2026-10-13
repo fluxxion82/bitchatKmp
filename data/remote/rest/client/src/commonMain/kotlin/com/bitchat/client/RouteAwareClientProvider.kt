@@ -25,6 +25,9 @@ class TorRouteRequiredException : IllegalStateException("Tor is requested but no
 
 /** Implemented by engines whose native sockets outlive the client coroutine job. */
 internal interface RouteTeardownAwaiter {
+    /** Where [awaitRouteTeardown] is waiting, for the error when it does not finish. */
+    val teardownStage: String? get() = null
+
     suspend fun awaitRouteTeardown()
 }
 
@@ -37,27 +40,45 @@ class RoutedHttpClient internal constructor(
     override fun isCurrent(): Boolean = provenance.isCurrent()
     fun close() = client.close()
     suspend fun closeAndJoin() {
+        var step = CLOSING_CLIENT
         try {
-            closeAndJoinOnce()
+            closeAndJoinOnce { step = it }
         } catch (error: Throwable) {
             // Preserve this exact native shutdown owner after the tracked coroutine completes.
             routes.retainFailedRetirement(blocksTorEnable = !provenance.usedTorProxy) {
                 closeAndJoinOnce()
             }
-            throw RouteRetirementException("Outbound transport did not close within 15 seconds", error)
+            throw RouteRetirementException(
+                "Outbound transport did not close within 15 seconds (still ${stepDescription(step)})",
+                error,
+            )
         }
     }
 
-    private suspend fun closeAndJoinOnce() = withContext(NonCancellable) {
+    private suspend fun closeAndJoinOnce(inStep: (String) -> Unit = {}) = withContext(NonCancellable) {
         // Bound cancellation, Ktor's engine job, and native processor teardown as one shutdown.
         withTimeout(15.seconds) {
+            inStep(CLOSING_CLIENT)
             client.close()
+            inStep(ENDING_CLIENT_WORK)
             client.coroutineContext[Job]?.cancelAndJoin()
+            inStep(AWAITING_ENGINE)
             (client.engine as? RouteTeardownAwaiter)?.awaitRouteTeardown()
         }
     }
+
+    private fun stepDescription(step: String): String {
+        if (step != AWAITING_ENGINE) return step
+        val stage = (client.engine as? RouteTeardownAwaiter)?.teardownStage ?: return step
+        return "$step: $stage"
+    }
+
     internal fun lease(): RouteLease = routeLease
 }
+
+private const val CLOSING_CLIENT = "closing the client"
+private const val ENDING_CLIENT_WORK = "ending the client's work"
+private const val AWAITING_ENGINE = "waiting for the engine to release its sockets"
 
 private data class NativeTorRoute(
     val proxy: ProxyConfig,

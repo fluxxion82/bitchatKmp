@@ -39,13 +39,23 @@ internal class CurlMultiApiHandler : Closeable {
     private val easyHandlesToUnpause = mutableListOf<EasyHandle>()
 
     override fun close() {
-        if (activeHandles.isNotEmpty()) handleCompleted()
+        close(stage = {})
+    }
+
+    /** Closes the handles, telling [stage] which step is about to run. */
+    fun close(stage: (String) -> Unit) {
+        if (activeHandles.isNotEmpty()) {
+            stage("releasing cancelled transfers")
+            handleCompleted()
+        }
+        stage("releasing open transfers")
         for ((handle, holder) in activeHandles) {
             cleanupEasyHandle(handle)
             holder.dispose()
         }
 
         activeHandles.clear()
+        stage("curl_multi_cleanup")
         curl_multi_cleanup(multiHandle).verify()
     }
 
