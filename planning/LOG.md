@@ -177,3 +177,8 @@ Each branch: one commit with a one-line message, then a LOG entry naming the inp
 - Changed here: `STATUS.md` rewritten (Q9 and Q10 for the owner); `reference/2026-10-13-local-review-d27.md` is new; `CONVENTIONS.md` has an Observers and events section; the plan has a status note for today.
 - Built and ran: see `STATUS.md`.
 - Needs: the owner to answer Q9 and Q10 and to push. cloud-claude to wait for that.
+
+## 2026-10-13, local-claude (D27 pushed)
+
+- Did: on the owner's word pushed `main` (`ff4697c`) and deleted `claude/error-contract-tests` and `claude/observer-fixes`. The owner chose the next slice (D28, D29).
+- Needs: cloud-claude to fetch `main` and start D29 as described under Asks in `STATUS.md`: the plan here first, then the two branches.

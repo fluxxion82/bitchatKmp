@@ -11,8 +11,7 @@ Updated 2026-10-13 by local-claude.
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | `ff4697c`. Since `d1d6d67`: three commits of the owner's side (`0a97ab8` board dialling in the Bluetooth module, `e231574` private text limit for the radio, `068261d` a `GetPrivateTextLimit` use case), then D27: `417f2d1` (error-contract tests) and `ff4697c` (theme observer, and the wipe publishing `ThemeUpdated`) | On the owner's machine, not pushed: `origin/main` is still `d1d6d67` | Owner: push |
-| `claude/error-contract-tests`, `claude/observer-fixes` | D27 as pushed (`ff92f7c`, `cb67ad6`) | Superseded by `main` | Owner: delete |
+| `main` | `ff4697c`. Since `d1d6d67`: three commits of the owner's side (`0a97ab8` board dialling in the Bluetooth module, `e231574` private text limit for the radio, `068261d` a `GetPrivateTextLimit` use case), then D27: `417f2d1` (error-contract tests) and `ff4697c` (theme observer, and the wipe publishing `ThemeUpdated`) | Pushed 2026-10-13 | cloud-claude: start the next slice from here (D29) |
 
 ## D27, as landed
 
@@ -34,15 +33,17 @@ By local-claude on macOS arm64, on the tree that landed:
 
 Not run: any app on a phone or a board.
 
+`claude/error-contract-tests` and `claude/observer-fixes` are deleted; `main` holds them.
+
 ## Asks
 
-1. **Owner:** Q9 and Q10 below.
-2. **cloud-claude:** fetch `main` once this file says it is pushed. Read `reference/2026-10-13-local-review-d27.md` and the new Observers and events section of `CONVENTIONS.md`. Wait for the owner's answer to Q10, then propose the slice in `LOG.md` before writing code.
+1. **cloud-claude: the next slice is decided (D28, D29).** Fetch `main` at `ff4697c`; it has three commits you have not seen besides your own. Read `reference/2026-10-13-local-review-d27.md` and the Observers and events section of `CONVENTIONS.md`. Put the plan in `LOG.md` first. Two branches, in this order, both inside `:domain`:
+   - **Two Konsist rules in `domain`'s `ArchitectureTest`.** Every interface named `*Repository` sits in `com.bitchat.domain.<feature>.repository`; every interface named `*EventBus` sits in `com.bitchat.domain.<feature>.eventbus`. Select across all production sources of the module, assert the selection is not empty, and plant a misplaced interface to see each rule fail. No exception list is needed today (9 repositories, 7 buses, all in place). Ports that are not repositories or buses (`RequestedTorIntent`, `TorCapability`, `AppInitializer`, …) are not in scope. The other three candidates wait.
+   - **File names that differ from their class.** `location/model/ChannelID.kt` to `Channel.kt`; `connectivity/model/BluetoothEvent.kt` to `BluetoothConnectionEvent.kt`; `connectivity/model/LocationEvent.kt` to `LocationConnectionEvent.kt`; `Version` out of `initialization/models/AppInformation.kt` into `Version.kt` in the same package. Same packages, same declarations, no `@Serializable` name changes, nothing outside the renamed files changes. Not the `models` to `model` package move. Use `git mv` so the history follows.
 
 ## Open questions
 
-- **Q9 (Konsist, `ab48a4e`). Which rules next?** Five candidates, none with a violation today, in `reference/2026-10-13-local-review-d27.md` §3. local-claude's recommendation: the two placement rules inside `:domain` first (repository interfaces, event-bus interfaces); the other three as source checks after.
-- **Q10. What is the next slice?** Recommendation in `reference/2026-10-13-local-review-d27.md` §4: Q9's two rules if yes, then the file names that differ from their class; both stay inside `:domain`.
+None.
 
 ## Answered
 
@@ -53,6 +54,8 @@ Not run: any app on a phone or a board.
 - **Q6.** B is a Konsist architecture test (D25).
 - **Q7.** The changed texts are accepted (D26).
 - **Q8.** Domain tests for the error contract, then the narrow observer fixes (D27). Done, on `main`.
+- **Q9.** The two placement rules inside `:domain` now; the other three candidates wait (D28, the owner, 2026-10-13).
+- **Q10.** Next: those two rules, then the file names that differ from their class (D29, the owner, 2026-10-13).
 
 ## Next
 

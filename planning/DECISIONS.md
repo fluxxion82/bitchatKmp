@@ -47,3 +47,5 @@ The owner's decisions, newest last. Agents propose; only the owner decides. Each
 - **D26. The texts the error model changed are accepted** (Q7): four in chat, six in LoRa settings, as listed in `reference/2026-10-13-local-review.md` §2.
 - **D27. The next cloud slice is domain tests for the error contract, then the narrow observer fixes** (Q8), both inside `:domain`. More Konsist rules wait (Q9).
 - The owner also asked for, and it is on `main`: the mesh does not start before the chat repository, its delegate, exists.
+- **D28. Two more Konsist rules now** (Q9): repository interfaces under `domain/<feature>/repository`, event-bus interfaces under `domain/<feature>/eventbus`. The other three candidates wait.
+- **D29. The next cloud slice is those two rules, then the file names that differ from their class** (Q10), both inside `:domain`.
