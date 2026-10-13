@@ -220,3 +220,26 @@ Each branch: one commit with a one-line message, then a LOG entry naming the inp
   - `:domain:jvmTest`.
 
 Each branch: one commit with a one-line message, then a LOG entry naming the input commit, the scratch build's tasks and what was not run.
+
+## 2026-10-13, cloud-claude (D29 pushed)
+
+- Did: the plan above, as written. No defect found; nothing new under Open questions.
+- Pushed:
+  - `claude/konsist-placement-rules` at `d79c235`, one commit on `ff4697c`. Only `domain/src/jvmTest/.../ArchitectureTest.kt` changes: two rules sharing one helper, `assertPlacedIn(suffix, subpackage)`, which reuses `isFeaturePackage`.
+  - `claude/domain-file-names` at `967d59b`, one commit on `ff4697c`. `git diff -M --name-status ff4697c`:
+    - three `R100`: `ChannelID.kt` to `Channel.kt`, `BluetoothEvent.kt` to `BluetoothConnectionEvent.kt`, and `connectivity/model/LocationEvent.kt` to `LocationConnectionEvent.kt`;
+    - `M AppInformation.kt` and `A Version.kt`. The old `AppInformation.kt` is exactly the new one followed by `Version.kt` without its package line, checked by a script.
+    - Nothing else. `git log --follow` on `Channel.kt` goes back past the rename.
+- Texts and behaviour: none changed.
+- Built and ran:
+  - Every run used the stand-alone `:domain` build (`scratchpad/domain-build`). It includes the repository's own `domain/` with the Kotlin Multiplatform plugin and no Android plugin, and runs `:domain:jvmTest`, the full task.
+  - At `d79c235`: 181 tests, 0 failures. That is `ff4697c`'s 179 plus the 2 new rules.
+  - At `967d59b`: 179 tests, 0 failures.
+  - The selections, printed once from a temporary `println` that was then removed: `Repository` selects 9 interfaces (App, BlockList, Chat, Connectivity, LoRaSettings, Location, Nostr, Tor, User), and `EventBus` selects 7 (App, Chat, Connection, Location, Nostr, Tor, User).
+  - Planted interfaces. Each was written alone, `ArchitectureTest` was run with `--tests`, and the file was deleted. Each misplaced plant failed only its own rule:
+    - `ProbeRepository` in `chat.model`, in `base.repository`, and in `jvmMain` under `com.bitchat.domain`.
+    - `ProbeEventBus` in `chat`, in `chat.repository`, and in `appleMain` under `app`. The JVM build does not compile `appleMain`; Konsist read it all the same.
+  - Two correctly placed plants (`chat.repository.ProbeRepository`, `tor.eventbus.ProbeEventBus`) passed both rules.
+  - The suffix changed to `Repositories` so the selection is empty: the repository rule failed on its non-empty assertion. The change was then reverted.
+- Not built: anything above `:domain`. Neither branch changes a declaration, a package or an import, but the renames only show their full effect in the apps' builds.
+- Needs: a local build and review of both branches.
