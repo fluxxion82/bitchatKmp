@@ -50,6 +50,8 @@ internal class CurlMultiApiHandler : Closeable {
         }
         stage("releasing open transfers")
         for ((handle, holder) in activeHandles) {
+            // Closed first, as the two other cleanup paths do: a WebSocket send may be using the handle.
+            holder.responseWrapper.get().close()
             cleanupEasyHandle(handle)
             holder.dispose()
         }

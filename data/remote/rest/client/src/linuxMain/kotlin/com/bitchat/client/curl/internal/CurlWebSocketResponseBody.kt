@@ -4,6 +4,8 @@
 
 package com.bitchat.client.curl.internal
 
+import io.ktor.utils.io.InternalAPI
+import io.ktor.utils.io.locks.*
 import io.ktor.websocket.*
 import kotlinx.atomicfu.atomic
 import kotlinx.cinterop.*
@@ -13,7 +15,7 @@ import libcurl.*
 import platform.posix.size_t
 import platform.posix.size_tVar
 
-@OptIn(ExperimentalForeignApi::class)
+@OptIn(ExperimentalForeignApi::class, InternalAPI::class)
 internal class CurlWebSocketResponseBody(
     private val curl: EasyHandle
 ) : CurlResponseBodyData {
@@ -21,19 +23,24 @@ internal class CurlWebSocketResponseBody(
     private val closed = atomic(false)
     private val _incoming = Channel<Frame>(Channel.UNLIMITED)
 
+    // A send runs on its caller's thread; whoever frees the handle closes this body first and so waits for it.
+    private val sendLock = SynchronizedObject()
+
     val incoming: ReceiveChannel<Frame>
         get() = _incoming
 
     @OptIn(ExperimentalForeignApi::class)
-    fun sendFrame(flags: Int, data: ByteArray) = memScoped {
-        if (closed.value) return@memScoped
+    fun sendFrame(flags: Int, data: ByteArray) = synchronized(sendLock) {
+        if (closed.value) return@synchronized
 
-        val sent = alloc<size_tVar>()
-        data.usePinned { pinned ->
-            val address = if (data.isEmpty()) null else pinned.addressOf(0)
-            val status = curl_ws_send(curl, address, data.size.convert(), sent.ptr, 0, flags.convert())
-            if ((flags and CURLWS_CLOSE) == 0) {
-                status.verify()
+        memScoped {
+            val sent = alloc<size_tVar>()
+            data.usePinned { pinned ->
+                val address = if (data.isEmpty()) null else pinned.addressOf(0)
+                val status = curl_ws_send(curl, address, data.size.convert(), sent.ptr, 0, flags.convert())
+                if ((flags and CURLWS_CLOSE) == 0) {
+                    status.verify()
+                }
             }
         }
     }
@@ -76,7 +83,7 @@ internal class CurlWebSocketResponseBody(
     }
 
     override fun close(cause: Throwable?) {
-        if (!closed.compareAndSet(expect = false, update = true)) return
-        _incoming.close()
+        val first = synchronized(sendLock) { closed.compareAndSet(expect = false, update = true) }
+        if (first) _incoming.close()
     }
 }

@@ -63,6 +63,9 @@ class RoutedHttpClient internal constructor(
             inStep(ENDING_CLIENT_WORK)
             client.coroutineContext[Job]?.cancelAndJoin()
             inStep(AWAITING_ENGINE)
+            // Ktor cancels, not closes, the engine of a client whose job was cancelled, and an
+            // engine releases its sockets only in close.
+            client.engine.close()
             (client.engine as? RouteTeardownAwaiter)?.awaitRouteTeardown()
         }
     }

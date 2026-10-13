@@ -4,9 +4,11 @@ import io.ktor.client.HttpClient
 import io.ktor.client.HttpClientConfig
 import io.ktor.client.engine.HttpClientEngineBase
 import io.ktor.client.engine.HttpClientEngineConfig
+import io.ktor.client.engine.HttpClientEngineFactory
 import io.ktor.client.plugins.HttpClientPlugin
 import io.ktor.client.request.HttpRequestData
 import io.ktor.client.request.HttpResponseData
+import io.ktor.client.request.get
 import io.ktor.util.AttributeKey
 import io.ktor.utils.io.InternalAPI
 import kotlinx.coroutines.CompletableDeferred
@@ -44,6 +46,38 @@ class RoutedHttpClientRetirementTest {
             mayRelease.await()
         }
     }
+
+    /** Like the Curl engine: releases its sockets only in [close], and says so once however often it is closed. */
+    @OptIn(InternalAPI::class)
+    private class ReleasingEngine(testDispatcher: CoroutineDispatcher) :
+        HttpClientEngineBase("releasing"), RouteTeardownAwaiter {
+        override val config = HttpClientEngineConfig().apply { dispatcher = testDispatcher }
+        private val released = CompletableDeferred<Unit>()
+        var requests = 0
+        var closeCalls = 0
+        var releases = 0
+
+        override suspend fun execute(data: HttpRequestData): HttpResponseData {
+            requests++
+            awaitCancellation()
+        }
+
+        override fun close() {
+            closeCalls++
+            super.close()
+            if (released.complete(Unit)) releases++
+        }
+
+        override suspend fun awaitRouteTeardown() = released.await()
+    }
+
+    /** Hands Ktor an engine to manage, the way `HttpClient(engineFactory)` does in production. */
+    private class ManagedBy(private val engine: ReleasingEngine) : HttpClientEngineFactory<HttpClientEngineConfig> {
+        override fun create(block: HttpClientEngineConfig.() -> Unit) = engine
+    }
+
+    private suspend fun TestScope.managed(engine: ReleasingEngine) =
+        RoutedHttpClient(HttpClient(ManagedBy(engine)), RouteGenerations(), RouteGenerations().admit(), Provenance(false))
 
     /** Makes `HttpClient.close()` itself throw: Ktor closes every installed plugin that is AutoCloseable. */
     private class ThrowsOnClose : AutoCloseable {
@@ -125,6 +159,31 @@ class RoutedHttpClientRetirementTest {
             error.message,
         )
         assertEquals("close failed", error.cause?.message)
+    }
+
+    @Test
+    fun `a managed engine is closed when the client is retired with a request in flight`() = runTest {
+        val engine = ReleasingEngine(StandardTestDispatcher(testScheduler))
+        val client = managed(engine)
+        client.client.launch { client.client.get("http://relay.invalid/") }
+        testScheduler.runCurrent()
+        assertEquals(1, engine.requests, "the request must be in flight")
+
+        client.closeAndJoin()
+
+        assertTrue(engine.closeCalls >= 1, "the engine was cancelled but never closed")
+        assertEquals(1, engine.releases)
+    }
+
+    @Test
+    fun `a managed engine closed by Ktor and again on retirement releases once`() = runTest {
+        val engine = ReleasingEngine(StandardTestDispatcher(testScheduler))
+        val client = managed(engine)
+
+        client.closeAndJoin()
+
+        assertEquals(2, engine.closeCalls, "Ktor closes it when the idle client completes and retirement closes it again")
+        assertEquals(1, engine.releases)
     }
 
     @Test
