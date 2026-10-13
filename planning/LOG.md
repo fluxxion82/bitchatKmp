@@ -139,3 +139,32 @@ Not tested on purpose: an exception from discovery, key derivation or verificati
 - A matching event in the replay slot still causes one re-read at the start. That is today's behaviour on every bus (D4) and is left as it is.
 
 Each branch: one commit with a one-line message, then a LOG entry naming the input commit, the scratch build's tasks and what was not run.
+
+## 2026-10-13, cloud-claude (D27 pushed)
+
+- Did: the test list above, as listed, on two branches.
+  - The one change to the list: the protected-channel-without-a-commitment case stubs the key derivation. A relaxed mock cannot return a `ByteArray` from a suspend call.
+  - No test showed a defect, so there is nothing new under Open questions.
+- Pushed:
+  - `claude/error-contract-tests` at `ff92f7c`, one commit on `d1d6d67`. It changes test files only:
+    - `SetChannelPasswordTest` (new, 10 tests)
+    - `JoinChannelTest` (+4)
+    - `SwitchLoRaProtocolTest` (one test now loops over all four failures, +1 for exceptions)
+    - `ReconfigureLoRaSettingsTest` (its loops cover all four failures and success, +1 for exceptions)
+  - `claude/observer-fixes` at `cb67ad6`, one commit on `d1d6d67`:
+    - `ObserveAppTheme.kt` re-reads only on `ThemeUpdated`.
+    - `ObserveAppThemeTest` (new, 3 tests), `ObserveJoinedChannelsTest` (+1), `ObserveUserNicknameTest` (+1).
+- Texts: none changed.
+- Behaviour, `claude/observer-fixes` only: `MainViewModel`'s theme collector no longer gets the theme again when background mode is toggled, nor at its start when `BackgroundModeChanged` was the bus's last event. `SetAppTheme` is the only publisher of `ThemeUpdated`, and it still re-reads.
+- Built and ran:
+  - The stand-alone `:domain` build: `scratchpad/domain-build` includes the repository's own `domain/` with the Kotlin Multiplatform plugin and no Android plugin. It ran `:domain:jvmTest`, the full task, including the three Konsist rules:
+    - At `ff92f7c`: 172 tests, 0 failures.
+    - At `cb67ad6`: 161 tests, 0 failures. `d1d6d67` has 156.
+  - On `d1d6d67` before the fix: the two new `ObserveAppThemeTest` cases that check `BackgroundModeChanged` failed in 3 runs out of 3, with `--rerun-tasks`. They pass after it, also 3 out of 3.
+  - Mutations, each applied alone to the `commonMain` file, then the test class run with `--tests`, then the file restored. Every one failed at least one of the new tests:
+    - `SetChannelPassword`: 12. No owner check; no event on the first password or on a change; the message dropped from either write; cancellation swallowed on either path; ownership always verified; the ownership path writing the password; no commitment check on a change; owner and non-owner swapped; ownership claimed after the write instead of before.
+    - `JoinChannel`: 5. No password read as `JoinFailed`; no commitment check; a missing commitment refusing every password; the password not written; joined without the password.
+    - The LoRa use cases: 8. A failure turned into `NotApplied` (`NoRadio` for a switch and for power, `NotRegistered` for region); `KeepsOwnRadioSettings` losing its protocol; the protocol saved after the call; an exception turned into `NotApplied` (switch, region, power).
+    - The observers: 4. `ObserveJoinedChannels` and `ObserveUserNickname` re-reading on every event; `ObserveAppTheme` re-reading on every event (that is `main`'s behaviour) and never re-reading.
+- Not built: anything above `:domain`. Only `ObserveAppTheme` changes outside tests, and its one caller, `MainViewModel`, collects it unchanged.
+- Needs: a local build and review of both branches.

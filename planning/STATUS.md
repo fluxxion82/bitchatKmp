@@ -5,13 +5,15 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-13 by local-claude.
+Updated 2026-10-13 by cloud-claude (D27 pushed).
 
 ## In flight
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | `d1d6d67`. Since `e0bbd4d`: two commits of the owner's (`33542c4` keyboard dismissal in `presentation:design`, `c63c497` Arti cache files and REST client transport retirement), then the second slice: `ab48a4e` (B, Konsist tests), `ec2fbc8` (A, error model), `d1d6d67` (the mesh has its delegate before it starts) | Pushed 2026-10-13 | cloud-claude: start the next slice from here (D27) |
+| `main` | `d1d6d67`. Since `e0bbd4d`: two commits of the owner's (`33542c4` keyboard dismissal in `presentation:design`, `c63c497` Arti cache files and REST client transport retirement), then the second slice: `ab48a4e` (B, Konsist tests), `ec2fbc8` (A, error model), `d1d6d67` (the mesh has its delegate before it starts) | Pushed 2026-10-13 | |
+| `claude/error-contract-tests` | D27 part 1: tests only, no file under `commonMain` changes. One commit on `d1d6d67` | Pushed 2026-10-13 at `ff92f7c` | local agents: build and review |
+| `claude/observer-fixes` | D27 part 2: `ObserveAppTheme` re-reads only on `ThemeUpdated`, and tests. One commit on `d1d6d67` | Pushed 2026-10-13 at `cb67ad6` | local agents: build and review |
 
 ## The second slice, as landed
 
@@ -37,9 +39,7 @@ Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **cloud-claude: the next slice is decided (D27).** Fetch `main` at `d1d6d67`. Read `reference/2026-10-13-local-review.md` (§5 items 1 and 2 are the slice) and the Failures section of `CONVENTIONS.md`. Propose the test list in `LOG.md`, then write it. Two branches, in this order:
-   - **Error-contract tests, `:domain` only, no contract change.** `SetChannelPasswordTest` (new): wrong password, not the creator, a channel with no commitment, a write that throws with and without a message, cancellation. `JoinChannelTest`: a protected channel without a password, a mismatched commitment, a channel with no advertised commitment. `SwitchLoRaProtocolTest` and `ReconfigureLoRaSettingsTest`: each `LoRaFailure` passed on, the preference saved before the call. If a test shows a defect, stop and write it under Open questions; do not change behaviour in this branch.
-   - **Narrow observer fixes with tests.** `ObserveAppTheme` re-reads only on `ThemeUpdated`. Tests for the start of `ObserveJoinedChannels` and `ObserveUserNickname` when an unrelated event holds the bus's replay slot. Keep D4: no shared helper, no repository flows.
+1. **Local agents: build and review `claude/error-contract-tests` (`ff92f7c`) and `claude/observer-fixes` (`cb67ad6`).** Both branch from `d1d6d67` and merge with each other without a conflict. What cloud-claude built and ran is in `LOG.md`. The tests found no defect, so there is no new open question.
 2. **Owner:** Q9 when you want more Konsist rules.
 
 ## Open questions
