@@ -182,3 +182,41 @@ Each branch: one commit with a one-line message, then a LOG entry naming the inp
 
 - Did: on the owner's word pushed `main` (`ff4697c`) and deleted `claude/error-contract-tests` and `claude/observer-fixes`. The owner chose the next slice (D28, D29).
 - Needs: cloud-claude to fetch `main` and start D29 as described under Asks in `STATUS.md`: the plan here first, then the two branches.
+
+## 2026-10-13, cloud-claude (D29 plan)
+
+- Read:
+  - `STATUS.md`, `reference/2026-10-13-local-review-d27.md`, the Observers and events section and the Konsist and scratch-build lines of `CONVENTIONS.md`, and D28 and D29.
+  - `main` at `ff4697c`, including `0a97ab8`, `e231574` and `068261d`. Neither branch touches `PrivateTextLimit` or `GetPrivateTextLimit`.
+- Taken on board:
+  - Before narrowing an observer, find every writer of what it observes.
+  - A test that records undecided behaviour says "today" in its name.
+  - My "no test showed a defect" overstated it; the theme tests did reproduce the defect they were written for.
+- Plan: two branches from `ff4697c`, both inside `:domain`, in this order.
+
+**1. `claude/konsist-placement-rules`.** Only `domain/src/jvmTest/.../ArchitectureTest.kt` changes.
+- `everyRepositoryInterfaceSitsInItsFeaturesRepositoryPackage`: every interface in the module's production sources whose name ends in `Repository` is in `com.bitchat.domain.<feature>.repository`. A feature is one segment after `com.bitchat.domain`, not `base` or `di`; this is the same test the use-case rule already applies. It asserts first that it selected something.
+- `everyEventBusInterfaceSitsInItsFeaturesEventbusPackage`: the same for `EventBus` and `.eventbus`.
+- No exception list. Today there are 9 repositories and 7 buses, all in place.
+- Each rule is checked to fail on a planted interface. Each plant is added alone and removed after its run:
+  - `ProbeRepository` in `chat.model` (a feature, wrong subpackage).
+  - `ProbeRepository` in `base.repository` (not a feature).
+  - `ProbeRepository` in `jvmMain`, package `com.bitchat.domain` (another source set).
+  - `ProbeEventBus` in `chat` (the feature root).
+  - `ProbeEventBus` in `chat.repository` (the wrong kind of package).
+  - `ProbeEventBus` in `appleMain` (a source set the JVM build does not compile, which Konsist still reads).
+- The non-empty assertion is checked by changing a selection's suffix so it matches nothing. The rule must then fail.
+
+**2. `claude/domain-file-names`.** Moves only.
+- `git mv location/model/ChannelID.kt location/model/Channel.kt`
+- `git mv connectivity/model/BluetoothEvent.kt connectivity/model/BluetoothConnectionEvent.kt`
+- `git mv connectivity/model/LocationEvent.kt connectivity/model/LocationConnectionEvent.kt`
+- `Version`, with its KDoc, moves out of `initialization/models/AppInformation.kt` into a new `initialization/models/Version.kt`. Git cannot follow a split; the other three are pure renames.
+- Same packages, declarations and `@SerialName`s. No `models` to `model` move.
+- None of the four files has a top-level function, so no JVM facade class (`ChannelIDKt` and the like) exists to change name. Nothing in the repository names these files.
+- Checked by:
+  - `git diff -M --name-status` against `ff4697c`: three `R100` and the one split, nothing else.
+  - The declarations before and after are the same text.
+  - `:domain:jvmTest`.
+
+Each branch: one commit with a one-line message, then a LOG entry naming the input commit, the scratch build's tasks and what was not run.
