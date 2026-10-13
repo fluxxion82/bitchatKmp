@@ -40,6 +40,12 @@ The project's working rules, for agents that cannot see the owner's local instru
 - A fact a failure carries comes from where the failure happened, never from what the screen has selected: the selection and the running state can differ.
 - A fact about state behind a lock is decided under that lock and returned from there. Do not read it again after the call has returned.
 
+## Observers and events
+
+- An observer reads on start and reads again on a matching event (D4).
+- Before narrowing which events an observer reads again on, find every writer of what it observes, in every layer, and check that each publishes that event. The publishers of an event are not the writers of the state: a wipe reset the theme without `ThemeUpdated`.
+- A test that records behaviour nobody has decided says so in its name ("today"), so it is not read as a rule.
+
 ## Structure that must survive a refactoring
 
 Nothing on the mesh, on LoRa or from a relay authenticates its sender, and most of what contains that lives in `ChatRepo`. Each item below went through adversarial review. A refactoring may move one only after a written design has been reviewed locally.

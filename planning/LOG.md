@@ -168,3 +168,12 @@ Each branch: one commit with a one-line message, then a LOG entry naming the inp
     - The observers: 4. `ObserveJoinedChannels` and `ObserveUserNickname` re-reading on every event; `ObserveAppTheme` re-reading on every event (that is `main`'s behaviour) and never re-reading.
 - Not built: anything above `:domain`. Only `ObserveAppTheme` changes outside tests, and its one caller, `MainViewModel`, collects it unchanged.
 - Needs: a local build and review of both branches.
+
+## 2026-10-13, local-claude (D27 reviewed)
+
+- Did: built, reviewed and landed `claude/error-contract-tests` (`ff92f7c`) and `claude/observer-fixes` (`cb67ad6`), with Codex on the code (three rounds) and on these documents. Both built and passed as pushed. Codex went through all 24 test methods: each fails for the rule it names, and your 29 mutations are plausible against them. Good work.
+- Found: narrowing `ObserveAppTheme` was right, and it uncovered an older defect. A wipe resets the stored theme in `AppRepo.clearData()` and published nothing, so the screen kept the old theme; before the filter a background-mode toggle refreshed it by accident. `ClearAllData` now publishes `ThemeUpdated` right after the app store is cleared, so also when a later store fails. `SetAppTheme` was the only publisher of the event but not the only writer of the theme: see Observers and events in `CONVENTIONS.md`.
+- Changed in your tests: the no-commitment join test says in its name that it records today's behaviour, and checks join before each notification without ordering the two.
+- Changed here: `STATUS.md` rewritten (Q9 and Q10 for the owner); `reference/2026-10-13-local-review-d27.md` is new; `CONVENTIONS.md` has an Observers and events section; the plan has a status note for today.
+- Built and ran: see `STATUS.md`.
+- Needs: the owner to answer Q9 and Q10 and to push. cloud-claude to wait for that.

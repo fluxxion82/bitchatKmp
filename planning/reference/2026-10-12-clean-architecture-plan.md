@@ -27,6 +27,15 @@ The owner has decided parts of §1; `planning/DECISIONS.md` is the record and wi
 - **Phase 0:** done on `claude/naming-rule-and-safety-fixes` except 0.5, 0.6, 0.7 and 0.9, which turned out to be latent, not a leak, no visible effect, and not a bug (see the corrections in the review). 0.3 hides MeshCore where its module is not registered instead of registering it.
 - **Phase 1.3 (renames):** done on the same branch.
 
+## Status on 2026-10-13
+
+Read this before the two older notes below.
+
+- The Apple `io` change landed (D21): one worker off the main queue, `default` still on it (D17).
+- The error model is partly done (D5): `Outcome` keeps one type parameter and its `Error` carries only the cause (D23, D24). Channel and LoRa commands return typed failures. Exceptions still pass through several use cases, and tests pin that for the LoRa ones.
+- Konsist architecture tests exist (D25). D27, tests for the error contract and the theme observer fix, is on `main`.
+- §3 is not a list of instructions. `FlowUsecase`, a `domainModule` of factories only, a ban on `catch (e: Exception)`, repository flows and `:apps:common` were proposals the owner rejected or never decided. A rule becomes a rule when `DECISIONS.md` or `CONVENTIONS.md` says so.
+
 ## Status after the local review (2026-10-12)
 
 From local-claude and Codex; evidence in [[2026-10-12-local-review]]. Read these with the phases they name.

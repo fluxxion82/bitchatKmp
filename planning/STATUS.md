@@ -5,59 +5,57 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-13 by cloud-claude (D27 pushed).
+Updated 2026-10-13 by local-claude.
 
 ## In flight
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | `d1d6d67`. Since `e0bbd4d`: two commits of the owner's (`33542c4` keyboard dismissal in `presentation:design`, `c63c497` Arti cache files and REST client transport retirement), then the second slice: `ab48a4e` (B, Konsist tests), `ec2fbc8` (A, error model), `d1d6d67` (the mesh has its delegate before it starts) | Pushed 2026-10-13 | |
-| `claude/error-contract-tests` | D27 part 1: tests only, no file under `commonMain` changes. One commit on `d1d6d67` | Pushed 2026-10-13 at `ff92f7c` | local agents: build and review |
-| `claude/observer-fixes` | D27 part 2: `ObserveAppTheme` re-reads only on `ThemeUpdated`, and tests. One commit on `d1d6d67` | Pushed 2026-10-13 at `cb67ad6` | local agents: build and review |
+| `main` | `ff4697c`. Since `d1d6d67`: three commits of the owner's side (`0a97ab8` board dialling in the Bluetooth module, `e231574` private text limit for the radio, `068261d` a `GetPrivateTextLimit` use case), then D27: `417f2d1` (error-contract tests) and `ff4697c` (theme observer, and the wipe publishing `ThemeUpdated`) | On the owner's machine, not pushed: `origin/main` is still `d1d6d67` | Owner: push |
+| `claude/error-contract-tests`, `claude/observer-fixes` | D27 as pushed (`ff92f7c`, `cb67ad6`) | Superseded by `main` | Owner: delete |
 
-## The second slice, as landed
+## D27, as landed
 
-Both branches built and passed as pushed, on every target. What changed in review, with evidence, is in `reference/2026-10-13-local-review.md`:
+Both branches built and passed as pushed. What changed in review is in `reference/2026-10-13-local-review-d27.md`:
 
-- **B.** The Konsist helper reads the parsed supertype instead of matching text, and every rule first checks that it selected something.
-- **A.** `LoRaFailure.KeepsOwnRadioSettings(protocol)` names the active radio, decided under the LoRa manager's lock. The failure reasons are nullable and `ChatViewModel` supplies "Unknown error". `ChatRepoLoRaFailureTest` covers which failure the repository picks.
-- **Also landed, local work:** `BluetoothMeshAppInitializer` takes the chat repository, so the mesh never runs without its delegate. Before, it announced as "Anonymous" and dropped what it received until the first viewmodel existed.
+- **A wipe now publishes `ThemeUpdated`,** right after the app store is cleared. It reset the stored theme and told nobody; narrowing `ObserveAppTheme` removed the accident that used to refresh it.
+- **Two test changes** in `JoinChannelTest`: the no-commitment case is named as a record of today's behaviour, and it no longer pins the order of the two notifications.
+- `GetPrivateTextLimit` (`068261d`) replaced `PrivateTextLimit`. Do not bring the old class or an exception for it back; the Konsist exception list is `AppForegroundState`, `ChatNotices`, `Notice`.
 
 ## What was built and run
 
 By local-claude on macOS arm64, on the tree that landed:
 
 - `scripts/verify.sh full`: OK. That is `quick`, `desktop` (with `packageDmg`), `android`, `ios`, `embedded` and `tui` (debug and release links for linuxArm64), `desktop-tui`.
-- Module tests, all green: `:domain:jvmTest` (with its three Konsist rules), `:presentation:viewmodel:jvmTest` (with its one), `:data:repo:desktopTest`, `:data:remote:rest:client:jvmTest`, `:data:remote:transport:lora:jvmTest`, `:data:remote:transport:bluetooth:desktopTest`, `:apps:desktop:test`, and with `-Ptui.enabled=true` the terminal UI tests.
+- Module tests, all green: `:domain:jvmTest` (179 tests with the Konsist rules, 2 skipped), `:presentation:viewmodel:jvmTest`, `:data:repo:desktopTest`, `:apps:desktop:test`, and with `-Ptui.enabled=true` the terminal UI tests.
 - `scripts/tui-smoke.py`: the desktop terminal UI starts from the real Koin graph and shows its four screens.
-- Checked that the tests bite: two planted violations fail the two Konsist rules they break; three mutations of `ChatRepo`'s LoRa failure choice each fail a test; the mesh test failed before its fix.
-- `ab48a4e` and `ec2fbc8` were not built on their own; the tree at `d1d6d67` was.
+- Checked that the tests bite: both wipe tests fail without the publish, and the second fails when it is moved after the barrier; the join test fails when the notifications are published before the join.
+- `417f2d1` was not built on its own; the tree at `ff4697c` was.
 
 Not run: any app on a phone or a board.
 
-`claude/konsist-architecture-tests` and `claude/error-model` are deleted; `main` holds them.
-
 ## Asks
 
-1. **Local agents: build and review `claude/error-contract-tests` (`ff92f7c`) and `claude/observer-fixes` (`cb67ad6`).** Both branch from `d1d6d67` and merge with each other without a conflict. What cloud-claude built and ran is in `LOG.md`. The tests found no defect, so there is no new open question.
-2. **Owner:** Q9 when you want more Konsist rules.
+1. **Owner:** Q9 and Q10 below.
+2. **cloud-claude:** fetch `main` once this file says it is pushed. Read `reference/2026-10-13-local-review-d27.md` and the new Observers and events section of `CONVENTIONS.md`. Wait for the owner's answer to Q10, then propose the slice in `LOG.md` before writing code.
 
 ## Open questions
 
-- **Q9 (B, `ab48a4e`). Which Konsist rules next?** Candidates in `reference/2026-10-13-local-review.md` §4. Each new rule needs today's exceptions written into the test. Not part of the next slice.
+- **Q9 (Konsist, `ab48a4e`). Which rules next?** Five candidates, none with a violation today, in `reference/2026-10-13-local-review-d27.md` §3. local-claude's recommendation: the two placement rules inside `:domain` first (repository interfaces, event-bus interfaces); the other three as source checks after.
+- **Q10. What is the next slice?** Recommendation in `reference/2026-10-13-local-review-d27.md` §4: Q9's two rules if yes, then the file names that differ from their class; both stay inside `:domain`.
 
 ## Answered
 
 - **Q1.** `default` stays on the main queue on iOS for now (D17).
-- **Q2.** `GetAppTheme` and `GetUserNickname`; no single read of background mode (D18). On `main`.
-- **Q3, Q4.** LoRa hidden where no protocol is registered; an unsupported saved protocol reads as the fallback (D19). On `main`.
-- **Q5.** The `ChatRepository` methods only tests called are removed (D20). On `main`.
-- **Q6.** B is a Konsist architecture test (D25, the owner, 2026-10-13). On `main`.
-- **Q7.** The changed texts are accepted (D26, the owner, 2026-10-13).
-- **Q8.** Next: domain tests for the error contract, then the narrow observer fixes (D27, the owner, 2026-10-13).
+- **Q2.** `GetAppTheme` and `GetUserNickname`; no single read of background mode (D18).
+- **Q3, Q4.** LoRa hidden where no protocol is registered; an unsupported saved protocol reads as the fallback (D19).
+- **Q5.** The `ChatRepository` methods only tests called are removed (D20).
+- **Q6.** B is a Konsist architecture test (D25).
+- **Q7.** The changed texts are accepted (D26).
+- **Q8.** Domain tests for the error contract, then the narrow observer fixes (D27). Done, on `main`.
 
 ## Next
 
-- **D5 is partly done.** Channel and LoRa commands return a typed failure. Exceptions from discovery and verification still pass through `JoinChannel` and `SetChannelPassword`, and no other command returns `Outcome`.
+- **D5 is partly done.** Channel and LoRa commands return typed failures. Exceptions still pass through: discovery, verification, the password write and the join in `JoinChannel`'s existing-channel path, and all three LoRa commands (tests pin that those propagate). Turning any into an `Outcome` changes a tested contract: write the mapping and the texts first.
 - **Unlocked collections** in `ChatRepo`, `LocalChannelPreferences`, `NostrClient` and the Apple Bluetooth services: local work, design first.
-- **Open from the plan:** (d) pass-through use cases, (e) scopes and dispatchers, (f) a transport port; the rewrite of plan §3 against D1 to D25; where tracked rules live.
+- **Open from the plan:** (d) pass-through use cases, (e) scopes and dispatchers, (f) a transport port; where tracked rules live. Plan §3 is a list of old proposals, not instructions (see the note at the top of the plan).
