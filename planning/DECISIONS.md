@@ -33,3 +33,4 @@ The owner's decisions, newest last. Agents propose; only the owner decides. Each
 - **D19. Settings hide LoRa where no protocol is registered, and a saved protocol the app cannot run reads as the one it falls back to** (Q3, Q4). As implemented on `main`.
 - **D20. The `ChatRepository` methods only tests call are removed now, by a local agent** (Q5): `onPeersUpdated`, the short `sendGeohashMessage` and `sendMeshMessage`, and `BluetoothMeshDelegate.decryptChannelMessage`.
 - D13 is done: both old branches are deleted.
+- **D21. The Apple dispatcher change lands** after the owner's iPhone run: `io` on one worker off the main queue, `default` on the main queue (D17).

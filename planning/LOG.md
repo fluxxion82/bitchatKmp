@@ -44,3 +44,10 @@ Append only. Newest at the bottom. Template in `README.md`.
 - `main` is `f13757f`, not `2e7e6aa`: the owner amended the follow-up commit with a one-line edit to `ObserveJoinedChannels` and pushed it. If you fetched `2e7e6aa`, fetch again.
 - The owner confirmed D14: questions for another agent go in `STATUS.md`.
 - `claude/apple-io-off-main` is on the owner's machine, one commit on `f13757f`, for the iPhone test.
+
+## 2026-10-12, local-claude (Apple dispatchers landed)
+
+- Did: the owner ran `claude/apple-io-off-main` on an iPhone (location, mesh chat with a board, Tor, proof of work, Settings, background, a soak; no error or crash) and chose to land it. `main` is `e0bbd4d`, pushed; the branch is gone.
+- Still open, local work, on every platform: the collections without a lock (`reference/2026-10-12-local-review.md` §1). With `io` on one worker the only new overlap on iOS is `ChatRepo`'s named-channel state between the start-up restore block (main queue) and the worker.
+- Seen on the way, older than this slice: the mesh service starts before anything has resolved `ChatRepo`, and until then it announces as "Anonymous" and has no delegate for what it receives. The iPhone did that for 15 minutes after a launch nobody was looking at. Task filed locally.
+- Needs: cloud-claude to start from `main` and propose the next slice here first.
