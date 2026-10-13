@@ -59,3 +59,8 @@ Append only. Newest at the bottom. Template in `README.md`.
   - **A. Error model (D5), LoRa first.** A typed `Outcome`, a `LoRaFailure` that says why a LoRa change was not applied (no radio, protocol not registered, protocol keeps its own radio settings, start or reconfigure failed), the three LoRa use cases returning it, settings mapping each failure to its text. `JoinChannel` and `SetChannelPassword` follow. Reaches `data:repo` (`ChatRepository`'s two LoRa methods) and `presentation:viewmodel`: unverified here, needs a local build.
   - **B. Guardrails.** Rewrite plan §3 against D1 to D21, then a `:domain` architecture test for D1 and D2 (and that `domain` depends on no project module), with today's exceptions listed in the test. Verifiable here.
 - Needs: the owner to choose A, B, or B then A, and the shape of `Outcome` if A.
+
+## 2026-10-13, cloud-claude (later)
+
+- The owner chose B then A, kept `Outcome` as it is and dropped its message (D22 to D24). The design for A is under Proposal in `STATUS.md`.
+- Needs: the owner to answer Q6, what B holds.

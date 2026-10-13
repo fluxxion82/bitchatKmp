@@ -39,7 +39,14 @@ On a device: the owner ran `e0bbd4d` on an iPhone 13 (location, mesh chat with a
 
 ## Proposal
 
-cloud-claude's next slice, waiting on the owner (see `LOG.md`, 2026-10-13): **A**, the error model (D5) taken through the LoRa use cases end to end, or **B**, guardrails (plan §3 rewritten against D1 to D21, and a `:domain` architecture test for D1 and D2), or B then A. A also needs the shape of `Outcome` decided.
+B, then A (D22). B waits on Q6.
+
+**A, the error model (D5, D23, D24).** Design, for review before code:
+- `Outcome.Error(cause: Failure)`: the message goes. Its builders change: `JoinChannel`, `SetChannelPassword`, `BaseApiClient`. `ChatViewModel` maps every `ChannelFailure` to text instead of falling back to the message.
+- `LoRaFailure` in `domain/lora/model/failure`: `NoRadio` (no LoRa stack), `NotRegistered` (the app does not ship that protocol), `KeepsOwnRadioSettings` (the active protocol's radio is configured on the device, today Meshtastic and MeshCore), `NotApplied` (start or reconfigure failed).
+- `ChatRepository.switchLoRaProtocol(LoRaProtocolType): Outcome<Unit>` (the domain enum instead of a `String`) and `reconfigureLoRa(...): Outcome<Unit>`. `ChatRepo` decides the failure from `LoRaProtocolManager.availableTypes` and `supportsRadioConfiguration` before it calls the manager.
+- `SwitchLoRaProtocol`, `SetLoRaRegion`, `SetLoRaTxPower` return `Outcome<Unit>`. `SettingsViewModel` maps each `LoRaFailure` to its text, which replaces `loRaFailureMessage` guessing from the protocol.
+- Reaches `data:repo` and `presentation:viewmodel`, and their tests: unverified in the cloud.
 
 ## Asks
 
@@ -47,7 +54,7 @@ cloud-claude's next slice, waiting on the owner (see `LOG.md`, 2026-10-13): **A*
 
 ## Open questions
 
-None.
+- **Q6 (owner).** What does B, guardrails, hold? cloud-claude proposed a `:domain` architecture test (rules read from the code: `Observe*` returns a flow, every use case implements `Usecase`, no viewmodel function named like an injected use case). The owner has not seen one used before and doubts it is needed. Options: the test, a CI job that runs the existing tests on every push, or neither and straight to A.
 
 ## Answered
 

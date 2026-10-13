@@ -34,3 +34,9 @@ The owner's decisions, newest last. Agents propose; only the owner decides. Each
 - **D20. The `ChatRepository` methods only tests call are removed now, by a local agent** (Q5): `onPeersUpdated`, the short `sendGeohashMessage` and `sendMeshMessage`, and `BluetoothMeshDelegate.decryptChannelMessage`.
 - D13 is done: both old branches are deleted.
 - **D21. The Apple dispatcher change lands** after the owner's iPhone run: `io` on one worker off the main queue, `default` on the main queue (D17).
+
+## 2026-10-13, from the owner's chat with cloud-claude
+
+- **D22. Next slices: guardrails (B), then the error model (A).** What B holds is still open (Q6).
+- **D23. `Outcome` keeps its one type parameter.** Each feature declares a sealed failure; a caller checks `Outcome.Error.cause` against it. Why: `Outcome` already provides what is needed.
+- **D24. `Outcome.Error` drops its message.** Viewmodels map each failure to text. Why: the UI should map failures to text; the message is read only by two fallbacks in `ChatViewModel`, and the REST client's messages are never read.
