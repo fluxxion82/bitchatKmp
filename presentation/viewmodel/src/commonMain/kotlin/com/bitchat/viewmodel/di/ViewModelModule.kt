@@ -71,7 +71,7 @@ val viewModelModule = module {
     viewModel {
         ChatViewModel(
             observeChannelMessages = get(),
-            sendMessage = get(),
+            sendMessageUseCase = get(),
             processChatCommand = get(),
             getUserState = get(),
             chatEventBus = get(),
@@ -114,7 +114,7 @@ val viewModelModule = module {
             getParticipantCounts = get(),
             getBookmarkedChannels = get(),
             beginGeohashSampling = get(),
-            endGeohashSampling = get(),
+            endGeohashSamplingUseCase = get(),
             toggleBookmark = get(),
             toggleLocationServices = get(),
             getBookmarkNames = get(),

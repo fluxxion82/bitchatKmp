@@ -93,7 +93,7 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
             getParticipantCounts = getParticipantCounts,
             getBookmarkedChannels = getBookmarkedChannels,
             beginGeohashSampling = beginGeohashSampling,
-            endGeohashSampling = endGeohashSampling,
+            endGeohashSamplingUseCase = endGeohashSampling,
             toggleBookmark = toggleBookmark,
             toggleLocationServices = toggleLocationServices,
             getBookmarkNames = getBookmarkNames,

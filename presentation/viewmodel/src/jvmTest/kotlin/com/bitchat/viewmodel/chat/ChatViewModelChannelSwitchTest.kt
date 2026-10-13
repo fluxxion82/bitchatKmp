@@ -85,7 +85,7 @@ class ChatViewModelChannelSwitchTest : BaseViewModelTest() {
         observeChannelMessages = mockk<ObserveChannelMessages> {
             coEvery { this@mockk.invoke(any()) } answers { flowOf(lists[firstArg<Channel>()].orEmpty()) }
         },
-        sendMessage = sendMessage,
+        sendMessageUseCase = sendMessage,
         processChatCommand = com.bitchat.domain.chat.ProcessChatCommand(),
         getUserState = mockk<GetUserState> {
             coEvery { this@mockk.invoke(Unit) } coAnswers {

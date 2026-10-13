@@ -151,6 +151,7 @@ tink-android = { module = "com.google.crypto.tink:tink-android", version.ref = "
 
 mockk = { module = "io.mockk:mockk", version = "1.14.11" }
 turbine = { module = "app.cash.turbine:turbine", version = "1.2.1" }
+konsist = { module = "com.lemonappdev:konsist", version = "0.18.1" }
 
 # LoRa serial communication
 jserialcomm = { module = "com.fazecast:jSerialComm", version.ref = "jserialcomm" }

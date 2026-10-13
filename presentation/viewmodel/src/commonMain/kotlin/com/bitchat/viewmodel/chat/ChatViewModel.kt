@@ -66,7 +66,7 @@ import kotlin.uuid.Uuid
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalUuidApi::class)
 class ChatViewModel(
     private val observeChannelMessages: ObserveChannelMessages,
-    private val sendMessage: SendMessage,
+    private val sendMessageUseCase: SendMessage,
     private val processChatCommand: ProcessChatCommand,
     private val getUserState: GetUserState,
     private val chatEventBus: ChatEventBus,
@@ -332,7 +332,7 @@ class ChatViewModel(
                 println("📤 ChatViewModel: About to call sendMessage - channel=$channel contentLength=${processedContent.length}")
                 _state.update { it.copy(isSending = true) }
 
-                sendMessage(
+                sendMessageUseCase(
                     SendMessage.Params(
                     content = processedContent,
                     channel = channel,
@@ -630,7 +630,7 @@ class ChatViewModel(
         saveUserStateAction(UserStateAction.Chat(dmChannel))
 
         if (!message.isNullOrBlank()) {
-            sendMessage(
+            sendMessageUseCase(
                 SendMessage.Params(
                     content = message,
                     channel = dmChannel,
@@ -668,7 +668,7 @@ class ChatViewModel(
         saveUserStateAction(UserStateAction.Chat(dmChannel))
 
         if (!message.isNullOrBlank()) {
-            sendMessage(
+            sendMessageUseCase(
                 SendMessage.Params(
                     content = message,
                     channel = dmChannel,
@@ -702,7 +702,7 @@ class ChatViewModel(
                 println("ChatViewModel: sendVoiceNote channel=$channel filePath=${logPath(filePath)}")
                 _state.update { it.copy(isSending = true) }
 
-                sendMessage(
+                sendMessageUseCase(
                     SendMessage.Params(
                         content = filePath,
                         channel = channel,
@@ -745,7 +745,7 @@ class ChatViewModel(
                 }
                 println("ChatViewModel: resolved image path: ${logPath(localPath)}")
 
-                sendMessage(
+                sendMessageUseCase(
                     SendMessage.Params(
                         content = localPath,
                         channel = channel,

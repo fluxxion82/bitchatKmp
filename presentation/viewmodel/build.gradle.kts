@@ -78,6 +78,7 @@ kotlin {
                 implementation(libs.junit)
 
                 implementation(libs.assertj.core)
+                implementation(libs.konsist)
             }
         }
     }

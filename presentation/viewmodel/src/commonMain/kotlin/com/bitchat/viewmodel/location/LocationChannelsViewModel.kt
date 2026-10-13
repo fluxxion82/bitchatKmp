@@ -49,7 +49,7 @@ class LocationChannelsViewModel(
     private val getParticipantCounts: GetParticipantCounts,
     private val getBookmarkedChannels: GetBookmarkedChannels,
     private val beginGeohashSampling: BeginGeohashSampling,
-    private val endGeohashSampling: EndGeohashSampling,
+    private val endGeohashSamplingUseCase: EndGeohashSampling,
     private val toggleBookmark: ToggleBookmark,
     private val toggleLocationServices: ToggleLocationServices,
     private val getBookmarkNames: GetBookmarkNames,
@@ -260,7 +260,7 @@ class LocationChannelsViewModel(
 
     fun endGeohashSampling() {
         viewModelScope.launch {
-            endGeohashSampling(Unit)
+            endGeohashSamplingUseCase(Unit)
         }
     }
 
