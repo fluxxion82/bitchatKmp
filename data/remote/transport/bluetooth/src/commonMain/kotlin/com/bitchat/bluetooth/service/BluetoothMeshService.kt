@@ -785,8 +785,14 @@ class BluetoothMeshService(
     /** A Noise message adds 20 bytes (its number and its tag) and an addressed packet 30 of header and ids. */
     private fun fitsARadioFrame(plaintext: ByteArray): Boolean = plaintext.size + 20 + 30 <= MAX_LORA_PACKET_BYTES
 
+    /**
+     * How many bytes one private text for [peerID] may have when it is written. On a device with a
+     * radio, a text for a peer the mesh does not have is cut for the radio whether or not the radio
+     * hears that peer now: the Bluetooth links are not its way out, it may wait a long time for one,
+     * and the way that then opens may be the radio. What is cut for the radio fits Bluetooth too.
+     */
     fun privateTextLimitFor(peerID: String): Int =
-        if (goesByRadio(peerID, arrivedOn = null)) LORA_PRIVATE_TEXT_BYTES else PrivateMessageText.MAX_BYTES
+        if (isOutOfReach(peerID)) LORA_PRIVATE_TEXT_BYTES else PrivateMessageText.MAX_BYTES
 
     private suspend fun deliverPrivateMessage(send: PrivateSend) {
         try {

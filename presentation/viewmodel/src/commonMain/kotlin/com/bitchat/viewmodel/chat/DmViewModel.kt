@@ -8,6 +8,7 @@ import com.bitchat.domain.chat.ObserveLatestUnreadPrivatePeer
 import com.bitchat.domain.chat.ObservePrivateChats
 import com.bitchat.domain.chat.ObserveSelectedPrivatePeer
 import com.bitchat.domain.chat.ObserveUnreadPrivatePeers
+import com.bitchat.domain.chat.PrivateTextLimit
 import com.bitchat.domain.chat.SendMessage
 import com.bitchat.domain.chat.model.PrivateMessageText
 import com.bitchat.domain.user.GetUserNickname
@@ -27,7 +28,8 @@ class DmViewModel(
     private val observeSelectedPrivatePeer: ObserveSelectedPrivatePeer,
     private val markPrivateChatRead: MarkPrivateChatRead,
     private val sendMessage: SendMessage,
-    private val getUserNickname: GetUserNickname
+    private val getUserNickname: GetUserNickname,
+    private val privateTextLimit: PrivateTextLimit,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(DmState())
@@ -72,8 +74,8 @@ class DmViewModel(
      * line must not go to whatever chat is active by then), so this is the only way to send.
      * Anything but a mesh or Nostr DM (null, the mesh, a location or named channel, any Meshtastic
      * channel) is refused at once with an error and nothing is sent, and so is a line too long to be
-     * sent even as several private messages: the repository refuses that one too, but only once
-     * the caller has cleared its editor. Returns whether the line was taken, so the caller keeps
+     * sent even as several private messages of the size its peer's link carries: the repository
+     * refuses that one too, but only once the caller has cleared its editor. Returns whether the line was taken, so the caller keeps
      * its draft when it was not. Leaves [DmState.messageInput] alone.
      */
     fun sendTo(channel: Channel?, text: String): Boolean {
@@ -112,7 +114,8 @@ class DmViewModel(
     /** Why the DM line [content] must not be sent to [channel], or null when it may. */
     private fun refusal(channel: Channel?, content: String): String? = when (channel) {
         null -> "Not sent: no private conversation is open"
-        is Channel.MeshDM, is Channel.NostrDM -> PrivateMessageText.refusal(content)?.let { "Not sent: $it" }
+        is Channel.MeshDM, is Channel.NostrDM ->
+            PrivateMessageText.refusal(content, privateTextLimit(channel))?.let { "Not sent: $it" }
         // ChatRepo sends Meshtastic text as a broadcast whatever the node: refused until LoRa DMs exist.
         is Channel.Meshtastic ->
             if (channel.nodeNum != null) "Not sent: LoRa DMs are not supported yet" else "Not sent: not a private conversation"

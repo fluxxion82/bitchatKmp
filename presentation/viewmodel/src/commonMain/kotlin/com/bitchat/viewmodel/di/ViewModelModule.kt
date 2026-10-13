@@ -103,7 +103,8 @@ val viewModelModule = module {
             observeSelectedPrivatePeer = get(),
             markPrivateChatRead = get(),
             sendMessage = get(),
-            getUserNickname = get()
+            getUserNickname = get(),
+            privateTextLimit = get(),
         )
     }
 

@@ -7,6 +7,7 @@ import com.bitchat.bluetooth.manager.HandshakeRefreshPolicy
 import com.bitchat.bluetooth.protocol.BinaryProtocol
 import com.bitchat.bluetooth.protocol.BitchatPacket
 import com.bitchat.bluetooth.protocol.IdentityAnnouncement
+import com.bitchat.bluetooth.protocol.LORA_PRIVATE_TEXT_BYTES
 import com.bitchat.bluetooth.protocol.LoRaRejection
 import com.bitchat.bluetooth.protocol.MAX_LORA_PACKET_BYTES
 import com.bitchat.bluetooth.protocol.MessageType
@@ -217,7 +218,9 @@ class BluetoothMeshServiceRadioLinkTest {
         // Now each hears the other on the radio (or someone who says so), and neither is on the other's mesh.
         pair.join()
         assertFalse(pair.a.service.reachesByRadio(pair.b.id))
-        assertEquals(PrivateMessageText.MAX_BYTES, pair.a.service.privateTextLimitFor(pair.b.id))
+        // A text for it is cut for the radio all the same: the mesh does not have the peer, so the text
+        // can go nowhere now, and whichever link takes it later carries what one frame carries.
+        assertEquals(LORA_PRIVATE_TEXT_BYTES, pair.a.service.privateTextLimitFor(pair.b.id))
         // The repository hands such a peer nothing (it is not reachable). Should a message for it
         // arrive here all the same, it goes nowhere and says so: not over the radio in that session,
         // and not to Bluetooth links that are not this peer's.
@@ -254,7 +257,9 @@ class BluetoothMeshServiceRadioLinkTest {
 
         eventually("the session made over Bluetooth to replace the radio one") { !pair.a.service.reachesByRadio(pair.b.id) }
         assertEquals(onTheRadioBefore, pair.radio.sent.size)
-        assertEquals(PrivateMessageText.MAX_BYTES, pair.a.service.privateTextLimitFor(pair.b.id))
+        // What a text is cut for follows where the peer is, not where its session was made: a's mesh
+        // does not have b.
+        assertEquals(LORA_PRIVATE_TEXT_BYTES, pair.a.service.privateTextLimitFor(pair.b.id))
     }
 
     @Test
@@ -610,7 +615,6 @@ class BluetoothMeshServiceRadioLinkTest {
         val pair = RadioPair()
         val stranger = "0f0e0d0c0b0a0908"
         assertFalse(pair.a.service.reachesByRadio(stranger))
-        assertEquals(PrivateMessageText.MAX_BYTES, pair.a.service.privateTextLimitFor(stranger))
         pair.a.service.initiateNoiseHandshake(stranger)
 
         eventually("the handshake to be owed for want of a link") { pair.a.service.handshakesOwedCount() == 1 }
@@ -857,6 +861,29 @@ class BluetoothMeshServiceRadioLinkTest {
         eventually("a session on both sides") {
             yielding.service.hasEstablishedSession(holding.id) && holding.service.hasEstablishedSession(yielding.id)
         }
+    }
+
+    @Test
+    fun aTextForAPeerTheMeshDoesNotHaveIsCutForTheRadioWhetherOrNotTheRadioHearsThatPeerNow() = runTest {
+        val pair = RadioPair()
+        pair.a.connection.deliverPackets = false
+        // Written while b is reachable by nothing: no Bluetooth link, and the radio does not hear it.
+        pair.radio.unheard += pair.b.id
+        assertFalse(pair.a.service.reachesByRadio(pair.b.id))
+        val limit = pair.a.service.privateTextLimitFor(pair.b.id)
+        assertEquals(LORA_PRIVATE_TEXT_BYTES, limit)
+        // What the repository would cut the text into, and keep until there is a session.
+        val pieces = PrivateMessageText.split("The quick brown fox jumps over the lazy dog. ".repeat(5).trim(), limit)
+        assertEquals(2, pieces.size)
+
+        // b is heard again and the session is made over the radio: the only way those pieces can go.
+        pair.radio.unheard -= pair.b.id
+        pair.a.service.initiateNoiseHandshake(pair.b.id)
+        pair.awaitSessions()
+        pieces.forEachIndexed { index, piece ->
+            assertTrue(pair.a.service.sendPrivateMessage(piece, pair.b.id, "b", "$index".repeat(36)), "piece $index was refused")
+        }
+        eventually("every piece to arrive") { pair.b.delegate.messages.map { it.second } == pieces }
     }
 
     @Test
@@ -1651,6 +1678,8 @@ class BluetoothMeshServiceFallbackTest {
         val fixture = FallbackServiceFixture()
         fixture.establish()
         assertNull(fixture.service.getPeerInfo(fixture.remoteID))
+        // And a text for it is cut for Bluetooth: there is no radio whose frame it would have to fit.
+        assertEquals(PrivateMessageText.MAX_BYTES, fixture.service.privateTextLimitFor(fixture.remoteID))
         assertTrue(fixture.service.sendPrivateMessage("hello", fixture.remoteID, "remote", "id-1"))
 
         assertNotNull(fixture.connection.awaitEncryptedFrom(fixture.service.myPeerID))

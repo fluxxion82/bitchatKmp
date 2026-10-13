@@ -464,6 +464,12 @@ class ChatRepo(
             }
         }
 
+    // What the send path measures a text against, for whoever has to refuse one before it is sent:
+    // a mesh conversation's limit is its peer's link's, and what goes through a relay is not cut
+    // for the radio.
+    override fun privateTextLimit(channel: Channel): Int =
+        if (channel is Channel.MeshDM) mesh.privateTextLimitFor(channel.peerID) else PrivateMessageText.MAX_BYTES
+
     override suspend fun getGeohashParticipants(geohash: String): Map<String, String> = withContext(coroutinesContextFacade.io) {
         val cutoff = Clock.System.now() - 5.minutes
         val participants = participantTracker.currentGeohashPeople.value

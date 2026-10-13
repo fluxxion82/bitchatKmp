@@ -40,6 +40,12 @@ interface ChatRepository {
     /** Restarts the active LoRa transport with this frequency and power. Fails with a [LoRaFailure]. */
     suspend fun reconfigureLoRa(region: LoRaRegion, txPower: LoRaTxPower): Outcome<Unit>
 
+    /**
+     * How many bytes of UTF-8 one private text for [channel] may have now. A longer text is sent as
+     * several, and one that would need too many is refused: this is what it is measured against.
+     */
+    fun privateTextLimit(channel: Channel): Int
+
     suspend fun getGeohashParticipants(geohash: String): Map<String, String>
     suspend fun getPrivateChats(): Map<String, List<BitchatMessage>>
     fun observeMiningStatus(): Flow<String?>

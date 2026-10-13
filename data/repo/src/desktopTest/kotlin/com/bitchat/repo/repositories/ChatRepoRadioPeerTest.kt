@@ -181,6 +181,18 @@ class ChatRepoRadioPeerTest {
     }
 
     @Test
+    fun whatOneTextOfAChannelMayHaveIsWhatTheMeshSaysOfAMeshPeerAndOneMessageOtherwise() = withRepo { repo, mesh ->
+        every { mesh.privateTextLimitFor(any()) } returns PrivateMessageText.MAX_BYTES
+        every { mesh.privateTextLimitFor(PEER) } returns RADIO_TEXT_BYTES
+
+        assertEquals(RADIO_TEXT_BYTES, repo.privateTextLimit(Channel.MeshDM(PEER)))
+        assertEquals(PrivateMessageText.MAX_BYTES, repo.privateTextLimit(Channel.MeshDM("1112131415161718")))
+        // A conversation through a relay is not cut for the radio, whatever the mesh would say of its key.
+        every { mesh.privateTextLimitFor(any()) } returns RADIO_TEXT_BYTES
+        assertEquals(PrivateMessageText.MAX_BYTES, repo.privateTextLimit(Channel.NostrDM("nostr_c3c3c3c3c3c3c3c3", "npub1friend", null)))
+    }
+
+    @Test
     fun aTextThatWouldNeedMoreThanEightFramesIsRefusedForARadioPeer() = withRepo { repo, mesh ->
         mesh.hearsOnTheRadio(PEER)
         every { mesh.privateTextLimitFor(PEER) } returns RADIO_TEXT_BYTES

@@ -5,12 +5,14 @@ import com.bitchat.domain.chat.ObserveLatestUnreadPrivatePeer
 import com.bitchat.domain.chat.ObservePrivateChats
 import com.bitchat.domain.chat.ObserveSelectedPrivatePeer
 import com.bitchat.domain.chat.ObserveUnreadPrivatePeers
+import com.bitchat.domain.chat.PrivateTextLimit
 import com.bitchat.domain.chat.SendMessage
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.user.GetUserNickname
 import com.bitchat.viewmodel.BaseViewModelTest
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.emptyFlow
@@ -28,7 +30,8 @@ class DmViewModelSendToTest : BaseViewModelTest() {
     private val sendMessage = mockk<SendMessage>(relaxed = true)
 
 
-    private fun buildViewModel() = DmViewModel(
+    /** [limits]: the bytes one private text may have per channel; 255, what Bluetooth and a relay carry, for the rest. */
+    private fun buildViewModel(limits: Map<Channel, Int> = emptyMap()) = DmViewModel(
         observePrivateChats = mockk<ObservePrivateChats> { coEvery { this@mockk.invoke(Unit) } returns emptyFlow() },
         observeUnreadPrivatePeers = mockk<ObserveUnreadPrivatePeers> { coEvery { this@mockk.invoke(Unit) } returns emptyFlow() },
         observeLatestUnreadPrivatePeer = mockk<ObserveLatestUnreadPrivatePeer> { coEvery { this@mockk.invoke(Unit) } returns emptyFlow() },
@@ -36,6 +39,7 @@ class DmViewModelSendToTest : BaseViewModelTest() {
         markPrivateChatRead = mockk<MarkPrivateChatRead>(relaxed = true),
         sendMessage = sendMessage,
         getUserNickname = mockk<GetUserNickname> { coEvery { this@mockk.invoke(Unit) } returns "anon" },
+        privateTextLimit = mockk<PrivateTextLimit> { every { this@mockk.invoke(any()) } answers { limits[firstArg<Channel>()] ?: 255 } },
     ).also { instantExecutorRule.scheduler.runCurrent() }
 
     @Test
@@ -61,6 +65,30 @@ class DmViewModelSendToTest : BaseViewModelTest() {
 
         coVerify(exactly = 0) { sendMessage.invoke(any()) }
         assertNotNull(viewModel.state.value.errorMessage)
+    }
+
+    @Test
+    fun `a line too long for what its peer's link carries is refused at once, so the draft stays`() {
+        // A peer whose texts are cut for the radio: 141 bytes a message.
+        val byRadio = Channel.MeshDM("b0b")
+        val onTheMesh = Channel.MeshDM("a11ce")
+        val viewModel = buildViewModel(limits = mapOf(byRadio to 141))
+        // One byte more than eight messages of 141 bytes carry; eight of 255 bytes would hold it.
+        val text = "x".repeat(8 * 141 + 1)
+
+        assertEquals(false, viewModel.sendTo(byRadio, text))
+        assertEquals(
+            "Not sent: a private message is sent in at most 8 parts of 141 bytes, this one needs 9",
+            viewModel.state.value.errorMessage,
+        )
+        instantExecutorRule.scheduler.runCurrent()
+        coVerify(exactly = 0) { sendMessage.invoke(any()) }
+
+        // The same line for a peer on the mesh is taken.
+        viewModel.clearError()
+        assertEquals(true, viewModel.sendTo(onTheMesh, text))
+        instantExecutorRule.scheduler.runCurrent()
+        coVerify(exactly = 1) { sendMessage.invoke(SendMessage.Params(content = text, channel = onTheMesh, sender = "anon")) }
     }
 
     @Test
