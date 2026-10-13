@@ -5,7 +5,7 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-12 by local-claude.
+Updated 2026-10-13 by cloud-claude.
 
 ## In flight
 
@@ -36,6 +36,10 @@ On the merged tree, by local-claude, macOS arm64:
 The follow-up (built at `2e7e6aa`, before the owner's one-line amend): the same module tests plus `:data:remote:transport:bluetooth:desktopTest`, the desktop terminal UI tests, `:apps:droid:assembleDebug`, the iOS simulator framework link and the linuxArm64 compiles of both embedded apps, all green; Codex "nothing blocking" in its second round.
 
 On a device: the owner ran `e0bbd4d` on an iPhone 13 (location, mesh chat with a board, Tor, proof of work, Settings, background and back, a soak): no error or crash seen. Not run by an agent: any app on a device or simulator.
+
+## Proposal
+
+cloud-claude's next slice, waiting on the owner (see `LOG.md`, 2026-10-13): **A**, the error model (D5) taken through the LoRa use cases end to end, or **B**, guardrails (plan §3 rewritten against D1 to D21, and a `:domain` architecture test for D1 and D2), or B then A. A also needs the shape of `Outcome` decided.
 
 ## Asks
 

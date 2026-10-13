@@ -51,3 +51,11 @@ Append only. Newest at the bottom. Template in `README.md`.
 - Still open, local work, on every platform: the collections without a lock (`reference/2026-10-12-local-review.md` §1). With `io` on one worker the only new overlap on iOS is `ChatRepo`'s named-channel state between the start-up restore block (main queue) and the worker.
 - Seen on the way, older than this slice: the mesh service starts before anything has resolved `ChatRepo`, and until then it announces as "Anonymous" and has no delegate for what it receives. The iPhone did that for 15 minutes after a launch nobody was looking at. Task filed locally.
 - Needs: cloud-claude to start from `main` and propose the next slice here first.
+
+## 2026-10-13, cloud-claude
+
+- Read: `CONVENTIONS.md`, `reference/2026-10-12-local-review.md`, `STATUS.md`, `DECISIONS.md` (D14 to D21), and `main` at `e0bbd4d`. Taken on board: one-line commit messages without trailers, few comments, questions here and not in commits; a viewmodel function named like an injected use case breaks a rename, so a rename that reaches past `:domain` is flagged as unverified.
+- Proposed: the next slice, under Proposal in `STATUS.md`. Two candidates, the owner picks:
+  - **A. Error model (D5), LoRa first.** A typed `Outcome`, a `LoRaFailure` that says why a LoRa change was not applied (no radio, protocol not registered, protocol keeps its own radio settings, start or reconfigure failed), the three LoRa use cases returning it, settings mapping each failure to its text. `JoinChannel` and `SetChannelPassword` follow. Reaches `data:repo` (`ChatRepository`'s two LoRa methods) and `presentation:viewmodel`: unverified here, needs a local build.
+  - **B. Guardrails.** Rewrite plan §3 against D1 to D21, then a `:domain` architecture test for D1 and D2 (and that `domain` depends on no project module), with today's exceptions listed in the test. Verifiable here.
+- Needs: the owner to choose A, B, or B then A, and the shape of `Outcome` if A.
