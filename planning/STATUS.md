@@ -5,13 +5,15 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-13 by cloud-claude.
+Updated 2026-10-13 by cloud-claude (A pushed).
 
 ## In flight
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | `e0bbd4d`: the first slice (`e4e5d94`), its follow-up D18 and D20 (`f13757f`), and the Apple dispatcher change (`e0bbd4d`) | Pushed 2026-10-12 | cloud-claude: start the next slice from here |
+| `main` | `e0bbd4d`: the first slice (`e4e5d94`), its follow-up D18 and D20 (`f13757f`), and the Apple dispatcher change (`e0bbd4d`) | Pushed 2026-10-12 | |
+| `claude/konsist-architecture-tests` | B: Konsist rules, two viewmodel renames. Two commits on `e0bbd4d` | Pushed 2026-10-13 at `98b1430` | local agents: build and review |
+| `claude/error-model` | A: `Outcome.Error` without a message, `LoRaFailure`. Two commits on `e0bbd4d` | Pushed 2026-10-13 at `951b652` | local agents: build and review |
 
 `claude/naming-rule-and-safety-fixes` and `claude/clean-architecture-review-b6fcfl` are deleted (D13).
 
@@ -45,16 +47,19 @@ B, then A (D22).
 - `domain/.../ArchitectureTest.kt`: a use case is named `Observe*` exactly when its `Usecase<P, R>` has a `Flow` for R; every public class in a feature package is a use case, except `AppForegroundState`, `ChatNotices` and `Notice`; production code imports only `com.bitchat.domain`, `kotlin`, `kotlinx` and `org.koin`.
 - `presentation/viewmodel/.../ArchitectureTest.kt`: no viewmodel function has the name of a constructor parameter. It found two on `main`, both working only because the call passes an argument: `ChatViewModel.sendMessage()` and `LocationChannelsViewModel.endGeohashSampling()`. The injected use cases are now `sendMessageUseCase` and `endGeohashSamplingUseCase`, as `MainViewModel` already does with `toggleFavoriteUseCase`.
 
-**A, the error model (D5, D23, D24).** Design, for review before code:
-- `Outcome.Error(cause: Failure)`: the message goes. Its builders change: `JoinChannel`, `SetChannelPassword`, `BaseApiClient`. `ChatViewModel` maps every `ChannelFailure` to text instead of falling back to the message.
-- `LoRaFailure` in `domain/lora/model/failure`: `NoRadio` (no LoRa stack), `NotRegistered` (the app does not ship that protocol), `KeepsOwnRadioSettings` (the active protocol's radio is configured on the device, today Meshtastic and MeshCore), `NotApplied` (start or reconfigure failed).
-- `ChatRepository.switchLoRaProtocol(LoRaProtocolType): Outcome<Unit>` (the domain enum instead of a `String`) and `reconfigureLoRa(...): Outcome<Unit>`. `ChatRepo` decides the failure from `LoRaProtocolManager.availableTypes` and `supportsRadioConfiguration` before it calls the manager.
-- `SwitchLoRaProtocol`, `SetLoRaRegion`, `SetLoRaTxPower` return `Outcome<Unit>`. `SettingsViewModel` maps each `LoRaFailure` to its text, which replaces `loRaFailureMessage` guessing from the protocol.
-- Reaches `data:repo` and `presentation:viewmodel`, and their tests: unverified in the cloud.
+**A is pushed:** `claude/error-model` at `951b652`, two commits on `main` (`e0bbd4d`). It merges with B without a conflict.
+- `Outcome.Error(cause: Failure)`. `JoinChannel`, `SetChannelPassword` and `BaseApiClient` build it without a message.
+- `ChannelFailure` changes. It gains `JoinFailed` (the repository refused the join) and `PasswordNotSaved(reason)` (storing the password threw), so the view model can tell apart the cases that all shared `CreationFailed` and a message. It loses `NotOwner`, `ChannelNotFound` and `AlreadyJoined`, which nothing built (D10).
+- `ChatViewModel` maps each failure to the text the chat showed before, with one exception: `/pass <current> <new>` on a channel that has no password yet now says "Failed to change password" rather than "Failed to set password". It uses the same test as the success text, which already says "password changed" there. A create that threw without a message now reads "Unknown error" instead of "null".
+- `LoRaFailure` (`domain/lora/model/failure`): `NoRadio`, `NotRegistered`, `KeepsOwnRadioSettings`, `NotApplied`. `ChatRepository.switchLoRaProtocol(LoRaProtocolType)` and `reconfigureLoRa(...)` return `Outcome<Unit>`. `ChatRepo` picks the failure. A protocol outside `availableTypes` is `NotRegistered`, and the manager is not called. A `reconfigure` that returns false is `KeepsOwnRadioSettings` when the active protocol does not configure its radio, and `NotApplied` otherwise. The three use cases return `Outcome<Unit>`.
+- `SettingsViewModel` maps the failure, no longer the selected protocol, to text. Its two existing texts stay. New: "This app has no LoRa radio." (`NoRadio`) and "<protocol> is not available in this app." (`NotRegistered`). A region or power change now says "keeps its own radio settings" when the active radio keeps them. Before, it said so whenever the selected protocol was not BitChat.
+- Gone: `ChatRepo`'s two "LoRaProtocolManager not available" log lines, and the manager's "not registered" line for a switch, since `ChatRepo` checks before calling it. The failure now reaches the screen instead.
+- Tests: one new in `JoinChannelTest` (`JoinFailed`) and one in `SettingsViewModelLoRaTest` (`NotRegistered`). The LoRa tests in domain and the viewmodel, and `LoRaSavedConfigTest`, now expect `Outcome`. Nothing tests `ChatRepo` picking `NotRegistered` or `KeepsOwnRadioSettings`.
 
 ## Asks
 
-1. **cloud-claude: read `CONVENTIONS.md`** (new: the rules you could not see) **and `reference/2026-10-12-local-review.md`,** then propose the next slice in `LOG.md` before writing code. Start from `main`.
+1. **Local agents: build and review B (`98b1430`) and A (`951b652`).** What cloud-claude built is in `LOG.md`. `ChatRepo`, `BaseApiClient` and `LoRaSavedConfigTest` were not built anywhere. A `ChatRepo` test for `NotRegistered` and `KeepsOwnRadioSettings` would cover what the scratch builds could not.
+2. **Owner:** the two new LoRa texts and the `/pass` wording above, if you want them different.
 
 ## Open questions
 

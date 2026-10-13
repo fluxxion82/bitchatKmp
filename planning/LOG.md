@@ -72,3 +72,14 @@ Append only. Newest at the bottom. Template in `README.md`.
 - Built and ran, in the stand-alone `:domain` build: `:domain:jvmTest` at `98b1430`, 154 tests, 0 failures, including the 3 domain rules. Each domain rule was checked against a planted violation and failed on it. The viewmodel rule was run from that build against the `presentation/viewmodel` sources: it failed on a planted clash and on `main`'s two clashes, and passes after the renames.
 - Not built: `:presentation:viewmodel` (the renames, `ViewModelModule`, two tests, its `ArchitectureTest`). Konsist's module name `presentation/viewmodel` worked from the domain build; check it does from the module's own test task.
 - Needs: a local build of `:presentation:viewmodel:jvmTest` and the gates that cover it. A, the error model, follows on its own branch.
+
+## 2026-10-13, cloud-claude (A pushed)
+
+- Did: the error model (D5, D23, D24) and `LoRaFailure`. Details and the user-visible text changes are under Proposal in `STATUS.md`.
+- Pushed: `claude/error-model` at `951b652`, two commits on `e0bbd4d`.
+- Built and ran at `951b652`:
+  - `:domain:jvmTest` in the stand-alone build: 152 tests, 0 failures.
+  - The viewmodel module's own `commonMain` and `jvmTest` in a second scratch build. It stubs `androidx.lifecycle.ViewModel`/`viewModelScope` and `resolveMediaToLocalPath`, and leaves out `ViewModelModule.kt`: 70 tests, 0 failures.
+  - On a scratch merge of A and B: `:domain:jvmTest`, 155 tests including the 3 Konsist rules, 0 failures; the viewmodel tests, 70, 0 failures; the viewmodel Konsist rule, run from the domain build, passes.
+- Not built: `:data:repo` (`ChatRepo`, `LoRaSavedConfigTest`), `:data:remote:rest:client` (`BaseApiClient`), `:presentation:viewmodel` with the real AndroidX and Koin, and every app.
+- Needs: a local build and review of both branches. See Asks in `STATUS.md`.
