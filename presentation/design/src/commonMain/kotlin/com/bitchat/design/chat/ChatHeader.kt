@@ -69,6 +69,7 @@ import bitchatkmp.presentation.design.generated.resources.chat_channel_prefix
 import bitchatkmp.presentation.design.generated.resources.chat_leave
 import com.bitchat.design.core.PoWIndicatorStyle
 import com.bitchat.design.core.PoWStatusIndicator
+import com.bitchat.design.core.keepKeyboardOnTap
 import com.bitchat.design.icons.Icons
 import com.bitchat.design.icons.filled.ArrowBack
 import com.bitchat.design.icons.filled.Bookmark
@@ -225,7 +226,7 @@ fun NicknameEditor(
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier
+        modifier = modifier.keepKeyboardOnTap()
     ) {
         Text(
             text = stringResource(Res.string.at_symbol),

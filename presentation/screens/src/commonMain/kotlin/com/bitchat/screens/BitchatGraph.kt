@@ -160,73 +160,73 @@ fun BitchatGraph(mainViewModel: MainViewModel) {
             val currentBackStackEntry by navController.currentBackStackEntryAsState()
 
             Box(modifier = Modifier.fillMaxSize()) {
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    topBar = {
-                        if (!isOnboardingRoute(currentBackStackEntry?.destination?.route)) {
-                            androidx.compose.foundation.layout.Column {
-                                Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                                    ChatHeaderContent(
-                                        selectedPrivatePeer = headerState.selectedPrivatePeer,
-                                        currentChannel = headerState.currentChannel,
-                                        nickname = headerState.nickname,
-                                        favoritePeers = headerState.favoritePeers,
-                                        favoriteRelationships = headerState.favoriteRelationships,
-                                        peerFingerprints = headerState.peerFingerprints,
-                                        peerSessionStates = headerState.peerSessionStates,
-                                        geohashPeople = headerState.geohashPeople,
-                                        peerNicknames = headerState.peerNicknames,
-                                        selectedLocationChannel = headerState.selectedLocationChannel,
-                                        selectedChannel = headerState.selectedChannel,
-                                        teleported = headerState.teleported,
-                                        permissionState = headerState.permissionState,
-                                        locationServicesEnabled = headerState.locationServicesEnabled,
-                                        powEnabled = headerState.powEnabled,
-                                        powDifficulty = headerState.powDifficulty,
-                                        isMining = headerState.isMining,
-                                        torEnabled = headerState.torEnabled,
-                                        torRunning = headerState.torRunning,
-                                        torBootstrapPercent = headerState.torBootstrapPercent,
-                                        onNicknameChange = mainViewModel::updateNickname,
-                                        onToggleFavoritePeer = mainViewModel::toggleFavorite,
-                                        setNickname = mainViewModel::updateNickname,
-                                        onLeaveChannel = mainViewModel::leaveNamedChannel,
-                                        onBackClick = mainViewModel::goBack,
-                                        onSidebarClick = mainViewModel::toggleSidebar,
-                                        onTripleClick = mainViewModel::handleTripleClick,
-                                        onShowAppInfo = mainViewModel::showAppInfo,
-                                        onLocationChannelsClick = mainViewModel::showLocationChannels,
-                                        onLocationNotesClick = mainViewModel::showLocationNotes,
-                                        openLatestUnreadPrivateChat = mainViewModel::openLatestUnreadDM,
-                                        connectedPeers = headerState.connectedPeers,
-                                        joinedChannels = headerState.joinedChannels,
-                                        hasUnreadChannels = headerState.unreadChannelMessages,
-                                        hasUnreadPrivateMessages = dmState.unreadPeers.isNotEmpty(),
-                                        hasNotes = headerState.hasNotes,
-                                        isCurrentChannelBookmarked = headerState.isCurrentChannelBookmarked,
-                                        onToggleBookmark = mainViewModel::toggleBookmark,
-                                        loraPeers = headerState.loraPeers
+                DismissKeyboardOnTapOutside {
+                    Scaffold(
+                        modifier = Modifier.fillMaxSize(),
+                        topBar = {
+                            if (!isOnboardingRoute(currentBackStackEntry?.destination?.route)) {
+                                androidx.compose.foundation.layout.Column {
+                                    Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                        ChatHeaderContent(
+                                            selectedPrivatePeer = headerState.selectedPrivatePeer,
+                                            currentChannel = headerState.currentChannel,
+                                            nickname = headerState.nickname,
+                                            favoritePeers = headerState.favoritePeers,
+                                            favoriteRelationships = headerState.favoriteRelationships,
+                                            peerFingerprints = headerState.peerFingerprints,
+                                            peerSessionStates = headerState.peerSessionStates,
+                                            geohashPeople = headerState.geohashPeople,
+                                            peerNicknames = headerState.peerNicknames,
+                                            selectedLocationChannel = headerState.selectedLocationChannel,
+                                            selectedChannel = headerState.selectedChannel,
+                                            teleported = headerState.teleported,
+                                            permissionState = headerState.permissionState,
+                                            locationServicesEnabled = headerState.locationServicesEnabled,
+                                            powEnabled = headerState.powEnabled,
+                                            powDifficulty = headerState.powDifficulty,
+                                            isMining = headerState.isMining,
+                                            torEnabled = headerState.torEnabled,
+                                            torRunning = headerState.torRunning,
+                                            torBootstrapPercent = headerState.torBootstrapPercent,
+                                            onNicknameChange = mainViewModel::updateNickname,
+                                            onToggleFavoritePeer = mainViewModel::toggleFavorite,
+                                            setNickname = mainViewModel::updateNickname,
+                                            onLeaveChannel = mainViewModel::leaveNamedChannel,
+                                            onBackClick = mainViewModel::goBack,
+                                            onSidebarClick = mainViewModel::toggleSidebar,
+                                            onTripleClick = mainViewModel::handleTripleClick,
+                                            onShowAppInfo = mainViewModel::showAppInfo,
+                                            onLocationChannelsClick = mainViewModel::showLocationChannels,
+                                            onLocationNotesClick = mainViewModel::showLocationNotes,
+                                            openLatestUnreadPrivateChat = mainViewModel::openLatestUnreadDM,
+                                            connectedPeers = headerState.connectedPeers,
+                                            joinedChannels = headerState.joinedChannels,
+                                            hasUnreadChannels = headerState.unreadChannelMessages,
+                                            hasUnreadPrivateMessages = dmState.unreadPeers.isNotEmpty(),
+                                            hasNotes = headerState.hasNotes,
+                                            isCurrentChannelBookmarked = headerState.isCurrentChannelBookmarked,
+                                            onToggleBookmark = mainViewModel::toggleBookmark,
+                                            loraPeers = headerState.loraPeers
+                                        )
+                                    }
+                                    HorizontalDivider(
+                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
                                     )
                                 }
-                                HorizontalDivider(
-                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-                                )
                             }
-                        }
-                    },
-                    floatingActionButton = {},
-                ) { paddingValues ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(paddingValues)
-                            .windowInsetsPadding(WindowInsets.ime)
-                    ) {
-                        IosBackGestureHandler(
-                            isEnabled = getPlatform() == Platform.IOS,
-                            onBack = mainViewModel::goBack
+                        },
+                        floatingActionButton = {},
+                    ) { paddingValues ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(paddingValues)
+                                .windowInsetsPadding(WindowInsets.ime)
                         ) {
-                            DismissKeyboardOnTapOutside {
+                            IosBackGestureHandler(
+                                isEnabled = getPlatform() == Platform.IOS,
+                                onBack = mainViewModel::goBack
+                            ) {
                                 BitchatContent(
                                     navController = navController,
                                     mainViewModel = mainViewModel,

@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import com.bitchat.design.chat.ChatContent
+import com.bitchat.design.core.LocalKeyboardDismissGesture
 import com.bitchat.viewvo.chat.channelCommandSuggestions
 import com.bitchat.viewvo.chat.matching
 import com.bitchat.design.mapper.toMessage
@@ -26,6 +27,7 @@ fun ChatScreen(
     selectedPrivatePeer: String?,
     selectedChannel: Channel? = null,
 ) {
+    val dismissGesture = LocalKeyboardDismissGesture.current
     val state by viewModel.state.collectAsState()
     val dmState by dmViewModel.state.collectAsState()
     val isPrivateChat = selectedPrivatePeer != null
@@ -123,6 +125,7 @@ fun ChatScreen(
             }
         },
         onNicknameClick = { fullSenderName ->
+            dismissGesture.keep()
             val newText = buildMentionInsertionText(
                 currentText = messageText.text,
                 fullSenderName = fullSenderName,

@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.TextFieldValue
 import com.bitchat.design.core.CommandSuggestionsBox
 import com.bitchat.design.core.MentionSuggestionsBox
+import com.bitchat.design.core.keepKeyboardOnTap
 import com.bitchat.viewvo.chat.CommandSuggestion
 
 @Composable
@@ -32,7 +33,7 @@ fun ChatInputSection(
     showMediaButtons: Boolean
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().keepKeyboardOnTap(),
         color = MaterialTheme.colorScheme.background
     ) {
         Column {
