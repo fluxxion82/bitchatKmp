@@ -175,8 +175,17 @@ class BlueZGattServerService(
      */
     internal var onDeviceLinkGone: ((String) -> Unit)? = null
 
-    /** Set by [BlueZConnectionService] so a peer BlueZ already holds can still be adopted. */
+    /** Set by [BlueZConnectionService]: BlueZ reports a link to the device, whoever opened it. */
     internal var onDeviceConnected: ((String) -> Unit)? = null
+
+    /**
+     * Set by [BlueZConnectionService]: BlueZ reports the device's signal strength, which it does
+     * for a device it hears advertise and never for one that only connected in.
+     */
+    internal var onDeviceHeard: ((String) -> Unit)? = null
+
+    /** Set by [BlueZConnectionService]: BlueZ dropped the device object. */
+    internal var onDeviceRemoved: ((String) -> Unit)? = null
 
     // Connected clients tracked by device address
     private val connectedClients = GattClientRegistry()
@@ -1306,12 +1315,9 @@ class BlueZGattServerService(
      * always fire for one, which used to leave it in the registry forever.
      */
     /**
-     * BlueZ says it now holds a link to [deviceAddress].
-     *
-     * BlueZ only announces a device the first time it appears, so a peer it was already connected
-     * to when we started is never offered by the scanner and stays invisible to the mesh. Measured
-     * on the Pi: BlueZ held two phones while the app counted one, and the unseen one got none of
-     * our traffic.
+     * BlueZ says it now holds a link to [deviceAddress], whichever side opened it. The connection
+     * service keeps a record of those links, so that one nothing here uses can be dropped after
+     * its grace. It is not a reason to dial the address: see [onDeviceHeard].
      */
     internal fun onDeviceAppeared(deviceAddress: String) {
         onDeviceConnected?.invoke(deviceAddress)
@@ -1437,11 +1443,10 @@ private fun dbusMessageFilter(
  */
 @OptIn(ExperimentalForeignApi::class)
 private fun observeDeviceSignal(message: CPointer<DBusMessage>, server: BlueZGattServerService) {
-    // No cheap "is anything registered" shortcut here any more. It used to return before parsing
-    // whenever no server client was registered, which is exactly the state a device BlueZ has
-    // connected but we have not adopted leaves us in -- so the one signal that could have told us
-    // about that peer was the one being dropped. readDeviceConnectedChange answers null for an RSSI
-    // update after walking a short dict, which is cheap enough to run on every signal.
+    // No cheap "is anything registered" shortcut here: every signal is read, also while no central
+    // is registered. A link BlueZ holds that nothing here uses is found from these, and so is
+    // every device BlueZ hears advertise, from its RSSI updates. Walking a short dictionary is
+    // cheap enough to do for each one.
     val iface = dbus_message_get_interface(message)?.toKString() ?: return
     val member = dbus_message_get_member(message)?.toKString() ?: return
 
@@ -1452,7 +1457,9 @@ private fun observeDeviceSignal(message: CPointer<DBusMessage>, server: BlueZGat
             // controller pass for the link here.
             if (!BlueZObjectPath.isOnAdapter(path)) return
             val address = BlueZObjectPath.deviceAddress(path) ?: return
-            when (readDeviceConnectedChange(message)) {
+            val change = readDeviceChange(message) ?: return
+            if (change.heard) server.onDeviceHeard?.invoke(address)
+            when (change.connected) {
                 false -> server.onDeviceGone(address)
                 true -> server.onDeviceAppeared(address)
                 null -> Unit
@@ -1464,18 +1471,21 @@ private fun observeDeviceSignal(message: CPointer<DBusMessage>, server: BlueZGat
             if (!BlueZObjectPath.isOnAdapter(path)) return
             val address = BlueZObjectPath.deviceAddress(path) ?: return
             server.onDeviceGone(address)
+            server.onDeviceRemoved?.invoke(address)
         }
     }
 }
 
 /**
- * The `Connected` value carried by an `org.bluez.Device1` `PropertiesChanged`, or null when the
- * signal does not mention `Connected` at all -- which is most of them, because this match also
- * carries every RSSI update BlueZ emits while scanning.
+ * What an `org.bluez.Device1` `PropertiesChanged` says about a link and an advertiser. `connected`
+ * is null when the signal does not mention `Connected`; `heard` is true when its changed dictionary
+ * contains `RSSI`.
  * Signature: `s` interface name, `a{sv}` changed properties, `as` invalidated properties.
  */
+private class DeviceChange(val connected: Boolean?, val heard: Boolean)
+
 @OptIn(ExperimentalForeignApi::class)
-private fun readDeviceConnectedChange(message: CPointer<DBusMessage>): Boolean? = memScoped {
+private fun readDeviceChange(message: CPointer<DBusMessage>): DeviceChange? = memScoped {
     val iter = alloc<DBusMessageIter>()
     if (dbus_message_iter_init(message, iter.ptr) == 0u) return@memScoped null
 
@@ -1489,6 +1499,8 @@ private fun readDeviceConnectedChange(message: CPointer<DBusMessage>): Boolean? 
 
     val changedIter = alloc<DBusMessageIter>()
     dbus_message_iter_recurse(iter.ptr, changedIter.ptr)
+    var connected: Boolean? = null
+    var heard = false
     while (dbus_message_iter_get_arg_type(changedIter.ptr) == DBUS_TYPE_DICT_ENTRY.toInt()) {
         val entryIter = alloc<DBusMessageIter>()
         dbus_message_iter_recurse(changedIter.ptr, entryIter.ptr)
@@ -1496,22 +1508,26 @@ private fun readDeviceConnectedChange(message: CPointer<DBusMessage>): Boolean? 
         if (dbus_message_iter_get_arg_type(entryIter.ptr) == DBUS_TYPE_STRING.toInt()) {
             val keyPtr = alloc<CPointerVar<ByteVar>>()
             dbus_message_iter_get_basic(entryIter.ptr, keyPtr.ptr)
-            if (keyPtr.value?.toKString() == "Connected") {
-                dbus_message_iter_next(entryIter.ptr)
-                if (dbus_message_iter_get_arg_type(entryIter.ptr) == DBUS_TYPE_VARIANT.toInt()) {
-                    val variantIter = alloc<DBusMessageIter>()
-                    dbus_message_iter_recurse(entryIter.ptr, variantIter.ptr)
-                    if (dbus_message_iter_get_arg_type(variantIter.ptr) == DBUS_TYPE_BOOLEAN.toInt()) {
-                        val connected = alloc<UIntVar>()
-                        dbus_message_iter_get_basic(variantIter.ptr, connected.ptr)
-                        return@memScoped connected.value != 0u
+            when (keyPtr.value?.toKString()) {
+                "RSSI" -> heard = true
+                "Connected" -> {
+                    dbus_message_iter_next(entryIter.ptr)
+                    if (dbus_message_iter_get_arg_type(entryIter.ptr) == DBUS_TYPE_VARIANT.toInt()) {
+                        val variantIter = alloc<DBusMessageIter>()
+                        dbus_message_iter_recurse(entryIter.ptr, variantIter.ptr)
+                        if (dbus_message_iter_get_arg_type(variantIter.ptr) == DBUS_TYPE_BOOLEAN.toInt()) {
+                            val value = alloc<UIntVar>()
+                            dbus_message_iter_get_basic(variantIter.ptr, value.ptr)
+                            connected = value.value != 0u
+                        }
                     }
                 }
+                else -> Unit
             }
         }
         dbus_message_iter_next(changedIter.ptr)
     }
-    null
+    DeviceChange(connected, heard)
 }
 
 /**

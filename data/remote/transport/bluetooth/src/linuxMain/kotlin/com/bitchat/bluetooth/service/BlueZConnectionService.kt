@@ -1,9 +1,11 @@
 package com.bitchat.bluetooth.service
 
 import com.bitchat.bluetooth.manager.CentralLinkPolicy
-import com.bitchat.bluetooth.manager.KnownPeers
+import com.bitchat.bluetooth.manager.DialBudget
+import com.bitchat.bluetooth.manager.HeardAdvertisers
 import com.bitchat.bluetooth.manager.OrphanedLinks
 import com.bitchat.bluetooth.manager.bitchatLinks
+import com.bitchat.bluetooth.manager.dialTimeLeftText
 import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
@@ -16,6 +18,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.concurrent.AtomicInt
 import kotlin.time.TimeSource
 
 /**
@@ -37,6 +40,15 @@ import kotlin.time.TimeSource
  * it stopped links coming up -- does not support the conclusion drawn from it, because
  * [BlueZScanningService.stopScan] also calls `stopMainLoop`, so it stopped gattlib's entire event
  * dispatch rather than just the scan. The scan stays up because nothing has shown it should not.
+ *
+ * Who is dialled: only an address BlueZ has heard advertise within the last minute, see
+ * [HeardAdvertisers]. A device object in BlueZ is not enough, and neither is a link BlueZ reports:
+ * both exist for the address a phone connected in from, which nobody advertises, and a dial to it
+ * can only time out while this controller neither advertises nor scans.
+ *
+ * How much is dialled: no more than [DialBudget] allows in all. A dial switches this controller's
+ * advertising and scanning off for its length, and no wait imposed on one address bounds what many
+ * addresses cost together.
  */
 class BlueZConnectionService(
     private val coroutineScopeFacade: CoroutineScopeFacade,
@@ -59,13 +71,18 @@ class BlueZConnectionService(
     private val connectionMutex = Mutex()
 
     // Permission to open an outbound link, and the deadline gattlib does not enforce on one.
-    private val linkPolicy = CentralLinkPolicy(immediateDropRetryEnabled = true)
+    private val linkPolicy = CentralLinkPolicy(
+        immediateDropRetryEnabled = true,
+        maxBackoffMs = CentralLinkPolicy.EMBEDDED_MAX_BACKOFF_MS,
+        dialBudget = DialBudget()
+    )
 
     // Links BlueZ holds that neither role here uses; see [dropOrphanedLinks].
     private val orphans = OrphanedLinks()
 
-    // What a link's age is measured with. The boards have no battery clock and their time of day
-    // jumps when NTP lands; the policy keeps currentTimeMillis() as before.
+    // The clock for everything timed here: the policy, the dial budget, the age of a link, when an
+    // advertiser was last heard. A board has no battery clock and its time of day jumps forward by
+    // hours when NTP lands; a jump while a dial is in flight would be charged as an hour of dialling.
     private val started = TimeSource.Monotonic.markNow()
 
     // After a bus session that failed, no other is tried before this (on the clock above). Only
@@ -74,19 +91,15 @@ class BlueZConnectionService(
 
     private fun monotonicMs(): Long = started.elapsedNow().inWholeMilliseconds
 
-    /**
-     * The addresses the scanner has named and BlueZ still has, so the sweep can offer one again.
-     *
-     * BlueZ announces a device once, when it first appears. gattlib's discovery callback passes
-     * that straight through, so a peer whose connect failed is never offered a second time and the
-     * policy's backoff -- which assumes repeated offers -- never gets to expire. Measured on the
-     * Pi: two connects failed within ten seconds of start-up and the radio then sat idle with zero
-     * links while both peers were still advertising.
-     *
-     * An address leaves when a dial to it is refused because BlueZ no longer has the device; see
-     * [KnownPeers]. Guarded by [connectionMutex].
-     */
-    private val knownPeers = KnownPeers()
+    // The dial candidates: the addresses BlueZ has heard advertise within the last minute. Written
+    // on the D-Bus dispatch thread, in the order BlueZ sent its reports, and read by the sweep.
+    private val heard = HeardAdvertisers()
+
+    // BlueZ's signal strength reports since the last link status line, for that line. Without them
+    // this node dials nobody: they come over the GATT server's match on the shared system bus
+    // connection, which the advertising service's dispatcher pumps as well as the server's own, so
+    // it takes that rule failing to install, or neither dispatcher running, for none to arrive.
+    private val reportsHeard = AtomicInt(0)
 
     // Addresses of peers this node is already talking to, keyed by peer ID rather than by MAC.
     // Android rotates its advertising address, so the same phone is offered by the scanner under a
@@ -116,8 +129,7 @@ class BlueZConnectionService(
 
     override suspend fun connectToDevice(deviceAddress: String) {
         logInfo(TAG, "Connect request: $deviceAddress")
-        val sighting = connectionMutex.withLock { knownPeers.sightingOf(deviceAddress) }
-        handleConnectOutcome(deviceAddress, gattClient.connect(deviceAddress), sighting)
+        handleConnectOutcome(deviceAddress, gattClient.connect(deviceAddress))
     }
 
     override suspend fun confirmDevice() {
@@ -133,7 +145,7 @@ class BlueZConnectionService(
         gattClient.disconnect(deviceAddress)
         gattServer.onClientDisconnected(deviceAddress)
         connectionMutex.withLock {
-            linkPolicy.onReleased(deviceAddress, currentTimeMillis())
+            linkPolicy.onReleased(deviceAddress, monotonicMs())
             serverConnections.remove(deviceAddress)
         }
     }
@@ -267,37 +279,34 @@ class BlueZConnectionService(
     }
 
     /**
-     * Called when scanning discovers a device.
+     * An address is offered for dialling: by gattlib, which names every new device object BlueZ
+     * makes, once, or by the sweep.
      *
-     * Connecting is not the default answer. The scanner offers every bitchat advertiser it sees,
-     * several times a minute, and because Android rotates its resolvable private address most of
-     * those offers are the same phone under a new MAC. Answering all of them is what produced the
-     * churn: overlapping attempts cancelling each other, and links that lasted seconds.
-     *
-     * [sighted] is false when the sweep is the one offering the address: only the scanner, or
-     * BlueZ reporting a link, says the device exists now.
+     * Connecting is not the default answer. First the address must be one BlueZ has heard advertise
+     * lately: gattlib also names the object BlueZ makes for a central that connected in, and that
+     * address nobody advertises. Then the policy decides: one attempt at a time, a backoff after a
+     * failure, no second link to a peer that is already linked.
      */
-    suspend fun onDeviceDiscovered(deviceAddress: String, deviceName: String?, sighted: Boolean = true) {
+    suspend fun onDeviceDiscovered(deviceAddress: String, deviceName: String?) {
         // Setting BITCHAT_BLE_NO_DIAL runs this node peripheral-only: it keeps advertising and
         // keeps serving centrals that dial us, but never dials out itself. It is the mirror of
         // BITCHAT_BLE_NO_ADVERTISE in BlueZAdvertisingService, and exists so the desktop's central
         // role can be exercised against a peer that will not race it by dialling first.
-        //
-        // The address is still remembered, so clearing the variable and restarting picks up
-        // everything already discovered rather than waiting for BlueZ to announce it again.
         if (dialSuppressed()) {
-            if (sighted) connectionMutex.withLock { knownPeers.onSighted(deviceAddress) }
             logDebug(TAG, "BITCHAT_BLE_NO_DIAL set: not dialling ${deviceAddress.take(8)}")
             return
         }
 
-        var sighting: Long? = null
+        if (!heard.isHeard(deviceAddress, monotonicMs())) {
+            logDebug(TAG, "Not connecting to ${deviceAddress.take(8)}: BlueZ has not heard it advertise in the last " +
+                    "${HeardAdvertisers.HEARD_WINDOW_MS / 1000} s")
+            return
+        }
+
         val decision = connectionMutex.withLock {
-            if (sighted) knownPeers.onSighted(deviceAddress)
-            sighting = knownPeers.sightingOf(deviceAddress)
             linkPolicy.onDiscovered(
                 address = deviceAddress,
-                now = currentTimeMillis(),
+                now = monotonicMs(),
                 inboundAddresses = serverConnections.toSet(),
                 peerAddresses = peerAddressLookup(deviceAddress)
             )
@@ -316,7 +325,7 @@ class BlueZConnectionService(
                 "(links: ${connectionMutex.withLock { linkPolicy.establishedCount() }})")
 
         logInfo(TAG, "Connect request: $deviceAddress")
-        handleConnectOutcome(deviceAddress, gattClient.connect(deviceAddress), sighting)
+        handleConnectOutcome(deviceAddress, gattClient.connect(deviceAddress))
     }
 
     /**
@@ -327,14 +336,13 @@ class BlueZConnectionService(
      * is still holding an attempt this side has already given up on, and asking again before it lets
      * go only collects another refusal. See [CentralLinkPolicy.onNativeBusy].
      *
-     * UNKNOWN_DEVICE takes the address out of the sweep as well, unless the scanner has named it
-     * again since [sighting], the sighting this dial acted on: BlueZ dropped the device, so every
-     * further dial would be refused the same way until it is announced again.
+     * UNKNOWN_DEVICE takes the address out of the dial candidates: BlueZ dropped the device, so
+     * every further dial would be refused the same way. Its next signal strength report, which
+     * says BlueZ has it again, puts it back.
      */
     private suspend fun handleConnectOutcome(
         deviceAddress: String,
-        outcome: BlueZGattClientService.ConnectOutcome,
-        sighting: Long?
+        outcome: BlueZGattClientService.ConnectOutcome
     ) {
         when (outcome) {
             BlueZGattClientService.ConnectOutcome.STARTED -> Unit
@@ -342,24 +350,17 @@ class BlueZConnectionService(
             BlueZGattClientService.ConnectOutcome.BUSY -> {
                 logInfo(TAG, "gattlib still owns the previous attempt to ${deviceAddress.take(8)}; " +
                         "freeing the slot and backing off")
-                connectionMutex.withLock { linkPolicy.onNativeBusy(deviceAddress, currentTimeMillis()) }
+                connectionMutex.withLock { linkPolicy.onNativeBusy(deviceAddress, monotonicMs()) }
             }
 
             BlueZGattClientService.ConnectOutcome.REFUSED ->
                 onClientConnectionFailed(deviceAddress, "gattlib refused the connection")
 
             BlueZGattClientService.ConnectOutcome.UNKNOWN_DEVICE -> {
-                val dropped = connectionMutex.withLock {
-                    linkPolicy.onReleased(deviceAddress, currentTimeMillis())
-                    knownPeers.onUnknownToBlueZ(deviceAddress, sighting)
-                }
-                if (dropped) {
-                    logInfo(TAG, "BlueZ no longer has ${deviceAddress.take(8)}; not offering it " +
-                            "again until the scanner names it")
-                } else {
-                    logInfo(TAG, "BlueZ had dropped ${deviceAddress.take(8)} but it has been " +
-                            "named again since; keeping it")
-                }
+                connectionMutex.withLock { linkPolicy.onReleased(deviceAddress, monotonicMs()) }
+                heard.onRemoved(deviceAddress)
+                logInfo(TAG, "BlueZ no longer has ${deviceAddress.take(8)}; not offering it again " +
+                        "until BlueZ hears it advertise again")
             }
         }
     }
@@ -375,7 +376,7 @@ class BlueZConnectionService(
         // here, and the loss, reported later, releases it later; or it does not, and the entry goes
         // again in this same locked step.
         val released = connectionMutex.withLock {
-            val now = currentTimeMillis()
+            val now = monotonicMs()
             linkPolicy.onConnected(deviceAddress, now)
             linkPolicy.releaseUnheld(gattClient.heldAddresses(), now)
         }
@@ -396,13 +397,10 @@ class BlueZConnectionService(
      * Called when client connection fails.
      */
     internal suspend fun onClientConnectionFailed(deviceAddress: String, reason: String) {
-        connectionMutex.withLock { linkPolicy.onReleased(deviceAddress, currentTimeMillis()) }
+        connectionMutex.withLock { linkPolicy.onReleased(deviceAddress, monotonicMs()) }
         logDebug(TAG, "Client connection failed: ${deviceAddress.take(8)}: $reason")
     }
 
-    /**
-     * Called when client disconnects.
-     */
     /**
      * Drop an outbound link BlueZ has already torn down.
      *
@@ -412,25 +410,6 @@ class BlueZConnectionService(
      * it clears the registry entry, marks the connection dead so no later gattlib call walks freed
      * memory, and fires onConnectionLost, which releases the policy slot.
      */
-    /**
-     * Offer a peer BlueZ has connected but the mesh has never seen.
-     *
-     * The scanner is not a complete picture: BlueZ announces a device once, when it first appears,
-     * so anything it was already connected to is never offered and stays invisible. This routes
-     * such a peer through the same policy decision as a fresh sighting, and does nothing when we
-     * already hold the link.
-     *
-     * Peers that are not ours are handled where they already were: service discovery drops a device
-     * whose GATT tree carries no [BlueZManager.SERVICE_UUID], so the cost of a wrong guess is one
-     * abandoned dial with the policy's backoff behind it, not a retry storm.
-     */
-    internal suspend fun adoptConnectedPeer(deviceAddress: String) {
-        if (gattClient.holdsConnection(deviceAddress)) return
-        if (connectionMutex.withLock { serverConnections.contains(deviceAddress) }) return
-        logInfo(TAG, "BlueZ already holds ${deviceAddress.take(8)}; offering it to the mesh")
-        onDeviceDiscovered(deviceAddress, null)
-    }
-
     internal fun reapOutboundLink(deviceAddress: String) {
         if (!gattClient.holdsConnection(deviceAddress)) return
         logInfo(TAG, "BlueZ dropped ${deviceAddress.take(8)}; reaping the outbound link")
@@ -438,7 +417,7 @@ class BlueZConnectionService(
     }
 
     internal suspend fun onClientDisconnected(deviceAddress: String) {
-        connectionMutex.withLock { linkPolicy.onReleased(deviceAddress, currentTimeMillis()) }
+        connectionMutex.withLock { linkPolicy.onReleased(deviceAddress, monotonicMs()) }
         logInfo(TAG, "Client disconnected: ${deviceAddress.take(8)}")
     }
 
@@ -497,22 +476,25 @@ class BlueZConnectionService(
             // `CONNECTING`. So gattlib keeps the address until it lets go on its own, and the next
             // offer for it comes back BUSY -- handled in [handleConnectOutcome].
             gattClient.disconnect(address)
-            connectionMutex.withLock { linkPolicy.onReleased(address, now) }
+            // The time is read again: the disconnect above can take seconds inside gattlib, and
+            // until this release the attempt is in flight and is charged as such.
+            connectionMutex.withLock { linkPolicy.onReleased(address, monotonicMs()) }
         }
     }
 
     /**
-     * Offer peers the scanner will not mention again.
+     * Offer every address BlueZ hears advertise that this node has no link to.
      *
-     * Every candidate goes back through [onDeviceDiscovered], so the policy makes the same decision
-     * it would for a fresh sighting: backoff, in-flight attempts and the inbound-link rules all
-     * still apply and a peer that should be left alone is skipped. Addresses we already hold a link
-     * to are filtered out first, which keeps the common case to a set difference.
+     * gattlib names a device once, when its object appears, so a peer whose dial failed gets
+     * another try only from here. Every candidate goes through [onDeviceDiscovered], so the policy
+     * decides as it does for gattlib's offer: backoff, the attempt in flight and the inbound-link
+     * rules all apply.
      */
-    internal suspend fun reofferKnownPeers() {
-        val held = gattClient.heldAddresses() + serverConnections.toSet()
-        val candidates = connectionMutex.withLock { knownPeers.candidates(held) }
-        candidates.forEach { address -> onDeviceDiscovered(address, null, sighted = false) }
+    internal suspend fun reofferHeardAdvertisers() {
+        val held = gattClient.heldAddresses() + connectionMutex.withLock { serverConnections.toSet() }
+        heard.recent(monotonicMs()).filter { it !in held }.forEach { address ->
+            onDeviceDiscovered(address, null)
+        }
     }
 
     private fun startAttemptReaper() {
@@ -523,8 +505,8 @@ class BlueZConnectionService(
                     "${CentralLinkPolicy.SWEEP_INTERVAL_MS}ms)")
             while (isActive) {
                 delay(CentralLinkPolicy.SWEEP_INTERVAL_MS)
-                reapExpiredAttempts(currentTimeMillis())
-                reofferKnownPeers()
+                reapExpiredAttempts(monotonicMs())
+                reofferHeardAdvertisers()
             }
         }
     }
@@ -533,7 +515,7 @@ class BlueZConnectionService(
      * Every sweep interval: let go of policy entries the GATT client no longer holds, then drop
      * links BlueZ holds that nothing here uses.
      *
-     * A loop of its own, not part of the reaper's: that one re-offers known peers, and a dial
+     * A loop of its own, not part of the reaper's: that one offers the dial candidates, and a dial
      * blocks inside gattlib for up to 25 s, which would stretch these two checks to half a minute.
      */
     private fun startLinkReconciliation() {
@@ -544,7 +526,7 @@ class BlueZConnectionService(
                 delay(CentralLinkPolicy.SWEEP_INTERVAL_MS)
                 try {
                     val released = connectionMutex.withLock {
-                        linkPolicy.releaseUnheld(gattClient.heldAddresses(), currentTimeMillis())
+                        linkPolicy.releaseUnheld(gattClient.heldAddresses(), monotonicMs())
                     }
                     released.forEach { address ->
                         logInfo(TAG, "Released the link to ${address.take(8)}: the GATT client no longer holds it")
@@ -571,14 +553,21 @@ class BlueZConnectionService(
     private suspend fun logLinkStatus() {
         val held = gattClient.heldAddresses()
         val ready = gattClient.getReadyDeviceAddresses().toSet()
-        val (attempts, counted, known) = connectionMutex.withLock {
-            Triple(linkPolicy.pendingCount(), linkPolicy.establishedCount(), knownPeers.candidates(emptySet()).size)
+        val (attempts, counted, dialTimeLeft) = connectionMutex.withLock {
+            Triple(
+                linkPolicy.pendingCount(),
+                linkPolicy.establishedCount(),
+                linkPolicy.dialTimeLeftMs(monotonicMs())
+            )
         }
+        val heardCount = heard.recent(monotonicMs()).size
+        val reports = reportsHeard.getAndSet(0)
         fun Collection<String>.short() = sorted().joinToString(",") { it.take(8) }.ifEmpty { "-" }
         logInfo(TAG, "Link status: advertising=${if (advertisingService.isAdvertising()) "yes" else "NO"} " +
                 "client=[${ready.short()}] client-not-ready=[${(held - ready).short()}] " +
                 "server=[${gattServer.getConnectedClients().short()}] bluez-links=[${orphans.tracked().short()}] " +
-                "attempts=$attempts policy-links=$counted known=$known")
+                "attempts=$attempts policy-links=$counted heard=$heardCount reports=$reports" +
+                (dialTimeLeft?.let { " dial-budget=${dialTimeLeftText(it)}" } ?: ""))
     }
 
     /**
@@ -665,7 +654,8 @@ class BlueZConnectionService(
     }
 
     private fun setupDelegates() {
-        // Setup scanning callback
+        // gattlib names a new device object. That says nothing about whether the device
+        // advertises; BlueZ's own report decides, in [onDeviceDiscovered].
         scanningService.setOnDeviceDiscoveredCallback { address, name ->
             coroutineScopeFacade.applicationScope.launch {
                 onDeviceDiscovered(address, name)
@@ -697,12 +687,22 @@ class BlueZConnectionService(
         // firing, and the link then stayed in the registry forever. The journal showed the effect
         // directly -- BlueZ reporting one connected device while every broadcast claimed two, so
         // half of each one went to a peer that was no longer there and still logged success.
-        // The orphan tracker is updated on the dispatch thread itself, so up and gone are applied
-        // in the order BlueZ sent them. A launched coroutine would not keep that order.
+        // The orphan tracker and the record of advertisers are updated on the dispatch thread
+        // itself, so what BlueZ reports is applied in the order it was sent. A launched coroutine
+        // would not keep that order.
+        //
+        // A link BlueZ reports is recorded and nothing more. It used to be offered for dialling
+        // ("BlueZ already holds X; offering it to the mesh"), which is how the address a phone
+        // connected in from came to be dialled. A link from before this start is dropped in
+        // [prepareForStart], and one nothing here uses in [dropOrphanedLinks].
         gattServer.onDeviceConnected = { address ->
             orphans.onLinkUp(address, monotonicMs())
-            coroutineScopeFacade.applicationScope.launch { adoptConnectedPeer(address) }
         }
+        gattServer.onDeviceHeard = { address ->
+            heard.onHeard(address, monotonicMs())
+            reportsHeard.incrementAndGet()
+        }
+        gattServer.onDeviceRemoved = { address -> heard.onRemoved(address) }
         gattServer.onDeviceLinkGone = { address ->
             orphans.onLinkGone(address)
             coroutineScopeFacade.applicationScope.launch { reapOutboundLink(address) }
@@ -739,15 +739,6 @@ class BlueZConnectionService(
     }
 }
 
-/**
- * Get current time in milliseconds.
- */
 /** True when BITCHAT_BLE_NO_DIAL is set, i.e. this node is running peripheral-only. */
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 private fun dialSuppressed(): Boolean = getenv("BITCHAT_BLE_NO_DIAL") != null
-
-@OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
-private fun currentTimeMillis(): Long {
-    // Using POSIX time() returns seconds since epoch, multiply by 1000 for milliseconds
-    return platform.posix.time(null) * 1000L
-}
