@@ -25,6 +25,7 @@ import com.bitchat.domain.chat.ObserveJoinedChannels
 import com.bitchat.domain.chat.ObserveJoinedNamedChannels
 import com.bitchat.domain.chat.FindMeshPeerByName
 import com.bitchat.domain.chat.GetMeshPeers
+import com.bitchat.domain.chat.GetPrivateTextLimit
 import com.bitchat.domain.chat.JoinChannel
 import com.bitchat.domain.chat.LeaveChannel
 import com.bitchat.domain.chat.ChatNotices
@@ -39,7 +40,6 @@ import com.bitchat.domain.chat.ObservePrivateChats
 import com.bitchat.domain.chat.ObserveSelectedPrivatePeer
 import com.bitchat.domain.chat.ObserveUnreadPrivatePeers
 import com.bitchat.domain.chat.ProcessChatCommand
-import com.bitchat.domain.chat.PrivateTextLimit
 import com.bitchat.domain.chat.SendMessage
 import com.bitchat.domain.chat.SetChannelPassword
 import com.bitchat.domain.chat.eventbus.ChatEventBus
@@ -191,7 +191,7 @@ val domainModule = module {
 
     single { ObserveChannelMessages(chatRepository = get(), chatEventBus = get()) }
     single { SendMessage(chatRepository = get()) }
-    single { PrivateTextLimit(chatRepository = get()) }
+    single { GetPrivateTextLimit(chatRepository = get()) }
     single { ProcessChatCommand() }
     single { ObservePrivateChats(chatRepository = get(), chatEventBus = get()) }
     single { ObserveUnreadPrivatePeers(chatRepository = get(), chatEventBus = get()) }

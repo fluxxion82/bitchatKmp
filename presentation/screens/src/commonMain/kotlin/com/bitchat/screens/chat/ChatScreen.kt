@@ -7,6 +7,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
@@ -19,6 +20,7 @@ import com.bitchat.design.util.buildMentionInsertionText
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.viewmodel.chat.ChatViewModel
 import com.bitchat.viewmodel.chat.DmViewModel
+import kotlinx.coroutines.launch
 
 @Composable
 fun ChatScreen(
@@ -33,6 +35,7 @@ fun ChatScreen(
     val isPrivateChat = selectedPrivatePeer != null
     val activeInput = if (isPrivateChat) dmState.messageInput else state.messageInput
     var messageText by remember { mutableStateOf(TextFieldValue(activeInput)) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(activeInput) {
         if (activeInput != messageText.text) {
@@ -88,10 +91,13 @@ fun ChatScreen(
             if (messageText.text.trim().isNotEmpty()) {
                 if (isPrivateChat) {
                     // The DM on screen, captured now. A LoRa node DM or a header caught mid-change
-                    // is refused at once, with an error, and the draft stays.
-                    if (dmViewModel.sendTo(dmChannel, messageText.text)) {
-                        dmViewModel.updateMessageInput("")
-                        messageText = TextFieldValue("")
+                    // is refused with an error and the draft stays; a draft typed since is not cleared.
+                    val line = messageText.text
+                    scope.launch {
+                        if (dmViewModel.sendTo(dmChannel, line) && messageText.text == line) {
+                            dmViewModel.updateMessageInput("")
+                            messageText = TextFieldValue("")
+                        }
                     }
                 } else {
                     // Refused (the user's data is being wiped): the draft stays, with an error.

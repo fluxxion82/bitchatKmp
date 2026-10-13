@@ -94,7 +94,7 @@ fun dmPeerFor(header: HeaderState, key: String): PeerEntry {
  * chance to refuse the line, so a refused one has to be given back or it is lost. Why it was
  * refused is shown by whoever refused it (a chat's `errorMessage`).
  */
-fun sendOrKeep(editor: LineEditor, line: String, send: () -> Boolean) {
+inline fun sendOrKeep(editor: LineEditor, line: String, send: () -> Boolean) {
     if (!send()) editor.insert(line)
 }
 

@@ -1,21 +1,21 @@
 package com.bitchat.viewmodel.chat
 
+import com.bitchat.domain.chat.GetPrivateTextLimit
 import com.bitchat.domain.chat.MarkPrivateChatRead
 import com.bitchat.domain.chat.ObserveLatestUnreadPrivatePeer
 import com.bitchat.domain.chat.ObservePrivateChats
 import com.bitchat.domain.chat.ObserveSelectedPrivatePeer
 import com.bitchat.domain.chat.ObserveUnreadPrivatePeers
-import com.bitchat.domain.chat.PrivateTextLimit
 import com.bitchat.domain.chat.SendMessage
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.user.GetUserNickname
 import com.bitchat.viewmodel.BaseViewModelTest
 import io.mockk.coEvery
 import io.mockk.coVerify
-import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -39,11 +39,11 @@ class DmViewModelSendToTest : BaseViewModelTest() {
         markPrivateChatRead = mockk<MarkPrivateChatRead>(relaxed = true),
         sendMessage = sendMessage,
         getUserNickname = mockk<GetUserNickname> { coEvery { this@mockk.invoke(Unit) } returns "anon" },
-        privateTextLimit = mockk<PrivateTextLimit> { every { this@mockk.invoke(any()) } answers { limits[firstArg<Channel>()] ?: 255 } },
+        getPrivateTextLimit = mockk<GetPrivateTextLimit> { coEvery { this@mockk.invoke(any()) } answers { limits[firstArg<Channel>()] ?: 255 } },
     ).also { instantExecutorRule.scheduler.runCurrent() }
 
     @Test
-    fun `a line goes to the DM it was sent in even after the active chat changed`() {
+    fun `a line goes to the DM it was sent in even after the active chat changed`() = runTest {
         val viewModel = buildViewModel()
         val bob = Channel.MeshDM("b0b", "bob")
 
@@ -55,7 +55,7 @@ class DmViewModelSendToTest : BaseViewModelTest() {
     }
 
     @Test
-    fun `a public channel is refused`() {
+    fun `a public channel is refused`() = runTest {
         val viewModel = buildViewModel()
 
         for (channel in listOf(Channel.Mesh, Channel.NamedChannel("#general"), Channel.Meshtastic(nodeNum = null), Channel.Location(com.bitchat.domain.location.model.GeohashChannelLevel.CITY, "9q8yy"))) {
@@ -68,7 +68,7 @@ class DmViewModelSendToTest : BaseViewModelTest() {
     }
 
     @Test
-    fun `a line too long for what its peer's link carries is refused at once, so the draft stays`() {
+    fun `a line too long for what its peer's link carries is refused at once, so the draft stays`() = runTest {
         // A peer whose texts are cut for the radio: 141 bytes a message.
         val byRadio = Channel.MeshDM("b0b")
         val onTheMesh = Channel.MeshDM("a11ce")
@@ -92,7 +92,7 @@ class DmViewModelSendToTest : BaseViewModelTest() {
     }
 
     @Test
-    fun `a line too long to be sent even in parts is refused at once, so the draft stays`() {
+    fun `a line too long to be sent even in parts is refused at once, so the draft stays`() = runTest {
         val viewModel = buildViewModel()
         // One byte more than eight private messages carry: the repository would refuse it too,
         // but only after the caller had cleared its editor.
@@ -113,7 +113,7 @@ class DmViewModelSendToTest : BaseViewModelTest() {
     }
 
     @Test
-    fun `a line longer than one private message is taken whole, measured in bytes after trimming`() {
+    fun `a line longer than one private message is taken whole, measured in bytes after trimming`() = runTest {
         val viewModel = buildViewModel()
         val bob = Channel.MeshDM("b0b", "bob")
         // 680 characters of three bytes each: exactly eight messages. The repository cuts it.
@@ -127,7 +127,7 @@ class DmViewModelSendToTest : BaseViewModelTest() {
     }
 
     @Test
-    fun `a blank line sends nothing`() {
+    fun `a blank line sends nothing`() = runTest {
         val viewModel = buildViewModel()
         viewModel.sendTo(Channel.MeshDM("b0b"), "   ")
         instantExecutorRule.scheduler.runCurrent()
@@ -136,7 +136,7 @@ class DmViewModelSendToTest : BaseViewModelTest() {
     }
 
     @Test
-    fun `a LoRa node DM is refused until LoRa DMs exist, instead of going out as a broadcast`() {
+    fun `a LoRa node DM is refused until LoRa DMs exist, instead of going out as a broadcast`() = runTest {
         val viewModel = buildViewModel()
         viewModel.sendTo(Channel.Meshtastic(nodeNum = 0x1234), "secret")
         instantExecutorRule.scheduler.runCurrent()
@@ -146,7 +146,7 @@ class DmViewModelSendToTest : BaseViewModelTest() {
 
 
     @Test
-    fun `a refusal is immediate and says whether the line was taken`() {
+    fun `a refusal is immediate and says whether the line was taken`() = runTest {
         val viewModel = buildViewModel()
         // No coroutine runs between the call and the answer: a Compose or TUI caller keeps the
         // draft on false, and nothing is left to look the destination up later.

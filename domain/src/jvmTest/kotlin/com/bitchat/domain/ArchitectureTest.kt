@@ -48,8 +48,7 @@ class ArchitectureTest {
         parents().firstOrNull { it.name.substringBefore('<') == "Usecase" }?.typeArguments?.getOrNull(1)?.text
 
     private companion object {
-        // PrivateTextLimit answers while a line is being sent, before the editor is cleared, so it cannot suspend.
-        val notUseCases = setOf("AppForegroundState", "ChatNotices", "Notice", "PrivateTextLimit")
+        val notUseCases = setOf("AppForegroundState", "ChatNotices", "Notice")
 
         val allowedImports = listOf("com.bitchat.domain.", "kotlin.", "kotlinx.", "org.koin.")
     }

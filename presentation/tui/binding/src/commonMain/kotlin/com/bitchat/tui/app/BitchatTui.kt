@@ -55,6 +55,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 /**
  * The binding: collects the view models' state and feeds the `presentation/tui` screens, and turns
@@ -140,7 +141,7 @@ fun BitchatTui(vms: TuiViewModels, background: CoroutineScope, notices: StateFlo
             dmEditor.insert(line)
             return
         }
-        sendOrKeep(dmEditor, line) { vms.dm.sendTo(channel, line) }
+        ui.launch { sendOrKeep(dmEditor, line) { vms.dm.sendTo(channel, line) } }
     }
 
     // The colours the user chose, live: changing the theme redraws every screen. A terminal that
