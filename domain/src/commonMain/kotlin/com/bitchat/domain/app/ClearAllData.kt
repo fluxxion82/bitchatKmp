@@ -1,5 +1,7 @@
 package com.bitchat.domain.app
 
+import com.bitchat.domain.app.eventbus.AppEventBus
+import com.bitchat.domain.app.model.AppEvent
 import com.bitchat.domain.app.repository.AppRepository
 import com.bitchat.domain.base.Usecase
 import com.bitchat.domain.chat.ChatNotices
@@ -22,6 +24,7 @@ class ClearAllData(
     private val nostrRepository: NostrRepository,
     private val torRepository: TorRepository,
     private val userEventBus: UserEventBus,
+    private val appEventBus: AppEventBus,
 ) : Usecase<Unit, Unit> {
 
     /**
@@ -35,6 +38,8 @@ class ClearAllData(
             chatRepository.clearData()
             userRepository.clearData()
             appRepository.clearData()
+            // The app store has put the theme back to the system's.
+            appEventBus.update(AppEvent.ThemeUpdated)
             locationRepository.clearData()
             blockListRepository.clearData()
             nostrRepository.clearData()

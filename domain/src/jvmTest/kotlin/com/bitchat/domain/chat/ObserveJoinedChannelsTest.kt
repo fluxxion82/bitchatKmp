@@ -6,6 +6,7 @@ import com.bitchat.domain.chat.eventbus.InMemoryChatEventBus
 import com.bitchat.domain.chat.model.ChatEvent
 import com.bitchat.domain.chat.repository.ChatRepository
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -24,6 +25,19 @@ class ObserveJoinedChannelsTest {
             assertEquals(setOf("#general", "#dev"), awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `an unrelated event in the replay slot does not read the channels again at the start`() = runTest {
+        coEvery { chatRepository.getJoinedChannelsList() } returns listOf("#general")
+        chatEventBus.update(ChatEvent.ChannelChanged)
+
+        useCase(Unit).test {
+            assertEquals(setOf("#general"), awaitItem())
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 1) { chatRepository.getJoinedChannelsList() }
     }
 
     @Test

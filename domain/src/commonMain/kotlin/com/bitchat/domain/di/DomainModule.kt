@@ -129,6 +129,7 @@ val domainModule = module {
             nostrRepository = get(),
             torRepository = get(),
             userEventBus = get(),
+            appEventBus = get(),
         )
     }
 

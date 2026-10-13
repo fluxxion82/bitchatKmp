@@ -1,6 +1,7 @@
 package com.bitchat.domain.app
 
 import com.bitchat.domain.app.eventbus.AppEventBus
+import com.bitchat.domain.app.model.AppEvent
 import com.bitchat.domain.app.model.AppTheme
 import com.bitchat.domain.app.repository.AppRepository
 import com.bitchat.domain.base.Usecase
@@ -15,8 +16,11 @@ class ObserveAppTheme(
     override suspend fun invoke(param: Unit): Flow<AppTheme> = channelFlow {
         eventBus.getAppEvent()
             .onStart { send(repository.getAppTheme()) }
-            .collect {
-                send(repository.getAppTheme())
+            .collect { event ->
+                when (event) {
+                    AppEvent.ThemeUpdated -> send(repository.getAppTheme())
+                    else -> Unit
+                }
             }
     }
 }

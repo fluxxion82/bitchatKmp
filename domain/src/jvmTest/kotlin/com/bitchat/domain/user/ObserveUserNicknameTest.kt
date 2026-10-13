@@ -7,6 +7,7 @@ import com.bitchat.domain.user.model.AppUser
 import com.bitchat.domain.user.model.UserEvent
 import com.bitchat.domain.user.repository.UserRepository
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -35,6 +36,19 @@ class ObserveUserNicknameTest {
             assertEquals("anon", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `an unrelated event in the replay slot does not read the nickname again at the start`() = runTest {
+        coEvery { userRepository.getAppUser() } returns AppUser.ActiveAnonymous("Alice")
+        userEventBus.update(UserEvent.StateChanged)
+
+        useCase(Unit).test {
+            assertEquals("Alice", awaitItem())
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 1) { userRepository.getAppUser() }
     }
 
     @Test
