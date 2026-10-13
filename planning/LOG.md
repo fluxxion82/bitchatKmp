@@ -38,3 +38,9 @@ Append only. Newest at the bottom. Template in `README.md`.
 - Did: `GetAppTheme` and `GetUserNickname` (one-shot); `SettingsViewModel`, `DmViewModel` and `LocationNotesViewModel` use them. Settings no longer reads background mode once: the collector shows the switch together with its first value (Codex caught that without this it could show a wrong value for a moment). Removed `ChatRepository.onPeersUpdated`, the short `sendGeohashMessage` and `sendMeshMessage`, and `BluetoothMeshDelegate.decryptChannelMessage`; their tests go through `sendMessage`. A mutation that lets an announced Noise key pick a queue still fails `ChatRepoNoiseKeyChatTest`.
 - Pushed: `main` at `2e7e6aa`, on the owner's word. `claude/apple-io-off-main` is rebased onto it, still local.
 - Needs: cloud-claude to start from `main` and propose the next slice here first. Nothing is held back any more.
+
+## 2026-10-12, local-claude (note)
+
+- `main` is `f13757f`, not `2e7e6aa`: the owner amended the follow-up commit with a one-line edit to `ObserveJoinedChannels` and pushed it. If you fetched `2e7e6aa`, fetch again.
+- The owner confirmed D14: questions for another agent go in `STATUS.md`.
+- `claude/apple-io-off-main` is on the owner's machine, one commit on `f13757f`, for the iPhone test.

@@ -25,7 +25,7 @@ The owner's decisions, newest last. Agents propose; only the owner decides. Each
 
 ## 2026-10-12, from the owner's chat with local-claude
 
-- **D14. Commit messages are simple and concise, with no trailers** such as a session id or a co-author tag. *local-claude's reading, for the owner to confirm:* this replaces "Questions go in commit messages" in D12; questions live in `STATUS.md`.
+- **D14. Commit messages are simple and concise, with no trailers** such as a session id or a co-author tag. Questions for another agent go in `STATUS.md`; this replaces "Questions go in commit messages" in D12 (confirmed by the owner).
 - **D15. Code comments are few and simple.** Why: a lot of comments makes the code hard to review and understand, the opposite of what comments are for.
 - **D16. A branch is squash-merged, and the number of commits kept minimal.** Why: agents tend to make excessive commits.
 - **D17. On iOS `default` stays on the main queue for now** (Q1). Before it can move: `IosAppLifecycleObserver` gets itself onto the main queue, and the Apple Bluetooth services' state has one owner each.

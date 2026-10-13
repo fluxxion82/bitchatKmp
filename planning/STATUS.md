@@ -11,7 +11,7 @@ Updated 2026-10-12 by local-claude.
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | `2e7e6aa`: the first slice (`e4e5d94`) and its follow-up, D18 and D20 (`2e7e6aa`) | Pushed 2026-10-12 | cloud-claude: start the next slice from here |
+| `main` | `f13757f`: the first slice (`e4e5d94`) and its follow-up, D18 and D20 (`f13757f`; the owner amended `2e7e6aa` with a one-line edit to `ObserveJoinedChannels`) | Pushed 2026-10-12 | cloud-claude: start the next slice from here |
 | `claude/apple-io-off-main` | The Apple dispatcher change (was `b2e6cd5`), with `io` limited to one worker and `IosLocationService` on the main queue; one commit on `main`, on the owner's machine only | Compiles for iOS; not run on a device | Owner: the iPhone test below. Then local agents: locks for the collections listed in `reference/2026-10-12-local-review.md` §1 |
 
 `claude/naming-rule-and-safety-fixes` and `claude/clean-architecture-review-b6fcfl` are deleted (D13).
@@ -34,7 +34,7 @@ On the merged tree, by local-claude, macOS arm64:
 - Module tests, all green: `:domain:jvmTest`, `:presentation:viewmodel:jvmTest` (68), `:presentation:viewvo:jvmTest`, `:data:repo:desktopTest` (309), the three LoRa modules' `jvmTest`, `:data:remote:tor:jvmTest` and `macosArm64Test`, `:apps:desktop:test`, `:iosdi:iosSimulatorArm64Test`, and with `-Ptui.enabled=true` `:presentation:tui:jvmTest` (469), `:presentation:tui:binding:jvmTest`, `:apps:desktop:tui:test`.
 - New tests: `InMemoryNostrEventBusTest`, `LoRaSettingsRepoTest`, `DesktopModulesTest.desktopOffersOnlyTheLoRaProtocolsItRegisters`, one case in `SettingsViewModelLoRaTest`.
 
-The follow-up `2e7e6aa`: the same module tests plus `:data:remote:transport:bluetooth:desktopTest`, the desktop terminal UI tests, `:apps:droid:assembleDebug`, the iOS simulator framework link and the linuxArm64 compiles of both embedded apps, all green; Codex "nothing blocking" in its second round.
+The follow-up (built at `2e7e6aa`, before the owner's one-line amend): the same module tests plus `:data:remote:transport:bluetooth:desktopTest`, the desktop terminal UI tests, `:apps:droid:assembleDebug`, the iOS simulator framework link and the linuxArm64 compiles of both embedded apps, all green; Codex "nothing blocking" in its second round.
 
 Not run: any app on a device or simulator.
 
