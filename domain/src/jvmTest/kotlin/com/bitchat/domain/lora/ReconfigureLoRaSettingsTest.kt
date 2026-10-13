@@ -2,6 +2,7 @@ package com.bitchat.domain.lora
 
 import com.bitchat.domain.base.model.Outcome
 import com.bitchat.domain.chat.repository.ChatRepository
+import com.bitchat.domain.lora.model.LoRaProtocolType
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.domain.lora.model.failure.LoRaFailure
@@ -17,9 +18,17 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class ReconfigureLoRaSettingsTest {
+    private val outcomes = listOf(
+        Outcome.Error(LoRaFailure.NoRadio),
+        Outcome.Error(LoRaFailure.NotRegistered),
+        Outcome.Error(LoRaFailure.KeepsOwnRadioSettings(LoRaProtocolType.MESHTASTIC)),
+        Outcome.Error(LoRaFailure.NotApplied),
+        Outcome.Success(Unit),
+    )
+
     @Test
     fun `region returns runtime result after saving preference even on failure`() = runTest {
-        for (outcome in listOf(Outcome.Error(LoRaFailure.NotApplied), Outcome.Success(Unit))) {
+        for (outcome in outcomes) {
             val settings = mockk<LoRaSettingsRepository>()
             var saved: LoRaRegion? = null
             every { settings.setLoRaRegion(any()) } answers { saved = firstArg() }
@@ -36,7 +45,7 @@ class ReconfigureLoRaSettingsTest {
 
     @Test
     fun `power returns runtime result after saving preference even on failure`() = runTest {
-        for (outcome in listOf(Outcome.Error(LoRaFailure.NotApplied), Outcome.Success(Unit))) {
+        for (outcome in outcomes) {
             val settings = mockk<LoRaSettingsRepository>()
             var saved: LoRaTxPower? = null
             every { settings.setLoRaTxPower(any()) } answers { saved = firstArg() }
@@ -60,6 +69,21 @@ class ReconfigureLoRaSettingsTest {
             SetLoRaRegion(settings, chat)(SetLoRaRegion.Params(LoRaRegion.EU_868, LoRaTxPower.LOW))
         }
         assertFailsWith<CancellationException> {
+            SetLoRaTxPower(settings, chat)(SetLoRaTxPower.Params(LoRaTxPower.LOW, LoRaRegion.US_915))
+        }
+        verify { settings.setLoRaRegion(LoRaRegion.EU_868) }
+        verify { settings.setLoRaTxPower(LoRaTxPower.LOW) }
+    }
+
+    @Test
+    fun `an exception is not turned into a failure and the preference stays saved`() = runTest {
+        val settings = mockk<LoRaSettingsRepository>(relaxed = true)
+        val chat = mockk<ChatRepository>()
+        coEvery { chat.reconfigureLoRa(any(), any()) } throws IllegalStateException("systemctl failed")
+        assertFailsWith<IllegalStateException> {
+            SetLoRaRegion(settings, chat)(SetLoRaRegion.Params(LoRaRegion.EU_868, LoRaTxPower.LOW))
+        }
+        assertFailsWith<IllegalStateException> {
             SetLoRaTxPower(settings, chat)(SetLoRaTxPower.Params(LoRaTxPower.LOW, LoRaRegion.US_915))
         }
         verify { settings.setLoRaRegion(LoRaRegion.EU_868) }

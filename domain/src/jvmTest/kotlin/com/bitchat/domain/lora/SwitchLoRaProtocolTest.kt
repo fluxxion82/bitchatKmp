@@ -29,18 +29,26 @@ class SwitchLoRaProtocolTest {
     }
 
     @Test
-    fun `failed startup returns failure and keeps selected protocol for next boot`() = runTest {
-        val settings = Settings()
-        val chat = mockk<ChatRepository>()
-        coEvery { chat.switchLoRaProtocol(LoRaProtocolType.MESHCORE) } coAnswers {
+    fun `each failure is passed on and the selected protocol is kept for the next boot`() = runTest {
+        val failures = listOf(
+            LoRaFailure.NoRadio,
+            LoRaFailure.NotRegistered,
+            LoRaFailure.KeepsOwnRadioSettings(LoRaProtocolType.MESHTASTIC),
+            LoRaFailure.NotApplied,
+        )
+        for (failure in failures) {
+            val settings = Settings()
+            val chat = mockk<ChatRepository>()
+            coEvery { chat.switchLoRaProtocol(LoRaProtocolType.MESHCORE) } coAnswers {
+                assertEquals(LoRaProtocolType.MESHCORE, settings.value.protocol)
+                Outcome.Error(failure)
+            }
+
+            val result = SwitchLoRaProtocol(settings, chat)(LoRaProtocolType.MESHCORE)
+
+            assertEquals(Outcome.Error(failure), result)
             assertEquals(LoRaProtocolType.MESHCORE, settings.value.protocol)
-            Outcome.Error(LoRaFailure.NotApplied)
         }
-
-        val result = SwitchLoRaProtocol(settings, chat)(LoRaProtocolType.MESHCORE)
-
-        assertEquals(Outcome.Error(LoRaFailure.NotApplied), result)
-        assertEquals(LoRaProtocolType.MESHCORE, settings.value.protocol)
     }
 
     @Test
@@ -62,6 +70,18 @@ class SwitchLoRaProtocolTest {
         coEvery { chat.switchLoRaProtocol(LoRaProtocolType.MESHCORE) } throws CancellationException("Screen closed")
 
         assertFailsWith<CancellationException> {
+            SwitchLoRaProtocol(settings, chat)(LoRaProtocolType.MESHCORE)
+        }
+        assertEquals(LoRaProtocolType.MESHCORE, settings.value.protocol)
+    }
+
+    @Test
+    fun `an exception is not turned into a failure and the protocol stays saved`() = runTest {
+        val settings = Settings()
+        val chat = mockk<ChatRepository>()
+        coEvery { chat.switchLoRaProtocol(LoRaProtocolType.MESHCORE) } throws IllegalStateException("systemctl failed")
+
+        assertFailsWith<IllegalStateException> {
             SwitchLoRaProtocol(settings, chat)(LoRaProtocolType.MESHCORE)
         }
         assertEquals(LoRaProtocolType.MESHCORE, settings.value.protocol)
