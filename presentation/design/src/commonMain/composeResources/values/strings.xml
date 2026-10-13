@@ -1,14 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">bitchat</string>
-    <string name="permission_bluetooth_rationale">Bluetooth permission is required for peer-to-peer messaging without
-        internet.
-    </string>
-    <string name="permission_location_rationale">Location permission is required to discover nearby devices via
-        Bluetooth.
-    </string>
-    <string name="permission_notification_rationale">Notification permission is required to alert you of new messages.
-    </string>
+    <string name="permission_bluetooth_rationale">Bluetooth permission is required for peer-to-peer messaging without internet.</string>
+    <string name="permission_location_rationale">Location permission is required to discover nearby devices via Bluetooth.</string>
+    <string name="permission_notification_rationale">Notification permission is required to alert you of new messages.</string>
     <string name="nickname_hint">nickname</string>
     <string name="message_hint">type a message…</string>
     <string name="channel_password_hint">Password</string>
@@ -31,24 +26,13 @@
     <string name="battery_optimization_not_required">Battery Optimization Not Required</string>
     <string name="battery_optimization_checking">Checking Battery Optimization</string>
     <string name="battery_optimization_why_disable">Why disable battery optimization?</string>
-    <string name="battery_optimization_explanation">bitchat runs in the background to maintain mesh network connections
-        with nearby devices. Battery optimization can interrupt these connections, causing messages to be delayed or
-        missed.\n\nDisabling battery optimization ensures reliable peer-to-peer messaging.
-    </string>
+    <string name="battery_optimization_explanation">bitchat runs in the background to maintain mesh network connections with nearby devices. Battery optimization can interrupt these connections, causing messages to be delayed or missed.\n\nDisabling battery optimization ensures reliable peer-to-peer messaging.</string>
     <string name="battery_optimization_disable_button">Disable Battery Optimization</string>
-    <string name="battery_optimization_note">Note: You can change this setting later in Android Settings > Apps >
-        bitchat > Battery
-    </string>
-    <string name="battery_optimization_not_supported_explanation">Your device doesn\'t require battery optimization
-        settings. bitchat will run normally.
-    </string>
-    <string name="battery_optimization_not_supported_message">Your device doesn\'t require battery optimization
-        settings. bitchat will run normally.
-    </string>
+    <string name="battery_optimization_note">Note: You can change this setting later in Android Settings > Apps > bitchat > Battery</string>
+    <string name="battery_optimization_not_supported_explanation">Your device doesn\'t require battery optimization settings. bitchat will run normally.</string>
+    <string name="battery_optimization_not_supported_message">Your device doesn\'t require battery optimization settings. bitchat will run normally.</string>
     <string name="battery_optimization_success_message">bitchat can run reliably in the background</string>
-    <string name="battery_optimization_benefits">• Ensures reliable message delivery\n• Maintains mesh network
-        connectivity\n• Allows background message relay\n• Prevents connection drops
-    </string>
+    <string name="battery_optimization_benefits">• Ensures reliable message delivery\n• Maintains mesh network connectivity\n• Allows background message relay\n• Prevents connection drops</string>
     <string name="battery_optimization_check_again">Check Again</string>
     <string name="battery_optimization_skip">Skip for Now</string>
     <string name="battery_optimization_continue">Continue</string>
@@ -119,13 +103,9 @@
     <!-- About sheet -->
     <string name="about_tagline">decentralized mesh messaging with end-to-end encryption</string>
     <string name="about_offline_mesh_title">Offline Mesh Chat</string>
-    <string name="about_offline_mesh_desc">Communicate directly via Bluetooth LE without internet or servers. Messages
-        relay through nearby devices to extend range.
-    </string>
+    <string name="about_offline_mesh_desc">Communicate directly via Bluetooth LE without internet or servers. Messages relay through nearby devices to extend range.</string>
     <string name="about_online_geohash_title">Online Geohash Channels</string>
-    <string name="about_online_geohash_desc">Connect with people in your area using geohash-based channels. Extend the
-        mesh using public internet relays.
-    </string>
+    <string name="about_online_geohash_desc">Connect with people in your area using geohash-based channels. Extend the mesh using public internet relays.</string>
     <string name="about_e2e_title">End-to-End Encryption</string>
     <string name="about_e2e_desc">Private messages are encrypted. Channel messages are public.</string>
     <string name="about_appearance">appearance</string>
@@ -152,9 +132,7 @@
     <string name="about_tor_status">tor Status: %1$s, bootstrap %2$d%%</string>
     <string name="about_last">Last: %1$s</string>
     <string name="about_emergency_title">Emergency Data Deletion</string>
-    <string name="about_emergency_tip">Tip: Triple-click the app title to emergency delete all stored data including
-        messages, keys, and settings.
-    </string>
+    <string name="about_emergency_tip">Tip: Triple-click the app title to emergency delete all stored data including messages, keys, and settings.</string>
     <string name="about_debug_settings">Debug Settings</string>
     <string name="about_footer">Open Source • Privacy First • Decentralized</string>
     <string name="about_background_title">run in background</string>
@@ -229,12 +207,9 @@
 
     <!-- Location channels sheet -->
     <string name="location_channels_title">#location channels</string>
-    <string name="location_channels_desc">chat with people near you using geohash channels. only a coarse geohash is
-        shared, never exact gps. do not screenshot or share this screen to protect your privacy.
-    </string>
+    <string name="location_channels_desc">chat with people near you using geohash channels. only a coarse geohash is shared, never exact gps. do not screenshot or share this screen to protect your privacy.</string>
     <string name="grant_location_permission">grant location permission</string>
-    <string name="location_permission_denied">location permission denied. enable in settings to use location channels.
-    </string>
+    <string name="location_permission_denied">location permission denied. enable in settings to use location channels.</string>
 
     <string name="location_permission_granted">\u2713 location permission granted</string>
     <string name="checking_permissions">checking permissions...</string>
@@ -257,8 +232,7 @@
         <item quantity="one">#%1$s ± 1 • %2$d note</item>
         <item quantity="other">#%1$s ± 1 • %2$d notes</item>
     </plurals>
-    <string name="location_notes_description">add short permanent notes to this location for other visitors to find.
-    </string>
+    <string name="location_notes_description">add short permanent notes to this location for other visitors to find.</string>
     <string name="location_notes_relays_unavailable">geo relays unavailable; notes paused</string>
     <string name="location_notes_no_relays_title">no geo relays nearby</string>
     <string name="location_notes_no_relays_desc">notes rely on geo relays. check connection and try again.</string>
@@ -307,42 +281,26 @@
     <!-- Onboarding screens -->
     <string name="location_services_required">Location Services Required</string>
     <string name="privacy_first">Privacy First</string>
-    <string name="location_explanation">bitchat does NOT track your location.\n\nLocation services are required for
-        Bluetooth scanning and for the Geohash chat feature.
-    </string>
+    <string name="location_explanation">bitchat does NOT track your location.\n\nLocation services are required for Bluetooth scanning and for the Geohash chat feature.</string>
     <string name="location_needs_for">bitchat needs location services for:</string>
-    <string name="location_needs_bullets">• Bluetooth device scanning\n• Discovering nearby users on mesh network\n•
-        Geohash chat feature\n• No tracking or location collection
-    </string>
+    <string name="location_needs_bullets">• Bluetooth device scanning\n• Discovering nearby users on mesh network\n• Geohash chat feature\n• No tracking or location collection</string>
     <string name="open_location_settings">Open Location Settings</string>
     <string name="check_again">Check Again</string>
     <string name="location_services_unavailable">Location Services Unavailable</string>
-    <string name="location_unavailable_explanation">Location services are not available on this device. This is unusual
-        as location services are standard on Android devices.\n\nbitchat needs location services for Bluetooth scanning
-        to work properly (Android requirement). Without this, the app cannot discover nearby users.
-    </string>
+    <string name="location_unavailable_explanation">Location services are not available on this device. This is unusual as location services are standard on Android devices.\n\nbitchat needs location services for Bluetooth scanning to work properly (Android requirement). Without this, the app cannot discover nearby users.</string>
     <string name="checking_location_services">Checking location services...</string>
     <string name="bluetooth_required">Bluetooth Required</string>
     <string name="bluetooth_needs_for">bitchat needs Bluetooth to:</string>
-    <string name="bluetooth_needs_bullets">• Discover nearby users\n• Create mesh network connections\n• Send and
-        receive messages\n• Work without internet or servers
-    </string>
+    <string name="bluetooth_needs_bullets">• Discover nearby users\n• Create mesh network connections\n• Send and receive messages\n• Work without internet or servers</string>
     <string name="enable_bluetooth">Enable Bluetooth</string>
     <string name="bluetooth_not_supported">Bluetooth Not Supported</string>
-    <string name="bluetooth_unsupported_explanation">This device doesn\'t support Bluetooth Low Energy (BLE), which is
-        required for bitchat to function.\n\nbitchat needs BLE to create mesh networks and communicate with nearby
-        devices without internet.
-    </string>
+    <string name="bluetooth_unsupported_explanation">This device doesn\'t support Bluetooth Low Energy (BLE), which is required for bitchat to function.\n\nbitchat needs BLE to create mesh networks and communicate with nearby devices without internet.</string>
     <string name="checking_bluetooth_status">Checking Bluetooth status...</string>
     <string name="battery_optimization_detected_title">battery optimization detected</string>
     <string name="battery_optimization_enabled_title">Battery Optimization Enabled</string>
-    <string name="battery_optimization_explanation_short">bitchat needs to run in the background to maintain mesh
-        connections. battery optimization can interrupt these connections.
-    </string>
+    <string name="battery_optimization_explanation_short">bitchat needs to run in the background to maintain mesh connections. battery optimization can interrupt these connections.</string>
     <string name="benefits_of_disabling">Benefits of Disabling</string>
-    <string name="battery_benefits_short">• reliable message delivery\n• maintains mesh connectivity\n• prevents
-        connection drops
-    </string>
+    <string name="battery_benefits_short">• reliable message delivery\n• maintains mesh connectivity\n• prevents connection drops</string>
     <string name="disable_battery_optimization">Disable Battery Optimization</string>
     <string name="battery_optimization_disabled_title">battery optimization disabled</string>
     <string name="continue_btn">Continue</string>
@@ -355,9 +313,7 @@
     <string name="try_again">Try Again</string>
     <string name="open_settings">Open Settings</string>
     <string name="privacy_protected">Your Privacy is Protected</string>
-    <string name="privacy_bullets">• no tracking or data collection\n• Bluetooth mesh chats are fully offline\n• Geohash
-        chats use the internet
-    </string>
+    <string name="privacy_bullets">• no tracking or data collection\n• Bluetooth mesh chats are fully offline\n• Geohash chats use the internet</string>
     <string name="permissions_header">permissions</string>
     <string name="grant_permissions">Grant Permissions</string>
     <string name="location_tracking_warning">bitchat does NOT track your location</string>
@@ -415,9 +371,7 @@
     <string name="perm_location_system">bitchat needs this to scan for nearby devices</string>
     <string name="perm_notifications_desc">Receive notifications when you receive private messages</string>
     <string name="perm_notifications_system">Allow bitchat to send you notifications</string>
-    <string name="perm_battery_desc">Disable battery optimization to ensure bitchat runs reliably in the background and
-        maintains mesh network connections
-    </string>
+    <string name="perm_battery_desc">Disable battery optimization to ensure bitchat runs reliably in the background and maintains mesh network connections</string>
     <string name="perm_battery_system">Allow bitchat to run without battery restrictions</string>
 
     <!-- Permission types -->
@@ -432,9 +386,7 @@
     <string name="bluetooth_nearby_devices">Bluetooth/Nearby Devices</string>
     <string name="location_for_bt_scanning">Location (for Bluetooth scanning)</string>
 
-    <string name="critical_permissions_denied">Critical permissions were denied. bitchat requires these permissions to
-        function:
-    </string>
+    <string name="critical_permissions_denied">Critical permissions were denied. bitchat requires these permissions to function:</string>
     <string name="please_grant_these_permissions">Please grant these permissions in Settings to use bitchat.</string>
 
     <!-- Password prompt dialog -->
