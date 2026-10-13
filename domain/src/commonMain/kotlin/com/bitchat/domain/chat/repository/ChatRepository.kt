@@ -1,12 +1,15 @@
 package com.bitchat.domain.chat.repository
 
+import com.bitchat.domain.base.model.Outcome
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.BitchatMessageType
 import com.bitchat.domain.chat.model.LoRaPerson
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.GeoPerson
+import com.bitchat.domain.lora.model.LoRaProtocolType
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
+import com.bitchat.domain.lora.model.failure.LoRaFailure
 import kotlinx.coroutines.flow.Flow
 
 interface ChatRepository {
@@ -31,20 +34,11 @@ interface ChatRepository {
      */
     suspend fun getPrivateChatNames(): Map<String, String?>
 
-    /**
-     * Switch the active LoRa protocol at runtime.
-     *
-     * @param protocol Protocol name: "BITCHAT" or "MESHTASTIC"
-     * @return true if the protocol was switched successfully
-     */
-    suspend fun switchLoRaProtocol(protocol: String): Boolean
+    /** Switches the active LoRa protocol at runtime. Fails with a [LoRaFailure]. */
+    suspend fun switchLoRaProtocol(protocol: LoRaProtocolType): Outcome<Unit>
 
-    /**
-     * Reconfigure active LoRa transport at runtime (frequency + tx power).
-     *
-     * @return true if the transport was restarted/reconfigured successfully
-     */
-    suspend fun reconfigureLoRa(region: LoRaRegion, txPower: LoRaTxPower): Boolean
+    /** Restarts the active LoRa transport with this frequency and power. Fails with a [LoRaFailure]. */
+    suspend fun reconfigureLoRa(region: LoRaRegion, txPower: LoRaTxPower): Outcome<Unit>
 
     suspend fun getGeohashParticipants(geohash: String): Map<String, String>
     suspend fun getPrivateChats(): Map<String, List<BitchatMessage>>

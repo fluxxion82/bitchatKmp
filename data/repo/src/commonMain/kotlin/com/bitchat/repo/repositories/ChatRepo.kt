@@ -19,6 +19,7 @@ import com.bitchat.domain.app.model.ActiveState
 import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.base.CoroutineScopeFacade
 import com.bitchat.domain.base.CoroutinesContextFacade
+import com.bitchat.domain.base.model.Outcome
 import com.bitchat.domain.chat.eventbus.ChatEventBus
 import com.bitchat.domain.chat.model.BitchatFilePacket
 import com.bitchat.domain.chat.model.BitchatMessage
@@ -37,8 +38,10 @@ import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.location.model.LocationEvent
 import com.bitchat.domain.lora.model.LoRaBandwidth
+import com.bitchat.domain.lora.model.LoRaProtocolType as DomainLoRaProtocolType
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
+import com.bitchat.domain.lora.model.failure.LoRaFailure
 import com.bitchat.domain.user.model.AppUser
 import com.bitchat.domain.user.model.UserEvent
 import com.bitchat.domain.user.UNKNOWN_PEER_NICKNAME
@@ -94,6 +97,7 @@ import com.bitchat.repo.utils.applyFavoriteNotification
 import com.bitchat.repo.utils.notFavouritedOverLimit
 import com.bitchat.lora.LoRaProtocol
 import com.bitchat.lora.LoRaProtocolManager
+import com.bitchat.lora.Reconfiguration
 import com.bitchat.lora.LoRaProtocolType
 import com.bitchat.repo.tor.torGateAllowsTraffic
 import com.bitchat.domain.tor.RequestedTorIntent
@@ -416,30 +420,30 @@ class ChatRepo(
         }
     }
 
-    override suspend fun switchLoRaProtocol(protocol: String): Boolean = withContext(coroutinesContextFacade.io) {
-        val manager = lora as? LoRaProtocolManager
-        if (manager == null) {
-            println("⚠️ ChatRepo: Cannot switch protocol - LoRaProtocolManager not available")
-            return@withContext false
-        }
-
-        val protocolType = when (protocol.uppercase()) {
-            "MESHTASTIC" -> LoRaProtocolType.MESHTASTIC
-            "MESHCORE" -> LoRaProtocolType.MESHCORE
-            else -> LoRaProtocolType.BITCHAT
-        }
-
-        println("📡 ChatRepo: Switching LoRa protocol to $protocol")
-        manager.switchProtocol(protocolType, loraPreferences?.toLoRaConfiguration())
-    }
-
-    override suspend fun reconfigureLoRa(region: LoRaRegion, txPower: LoRaTxPower): Boolean =
+    override suspend fun switchLoRaProtocol(protocol: DomainLoRaProtocolType): Outcome<Unit> =
         withContext(coroutinesContextFacade.io) {
             val manager = lora as? LoRaProtocolManager
-            if (manager == null) {
-                println("⚠️ ChatRepo: Cannot reconfigure LoRa - LoRaProtocolManager not available")
-                return@withContext false
+                ?: return@withContext Outcome.Error(LoRaFailure.NoRadio)
+
+            val protocolType = when (protocol) {
+                DomainLoRaProtocolType.BITCHAT -> LoRaProtocolType.BITCHAT
+                DomainLoRaProtocolType.MESHTASTIC -> LoRaProtocolType.MESHTASTIC
+                DomainLoRaProtocolType.MESHCORE -> LoRaProtocolType.MESHCORE
             }
+            if (protocolType !in manager.availableTypes) return@withContext Outcome.Error(LoRaFailure.NotRegistered)
+
+            println("📡 ChatRepo: Switching LoRa protocol to $protocol")
+            if (manager.switchProtocol(protocolType, loraPreferences?.toLoRaConfiguration())) {
+                Outcome.Success(Unit)
+            } else {
+                Outcome.Error(LoRaFailure.NotApplied)
+            }
+        }
+
+    override suspend fun reconfigureLoRa(region: LoRaRegion, txPower: LoRaTxPower): Outcome<Unit> =
+        withContext(coroutinesContextFacade.io) {
+            val manager = lora as? LoRaProtocolManager
+                ?: return@withContext Outcome.Error(LoRaFailure.NoRadio)
 
             val config = loRaConfiguration(
                 region,
@@ -452,7 +456,12 @@ class ChatRepo(
                     "freq=${config.frequency}, bandwidth=${config.bandwidth}, sf=${config.spreadingFactor}, " +
                     "sync=0x${config.syncWord.toString(16)})"
             )
-            manager.reconfigure(config)
+            when (val result = manager.reconfigure(config)) {
+                Reconfiguration.Applied -> Outcome.Success(Unit)
+                Reconfiguration.NotApplied -> Outcome.Error(LoRaFailure.NotApplied)
+                is Reconfiguration.KeptOwnSettings ->
+                    Outcome.Error(LoRaFailure.KeepsOwnRadioSettings(DomainLoRaProtocolType.valueOf(result.protocol.name)))
+            }
         }
 
     override suspend fun getGeohashParticipants(geohash: String): Map<String, String> = withContext(coroutinesContextFacade.io) {

@@ -9,6 +9,8 @@ import com.bitchat.domain.app.ObserveBackgroundMode
 import com.bitchat.domain.app.SetAppTheme
 import com.bitchat.domain.app.model.BackgroundMode
 import com.bitchat.domain.base.invoke
+import com.bitchat.domain.base.model.Outcome
+import com.bitchat.domain.base.model.failure.Failure
 import com.bitchat.domain.initialization.GetAppInformation
 import com.bitchat.domain.lora.GetAvailableLoRaProtocols
 import com.bitchat.domain.lora.GetLoRaSettings
@@ -20,6 +22,7 @@ import com.bitchat.domain.lora.SwitchLoRaProtocol
 import com.bitchat.domain.lora.model.LoRaProtocolType
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
+import com.bitchat.domain.lora.model.failure.LoRaFailure
 import com.bitchat.domain.nostr.GetPowSettings
 import com.bitchat.domain.nostr.SetPowSettings
 import com.bitchat.domain.tor.DisableTor
@@ -285,7 +288,7 @@ class SettingsViewModel(
     private fun updateLoRaSettings(
         operation: LoRaSettingsOperation,
         selection: (SettingsState) -> SettingsState,
-        apply: suspend () -> Boolean,
+        apply: suspend () -> Outcome<Unit>,
     ) {
         viewModelScope.launch {
             // The feedback, saved preference, and runtime request belong to one operation.
@@ -298,12 +301,15 @@ class SettingsViewModel(
                     )
                 }
                 try {
-                    val applied = apply()
+                    val error = when (val result = apply()) {
+                        is Outcome.Success -> null
+                        is Outcome.Error -> loRaFailureMessage(operation, result.cause)
+                    }
                     currentCoroutineContext().ensureActive()
                     _state.update {
                         it.copy(
-                            loraSwitchStatus = if (applied) LoRaSwitchStatus.READY else LoRaSwitchStatus.FAILED,
-                            loraSwitchError = if (applied) null else loRaFailureMessage(operation),
+                            loraSwitchStatus = if (error == null) LoRaSwitchStatus.READY else LoRaSwitchStatus.FAILED,
+                            loraSwitchError = error,
                         )
                     }
                 } catch (cancelled: CancellationException) {
@@ -314,7 +320,7 @@ class SettingsViewModel(
                     _state.update {
                         it.copy(
                             loraSwitchStatus = LoRaSwitchStatus.FAILED,
-                            loraSwitchError = loRaFailureMessage(operation),
+                            loraSwitchError = loRaFailureMessage(operation, LoRaFailure.NotApplied),
                         )
                     }
                 }
@@ -322,14 +328,18 @@ class SettingsViewModel(
         }
     }
 
-    private fun loRaFailureMessage(operation: LoRaSettingsOperation): String {
-        val protocol = _state.value.loraProtocol
-        return when {
-            operation == LoRaSettingsOperation.PROTOCOL ->
-                "Could not switch to ${protocol.displayName}. Check the radio service logs, then retry."
-            protocol != LoRaProtocolType.BITCHAT ->
-                "Radio preference saved but not applied. ${protocol.displayName} keeps its own radio settings; configure those separately."
-            else -> "Radio preference saved but not applied. Check the radio service logs, then retry."
+    private fun loRaFailureMessage(operation: LoRaSettingsOperation, failure: Failure): String {
+        val protocol = _state.value.loraProtocol.displayName
+        return when (failure) {
+            LoRaFailure.NoRadio -> "This app has no LoRa radio."
+            LoRaFailure.NotRegistered -> "$protocol is not available in this app."
+            is LoRaFailure.KeepsOwnRadioSettings ->
+                "Radio preference saved but not applied. ${failure.protocol.displayName} keeps its own radio settings; configure those separately."
+            else -> if (operation == LoRaSettingsOperation.PROTOCOL) {
+                "Could not switch to $protocol. Check the radio service logs, then retry."
+            } else {
+                "Radio preference saved but not applied. Check the radio service logs, then retry."
+            }
         }
     }
 }

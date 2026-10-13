@@ -1,6 +1,7 @@
 package com.bitchat.domain.lora
 
 import com.bitchat.domain.base.Usecase
+import com.bitchat.domain.base.model.Outcome
 import com.bitchat.domain.chat.repository.ChatRepository
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
@@ -9,11 +10,11 @@ import com.bitchat.domain.lora.repository.LoRaSettingsRepository
 class SetLoRaTxPower(
     private val loraSettingsRepository: LoRaSettingsRepository,
     private val chatRepository: ChatRepository,
-) : Usecase<SetLoRaTxPower.Params, Boolean> {
+) : Usecase<SetLoRaTxPower.Params, Outcome<Unit>> {
 
     data class Params(val txPower: LoRaTxPower, val currentRegion: LoRaRegion)
 
-    override suspend fun invoke(param: Params): Boolean {
+    override suspend fun invoke(param: Params): Outcome<Unit> {
         loraSettingsRepository.setLoRaTxPower(param.txPower)
         return chatRepository.reconfigureLoRa(param.currentRegion, param.txPower)
     }

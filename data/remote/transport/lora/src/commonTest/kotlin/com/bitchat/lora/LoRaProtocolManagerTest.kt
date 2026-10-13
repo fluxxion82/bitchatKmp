@@ -232,7 +232,7 @@ class LoRaProtocolManagerTest {
         val f = Fixture(backgroundScope)
         f.mesh.supportsRadioConfiguration = false
         f.manager.switchProtocol(LoRaProtocolType.MESHCORE)
-        assertFalse(f.manager.reconfigure(LoRaConfig.FAST))
+        assertEquals(Reconfiguration.KeptOwnSettings(LoRaProtocolType.MESHCORE), f.manager.reconfigure(LoRaConfig.FAST))
         assertEquals(1, f.mesh.configs.size)
         assertEquals(0, f.mesh.stops)
         assertTrue(f.manager.switchProtocol(LoRaProtocolType.BITCHAT))

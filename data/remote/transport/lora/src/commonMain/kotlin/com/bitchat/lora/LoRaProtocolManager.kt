@@ -22,6 +22,13 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
+/** What [LoRaProtocolManager.reconfigure] did, decided while it holds the radio. */
+sealed interface Reconfiguration {
+    data object Applied : Reconfiguration
+    data object NotApplied : Reconfiguration
+    data class KeptOwnSettings(val protocol: LoRaProtocolType) : Reconfiguration
+}
+
 /** Serializes radio ownership and keeps callers' flow subscriptions stable across switches. */
 class LoRaProtocolManager(
     private val bitChatProtocol: Lazy<LoRaProtocol>,
@@ -102,10 +109,14 @@ class LoRaProtocolManager(
         }
 
     /** A daemon's RF settings must be changed through its own configuration. */
-    suspend fun reconfigure(config: LoRaConfig): Boolean = mutex.withLock {
+    suspend fun reconfigure(config: LoRaConfig): Reconfiguration = mutex.withLock {
         lifecycleUsed = true
         requestedRadioConfig = config
-        if (!active.supportsRadioConfiguration) false else switchLocked(_activeType.value, config)
+        when {
+            !active.supportsRadioConfiguration -> Reconfiguration.KeptOwnSettings(_activeType.value)
+            switchLocked(_activeType.value, config) -> Reconfiguration.Applied
+            else -> Reconfiguration.NotApplied
+        }
     }
 
     private suspend fun switchLocked(type: LoRaProtocolType, config: LoRaConfig): Boolean {

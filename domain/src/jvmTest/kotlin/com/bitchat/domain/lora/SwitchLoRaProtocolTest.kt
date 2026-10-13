@@ -1,10 +1,12 @@
 package com.bitchat.domain.lora
 
+import com.bitchat.domain.base.model.Outcome
 import com.bitchat.domain.chat.repository.ChatRepository
 import com.bitchat.domain.lora.model.LoRaProtocolType
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaSettings
 import com.bitchat.domain.lora.model.LoRaTxPower
+import com.bitchat.domain.lora.model.failure.LoRaFailure
 import com.bitchat.domain.lora.repository.LoRaSettingsRepository
 import io.mockk.coEvery
 import io.mockk.mockk
@@ -30,14 +32,14 @@ class SwitchLoRaProtocolTest {
     fun `failed startup returns failure and keeps selected protocol for next boot`() = runTest {
         val settings = Settings()
         val chat = mockk<ChatRepository>()
-        coEvery { chat.switchLoRaProtocol("MESHCORE") } coAnswers {
+        coEvery { chat.switchLoRaProtocol(LoRaProtocolType.MESHCORE) } coAnswers {
             assertEquals(LoRaProtocolType.MESHCORE, settings.value.protocol)
-            false
+            Outcome.Error(LoRaFailure.NotApplied)
         }
 
-        val result: Any = SwitchLoRaProtocol(settings, chat)(LoRaProtocolType.MESHCORE)
+        val result = SwitchLoRaProtocol(settings, chat)(LoRaProtocolType.MESHCORE)
 
-        assertEquals(false, result)
+        assertEquals(Outcome.Error(LoRaFailure.NotApplied), result)
         assertEquals(LoRaProtocolType.MESHCORE, settings.value.protocol)
     }
 
@@ -45,11 +47,11 @@ class SwitchLoRaProtocolTest {
     fun `ready switch returns success`() = runTest {
         val settings = Settings()
         val chat = mockk<ChatRepository>()
-        coEvery { chat.switchLoRaProtocol("MESHTASTIC") } returns true
+        coEvery { chat.switchLoRaProtocol(LoRaProtocolType.MESHTASTIC) } returns Outcome.Success(Unit)
 
-        val result: Any = SwitchLoRaProtocol(settings, chat)(LoRaProtocolType.MESHTASTIC)
+        val result = SwitchLoRaProtocol(settings, chat)(LoRaProtocolType.MESHTASTIC)
 
-        assertEquals(true, result)
+        assertEquals(Outcome.Success(Unit), result)
         assertEquals(LoRaProtocolType.MESHTASTIC, settings.value.protocol)
     }
 
@@ -57,7 +59,7 @@ class SwitchLoRaProtocolTest {
     fun `cancelled switch propagates cancellation while retaining preference`() = runTest {
         val settings = Settings()
         val chat = mockk<ChatRepository>()
-        coEvery { chat.switchLoRaProtocol("MESHCORE") } throws CancellationException("Screen closed")
+        coEvery { chat.switchLoRaProtocol(LoRaProtocolType.MESHCORE) } throws CancellationException("Screen closed")
 
         assertFailsWith<CancellationException> {
             SwitchLoRaProtocol(settings, chat)(LoRaProtocolType.MESHCORE)

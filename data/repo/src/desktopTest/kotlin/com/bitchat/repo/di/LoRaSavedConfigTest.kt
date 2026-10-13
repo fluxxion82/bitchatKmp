@@ -4,7 +4,9 @@ import com.bitchat.domain.app.model.ActiveState
 import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.base.CoroutineScopeFacade
 import com.bitchat.domain.base.CoroutinesContextFacade
+import com.bitchat.domain.base.model.Outcome
 import com.bitchat.domain.lora.model.LoRaBandwidth
+import com.bitchat.domain.lora.model.LoRaProtocolType
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
 import com.bitchat.domain.user.eventbus.UserEventBus
@@ -86,7 +88,7 @@ class LoRaSavedConfigTest {
             chatEventBus = mockk(relaxed = true), userRepository = users,
             appRepository = mockk(relaxed = true), userEventBus = events,
             connectEventBus = mockk(relaxed = true), lora = manager, loraPreferences = preferences)
-        assertTrue(repo.switchLoRaProtocol("BITCHAT"))
+        assertEquals(Outcome.Success(Unit), repo.switchLoRaProtocol(LoRaProtocolType.BITCHAT))
         assertEquals(868_125_000L, configs.single().frequency)
         assertEquals(10, configs.single().txPower)
         assertEquals(500_000L, configs.single().bandwidth)
@@ -94,7 +96,7 @@ class LoRaSavedConfigTest {
         assertEquals(0x12, configs.single().syncWord)
 
         // Changing region and power afterwards keeps the saved bandwidth.
-        assertTrue(repo.reconfigureLoRa(LoRaRegion.US_915, LoRaTxPower.HIGH))
+        assertEquals(Outcome.Success(Unit), repo.reconfigureLoRa(LoRaRegion.US_915, LoRaTxPower.HIGH))
         assertEquals(2, configs.size)
         assertEquals(915_125_000L, configs.last().frequency)
         assertEquals(20, configs.last().txPower)

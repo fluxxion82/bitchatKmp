@@ -7,6 +7,7 @@ import com.bitchat.domain.app.ObserveBackgroundMode
 import com.bitchat.domain.app.SetAppTheme
 import com.bitchat.domain.app.model.AppTheme
 import com.bitchat.domain.app.model.BackgroundMode
+import com.bitchat.domain.base.model.Outcome
 import com.bitchat.domain.initialization.GetAppInformation
 import com.bitchat.domain.initialization.models.AppInformation
 import com.bitchat.domain.initialization.models.Version
@@ -21,6 +22,7 @@ import com.bitchat.domain.lora.model.LoRaProtocolType
 import com.bitchat.domain.lora.model.LoRaSettings
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
+import com.bitchat.domain.lora.model.failure.LoRaFailure
 import com.bitchat.domain.nostr.GetPowSettings
 import com.bitchat.domain.nostr.SetPowSettings
 import com.bitchat.domain.nostr.model.PowSettings
@@ -55,6 +57,8 @@ class SettingsViewModelLoRaTest : BaseViewModelTest() {
     private val switchProtocol = mockk<SwitchLoRaProtocol>()
     private val changeRegion = mockk<SetLoRaRegion>()
     private val changePower = mockk<SetLoRaTxPower>()
+    private val applied = Outcome.Success(Unit)
+    private val notApplied = Outcome.Error(LoRaFailure.NotApplied)
 
     private fun buildViewModel(
         protocol: LoRaProtocolType = LoRaProtocolType.MESHCORE,
@@ -102,7 +106,7 @@ class SettingsViewModelLoRaTest : BaseViewModelTest() {
 
     @Test
     fun `failed switch shows progress then failure with selected preference and retry guidance`() = runTest {
-        val completion = CompletableDeferred<Boolean>()
+        val completion = CompletableDeferred<Outcome<Unit>>()
         coEvery { switchProtocol(LoRaProtocolType.MESHTASTIC) } coAnswers { completion.await() }
         val viewModel = buildViewModel()
 
@@ -111,7 +115,7 @@ class SettingsViewModelLoRaTest : BaseViewModelTest() {
         assertEquals(LoRaSwitchStatus.SWITCHING, viewModel.state.value.loraSwitchStatus)
         assertEquals(LoRaProtocolType.MESHTASTIC, viewModel.state.value.loraProtocol)
 
-        completion.complete(false)
+        completion.complete(notApplied)
         instantExecutorRule.scheduler.runCurrent()
         assertEquals(LoRaSwitchStatus.FAILED, viewModel.state.value.loraSwitchStatus)
         assertEquals(LoRaProtocolType.MESHTASTIC, viewModel.state.value.loraProtocol)
@@ -120,7 +124,7 @@ class SettingsViewModelLoRaTest : BaseViewModelTest() {
 
     @Test
     fun `explicit retry clears failure and only reports readiness after success`() = runTest {
-        coEvery { switchProtocol(LoRaProtocolType.MESHCORE) } returnsMany listOf(false, true)
+        coEvery { switchProtocol(LoRaProtocolType.MESHCORE) } returnsMany listOf(notApplied, applied)
         val viewModel = buildViewModel()
         viewModel.onLoRaProtocolSelected(LoRaProtocolType.MESHCORE)
         instantExecutorRule.scheduler.runCurrent()
@@ -141,7 +145,7 @@ class SettingsViewModelLoRaTest : BaseViewModelTest() {
         instantExecutorRule.scheduler.runCurrent()
         assertEquals(LoRaSwitchStatus.FAILED, viewModel.state.value.loraSwitchStatus)
         assertNotNull(viewModel.state.value.loraSwitchError)
-        coEvery { switchProtocol(LoRaProtocolType.MESHCORE) } returns true
+        coEvery { switchProtocol(LoRaProtocolType.MESHCORE) } returns applied
         viewModel.onLoRaProtocolSelected(LoRaProtocolType.MESHCORE)
         instantExecutorRule.scheduler.runCurrent()
         assertEquals(LoRaSwitchStatus.READY, viewModel.state.value.loraSwitchStatus)
@@ -160,7 +164,7 @@ class SettingsViewModelLoRaTest : BaseViewModelTest() {
 
     @Test
     fun `region failure retains preference and distinguishes unapplied daemon settings`() = runTest {
-        coEvery { changeRegion(any()) } returns false
+        coEvery { changeRegion(any()) } returns Outcome.Error(LoRaFailure.KeepsOwnRadioSettings(LoRaProtocolType.MESHCORE))
         val viewModel = buildViewModel()
         viewModel.onLoRaRegionSelected(LoRaRegion.EU_868)
         instantExecutorRule.scheduler.runCurrent()
@@ -172,19 +176,50 @@ class SettingsViewModelLoRaTest : BaseViewModelTest() {
     }
 
     @Test
+    fun `the radio that keeps its own settings is named, not the selected protocol`() = runTest {
+        coEvery { changeRegion(any()) } returns Outcome.Error(LoRaFailure.KeepsOwnRadioSettings(LoRaProtocolType.MESHCORE))
+        val viewModel = buildViewModel(LoRaProtocolType.BITCHAT)
+        viewModel.onLoRaRegionSelected(LoRaRegion.EU_868)
+        instantExecutorRule.scheduler.runCurrent()
+        assertEquals(
+            "Radio preference saved but not applied. MeshCore keeps its own radio settings; configure those separately.",
+            viewModel.state.value.loraSwitchError,
+        )
+    }
+
+    @Test
+    fun `an app without a LoRa stack says so`() = runTest {
+        coEvery { changePower(any()) } returns Outcome.Error(LoRaFailure.NoRadio)
+        val viewModel = buildViewModel(LoRaProtocolType.BITCHAT)
+        viewModel.onLoRaTxPowerSelected(LoRaTxPower.LOW)
+        instantExecutorRule.scheduler.runCurrent()
+        assertEquals("This app has no LoRa radio.", viewModel.state.value.loraSwitchError)
+    }
+
+    @Test
+    fun `a protocol the app does not ship reads as unavailable`() = runTest {
+        coEvery { switchProtocol(LoRaProtocolType.MESHCORE) } returns Outcome.Error(LoRaFailure.NotRegistered)
+        val viewModel = buildViewModel(LoRaProtocolType.BITCHAT)
+        viewModel.onLoRaProtocolSelected(LoRaProtocolType.MESHCORE)
+        instantExecutorRule.scheduler.runCurrent()
+        assertEquals(LoRaSwitchStatus.FAILED, viewModel.state.value.loraSwitchStatus)
+        assertEquals("MeshCore is not available in this app.", viewModel.state.value.loraSwitchError)
+    }
+
+    @Test
     fun `power update reports progress then failure and can be retried`() = runTest {
-        val first = CompletableDeferred<Boolean>()
+        val first = CompletableDeferred<Outcome<Unit>>()
         coEvery { changePower(any()) } coAnswers { first.await() }
         val viewModel = buildViewModel(LoRaProtocolType.BITCHAT)
         viewModel.onLoRaTxPowerSelected(LoRaTxPower.LOW)
         instantExecutorRule.scheduler.runCurrent()
         assertEquals(LoRaTxPower.LOW, viewModel.state.value.loraTxPower)
         assertEquals(LoRaSwitchStatus.SWITCHING, viewModel.state.value.loraSwitchStatus)
-        first.complete(false)
+        first.complete(notApplied)
         instantExecutorRule.scheduler.runCurrent()
         assertEquals(LoRaSwitchStatus.FAILED, viewModel.state.value.loraSwitchStatus)
 
-        coEvery { changePower(any()) } returns true
+        coEvery { changePower(any()) } returns applied
         viewModel.onLoRaRetry()
         instantExecutorRule.scheduler.runCurrent()
         assertEquals(LoRaSettingsOperation.TX_POWER, viewModel.state.value.loraOperation)
@@ -206,8 +241,8 @@ class SettingsViewModelLoRaTest : BaseViewModelTest() {
 
     @Test
     fun `queued selections cannot publish a completed state for an unfinished switch`() = runTest {
-        val first = CompletableDeferred<Boolean>()
-        val second = CompletableDeferred<Boolean>()
+        val first = CompletableDeferred<Outcome<Unit>>()
+        val second = CompletableDeferred<Outcome<Unit>>()
         coEvery { switchProtocol(LoRaProtocolType.MESHTASTIC) } coAnswers { first.await() }
         coEvery { switchProtocol(LoRaProtocolType.BITCHAT) } coAnswers { second.await() }
         val viewModel = buildViewModel()
@@ -216,12 +251,12 @@ class SettingsViewModelLoRaTest : BaseViewModelTest() {
         instantExecutorRule.scheduler.runCurrent()
         coVerify(exactly = 0) { switchProtocol(LoRaProtocolType.BITCHAT) }
 
-        first.complete(true)
+        first.complete(applied)
         instantExecutorRule.scheduler.runCurrent()
         assertEquals(LoRaProtocolType.BITCHAT, viewModel.state.value.loraProtocol)
         assertEquals(LoRaSwitchStatus.SWITCHING, viewModel.state.value.loraSwitchStatus)
 
-        second.complete(false)
+        second.complete(notApplied)
         instantExecutorRule.scheduler.runCurrent()
         assertEquals(LoRaSwitchStatus.FAILED, viewModel.state.value.loraSwitchStatus)
     }

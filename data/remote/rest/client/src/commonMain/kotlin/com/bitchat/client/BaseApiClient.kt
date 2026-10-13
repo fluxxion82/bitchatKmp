@@ -138,13 +138,13 @@ class BaseApiClient(
             if (lastException is ApiException) {
                 handleApiException(lastException)
             } else if (lastException is HttpRequestTimeoutException) {
-                Outcome.Error("Request timeout", Failure.NetworkError("Request timeout after ${retryConfig.maxAttempts} attempts"))
+                Outcome.Error(Failure.NetworkError("Request timeout after ${retryConfig.maxAttempts} attempts"))
             } else {
-                Outcome.Error("Unknown error", Failure.UnknownError)
+                Outcome.Error(Failure.UnknownError)
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            Outcome.Error("Network error", Failure.NetworkError(e.message.orEmpty()))
+            Outcome.Error(Failure.NetworkError(e.message.orEmpty()))
         }
     }
 
@@ -156,22 +156,10 @@ class BaseApiClient(
     }
 
     private fun handleApiException(exception: ApiException?): Outcome<Nothing> = when (exception) {
-        is ApiException.NetworkError -> Outcome.Error(
-            "Network error",
-            Failure.NetworkError(exception.message.orEmpty())
-        )
-
-        is ApiException.ServerError -> Outcome.Error(
-            "Server error ${exception.code}",
-            Failure.ServerError(exception.code, exception.body)
-        )
-
-        is ApiException.TokenExpired -> Outcome.Error(
-            "Authentication failed",
-            Failure.AuthenticationError(exception.message)
-        )
-
-        is ApiException.RateLimited -> Outcome.Error("Rate limited", Failure.RateLimitError)
-        null -> Outcome.Error("Unknown error", Failure.UnknownError)
+        is ApiException.NetworkError -> Outcome.Error(Failure.NetworkError(exception.message.orEmpty()))
+        is ApiException.ServerError -> Outcome.Error(Failure.ServerError(exception.code, exception.body))
+        is ApiException.TokenExpired -> Outcome.Error(Failure.AuthenticationError(exception.message))
+        is ApiException.RateLimited -> Outcome.Error(Failure.RateLimitError)
+        null -> Outcome.Error(Failure.UnknownError)
     }
 }

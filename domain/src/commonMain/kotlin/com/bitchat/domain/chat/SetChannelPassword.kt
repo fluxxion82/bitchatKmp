@@ -41,10 +41,7 @@ class SetChannelPassword(
     ): Outcome<Unit> {
         val isOwner = chatRepository.isChannelOwner(channelName)
         if (!isOwner) {
-            return Outcome.Error(
-                "Only the channel creator can set the initial password",
-                ChannelFailure.OnlyCreatorCanSetPassword
-            )
+            return Outcome.Error(ChannelFailure.OnlyCreatorCanSetPassword)
         }
 
         return try {
@@ -54,10 +51,7 @@ class SetChannelPassword(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Outcome.Error(
-                "Failed to set password: ${e.message}",
-                ChannelFailure.CreationFailed(e.message ?: "Unknown error")
-            )
+            Outcome.Error(ChannelFailure.PasswordNotSaved(e.message))
         }
     }
 
@@ -70,10 +64,7 @@ class SetChannelPassword(
         return if (verified) {
             Outcome.Success(Unit)
         } else {
-            Outcome.Error(
-                "Incorrect password",
-                ChannelFailure.WrongPassword
-            )
+            Outcome.Error(ChannelFailure.WrongPassword)
         }
     }
 
@@ -87,10 +78,7 @@ class SetChannelPassword(
         val existingCommitment = chatRepository.getChannelKeyCommitment(channelName)
 
         if (commitment != existingCommitment) {
-            return Outcome.Error(
-                "Incorrect current password",
-                ChannelFailure.WrongPassword
-            )
+            return Outcome.Error(ChannelFailure.WrongPassword)
         }
 
         val isOwner = chatRepository.isChannelOwner(channelName)
@@ -105,10 +93,7 @@ class SetChannelPassword(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Outcome.Error(
-                "Failed to change password: ${e.message}",
-                ChannelFailure.CreationFailed(e.message ?: "Unknown error")
-            )
+            Outcome.Error(ChannelFailure.PasswordNotSaved(e.message))
         }
     }
 }

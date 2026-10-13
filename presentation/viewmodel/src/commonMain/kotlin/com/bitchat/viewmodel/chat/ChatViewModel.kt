@@ -484,10 +484,10 @@ class ChatViewModel(
             }
 
             is Outcome.Error -> {
-                val msg = when (result.cause) {
-                    is ChannelFailure.WrongPassword -> "wrong password"
-                    is ChannelFailure.AlreadyJoined -> "already in channel"
-                    else -> result.message
+                val msg = when (val failure = result.cause) {
+                    ChannelFailure.WrongPassword -> "wrong password"
+                    is ChannelFailure.CreationFailed -> "Failed to create channel: ${failure.reason ?: "Unknown error"}"
+                    else -> "Failed to join channel"
                 }
                 addSystemMessage(msg, channel = typedIn)
             }
@@ -548,12 +548,15 @@ class ChatViewModel(
             }
 
             is Outcome.Error -> {
-                val msg = when (result.cause) {
-                    is ChannelFailure.NotOwner -> "you are not the channel owner"
-                    is ChannelFailure.WrongPassword -> "incorrect password"
-                    is ChannelFailure.OnlyCreatorCanSetPassword -> "only the creator can set the initial password"
-                    is ChannelFailure.ChannelNotFound -> "channel not found"
-                    else -> result.message
+                val msg = when (val failure = result.cause) {
+                    ChannelFailure.WrongPassword -> "incorrect password"
+                    ChannelFailure.OnlyCreatorCanSetPassword -> "only the creator can set the initial password"
+                    is ChannelFailure.PasswordNotSaved -> if (newPassword != null) {
+                        "Failed to change password: ${failure.reason ?: "Unknown error"}"
+                    } else {
+                        "Failed to set password: ${failure.reason ?: "Unknown error"}"
+                    }
+                    else -> "Failed to set password"
                 }
                 addSystemMessage(msg, channel = currentChannel)
             }

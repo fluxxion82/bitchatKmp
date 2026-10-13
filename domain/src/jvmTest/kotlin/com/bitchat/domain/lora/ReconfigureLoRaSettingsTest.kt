@@ -1,8 +1,10 @@
 package com.bitchat.domain.lora
 
+import com.bitchat.domain.base.model.Outcome
 import com.bitchat.domain.chat.repository.ChatRepository
 import com.bitchat.domain.lora.model.LoRaRegion
 import com.bitchat.domain.lora.model.LoRaTxPower
+import com.bitchat.domain.lora.model.failure.LoRaFailure
 import com.bitchat.domain.lora.repository.LoRaSettingsRepository
 import io.mockk.coEvery
 import io.mockk.every
@@ -17,34 +19,34 @@ import kotlin.test.assertFailsWith
 class ReconfigureLoRaSettingsTest {
     @Test
     fun `region returns runtime result after saving preference even on failure`() = runTest {
-        for (ready in listOf(false, true)) {
+        for (outcome in listOf(Outcome.Error(LoRaFailure.NotApplied), Outcome.Success(Unit))) {
             val settings = mockk<LoRaSettingsRepository>()
             var saved: LoRaRegion? = null
             every { settings.setLoRaRegion(any()) } answers { saved = firstArg() }
             val chat = mockk<ChatRepository>()
             coEvery { chat.reconfigureLoRa(LoRaRegion.EU_868, LoRaTxPower.LOW) } coAnswers {
                 assertEquals(LoRaRegion.EU_868, saved)
-                ready
+                outcome
             }
-            val result: Any = SetLoRaRegion(settings, chat)(SetLoRaRegion.Params(LoRaRegion.EU_868, LoRaTxPower.LOW))
-            assertEquals(ready, result)
+            val result = SetLoRaRegion(settings, chat)(SetLoRaRegion.Params(LoRaRegion.EU_868, LoRaTxPower.LOW))
+            assertEquals(outcome, result)
             assertEquals(LoRaRegion.EU_868, saved)
         }
     }
 
     @Test
     fun `power returns runtime result after saving preference even on failure`() = runTest {
-        for (ready in listOf(false, true)) {
+        for (outcome in listOf(Outcome.Error(LoRaFailure.NotApplied), Outcome.Success(Unit))) {
             val settings = mockk<LoRaSettingsRepository>()
             var saved: LoRaTxPower? = null
             every { settings.setLoRaTxPower(any()) } answers { saved = firstArg() }
             val chat = mockk<ChatRepository>()
             coEvery { chat.reconfigureLoRa(LoRaRegion.US_915, LoRaTxPower.LOW) } coAnswers {
                 assertEquals(LoRaTxPower.LOW, saved)
-                ready
+                outcome
             }
-            val result: Any = SetLoRaTxPower(settings, chat)(SetLoRaTxPower.Params(LoRaTxPower.LOW, LoRaRegion.US_915))
-            assertEquals(ready, result)
+            val result = SetLoRaTxPower(settings, chat)(SetLoRaTxPower.Params(LoRaTxPower.LOW, LoRaRegion.US_915))
+            assertEquals(outcome, result)
             assertEquals(LoRaTxPower.LOW, saved)
         }
     }

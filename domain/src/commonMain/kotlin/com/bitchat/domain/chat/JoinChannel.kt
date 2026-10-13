@@ -71,20 +71,14 @@ class JoinChannel(
         chatRepository.ensureNamedChannelMetadata(existingChannel)
         if (existingChannel.isProtected) {
             if (password == null) {
-                return Outcome.Error(
-                    "Password required for protected channel",
-                    ChannelFailure.WrongPassword
-                )
+                return Outcome.Error(ChannelFailure.WrongPassword)
             }
 
             val key = chatRepository.deriveChannelKey(channelName, password)
             val commitment = chatRepository.calculateKeyCommitment(key)
 
             if (existingChannel.keyCommitment != null && commitment != existingChannel.keyCommitment) {
-                return Outcome.Error(
-                    "Incorrect password",
-                    ChannelFailure.WrongPassword
-                )
+                return Outcome.Error(ChannelFailure.WrongPassword)
             }
 
             chatRepository.setChannelPassword(channelName, password)
@@ -92,10 +86,7 @@ class JoinChannel(
 
         val success = chatRepository.joinChannel(channelName, password)
         if (!success) {
-            return Outcome.Error(
-                "Failed to join channel",
-                ChannelFailure.CreationFailed("Join operation failed")
-            )
+            return Outcome.Error(ChannelFailure.JoinFailed)
         }
 
         val updatedChannels = chatRepository.getAvailableChannels()
@@ -118,10 +109,7 @@ class JoinChannel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Outcome.Error(
-                "Failed to create channel: ${e.message}",
-                ChannelFailure.CreationFailed(e.message ?: "Unknown error")
-            )
+            Outcome.Error(ChannelFailure.CreationFailed(e.message))
         }
     }
 
