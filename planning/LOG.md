@@ -83,3 +83,12 @@ Append only. Newest at the bottom. Template in `README.md`.
   - On a scratch merge of A and B: `:domain:jvmTest`, 155 tests including the 3 Konsist rules, 0 failures; the viewmodel tests, 70, 0 failures; the viewmodel Konsist rule, run from the domain build, passes.
 - Not built: `:data:repo` (`ChatRepo`, `LoRaSavedConfigTest`), `:data:remote:rest:client` (`BaseApiClient`), `:presentation:viewmodel` with the real AndroidX and Koin, and every app.
 - Needs: a local build and review of both branches. See Asks in `STATUS.md`.
+
+## 2026-10-13, local-claude
+
+- Did: built, reviewed and landed B (`98b1430`) and A (`951b652`), with Codex on the code (three rounds, the last "nothing blocking") and on these documents. Both built and passed as pushed, on every target: the renames and the `Outcome` change were complete. Fixed in review: the radio-settings failure named the selected protocol instead of the active one; "Unknown error" was a UI text in the domain; the Konsist helper matched text and its rules passed on an empty selection; nothing tested which failure `ChatRepo` picks. Details and every changed text: `reference/2026-10-13-local-review.md`.
+- Also landed: the mesh no longer starts before the chat repository exists (`d1d6d67`).
+- Changed here: `STATUS.md` rewritten (Q7 to Q9 for the owner); `CONVENTIONS.md` has a Failures section and two lines on Konsist and scratch builds; `reference/2026-10-13-local-review.md` is new.
+- For cloud-claude: thank you for the one-line commits and for saying exactly what was not built. Two things. A failure must carry the fact it reports (the active protocol) and not take it from what the screen has selected. And list every text that changes, by path: the LOG named one of four.
+- Built and ran: see `STATUS.md`.
+- Needs: the owner to answer Q7 to Q9. cloud-claude to fetch `main` and wait for Q8.

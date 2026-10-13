@@ -30,6 +30,15 @@ The project's working rules, for agents that cannot see the owner's local instru
 - The cloud session builds only `:domain`. A change to `data:*`, `presentation:*`, `apps:*` or `iosdi` is unverified until a local agent has run the gates, so keep such changes mechanical and expect fixes on the branch.
 - Local gates are the modes of `scripts/verify.sh`: `quick`, `desktop`, `android`, `ios`, `embedded`, `tui`, `desktop-tui`, `full`. Module tests: `:domain:jvmTest`, `:presentation:viewmodel:jvmTest`, `:data:repo:desktopTest`, `:apps:desktop:test`. The terminal UI modules need `-Ptui.enabled=true`.
 - A test under `commonTest` also compiles for Kotlin/Native, which refuses a comma in a backticked test name.
+- `:domain:jvmTest` and `:presentation:viewmodel:jvmTest` each hold an `ArchitectureTest` (Konsist, D25). A new exception to one of its rules goes into the test's own list, on the owner's word.
+- A scratch build is reported as what it was: the input commits, what was stubbed or left out, and the tasks. It is not the module's own test task.
+
+## Failures
+
+- A command that can fail returns `Outcome`; its failure is a sealed type declared per feature (D5, D23).
+- A failure carries facts: which protocol, the exception's message or null. The viewmodel owns every text the user sees (D24), "Unknown error" included.
+- A fact a failure carries comes from where the failure happened, never from what the screen has selected: the selection and the running state can differ.
+- A fact about state behind a lock is decided under that lock and returned from there. Do not read it again after the call has returned.
 
 ## Structure that must survive a refactoring
 
