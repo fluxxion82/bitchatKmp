@@ -40,3 +40,4 @@ The owner's decisions, newest last. Agents propose; only the owner decides. Each
 - **D22. Next slices: guardrails (B), then the error model (A).** What B holds is still open (Q6).
 - **D23. `Outcome` keeps its one type parameter.** Each feature declares a sealed failure; a caller checks `Outcome.Error.cause` against it. Why: `Outcome` already provides what is needed.
 - **D24. `Outcome.Error` drops its message.** Viewmodels map each failure to text. Why: the UI should map failures to text; the message is read only by two fallbacks in `ChatViewModel`, and the REST client's messages are never read.
+- **D25. B is a Konsist architecture test** (Q6). The owner wants to try it.

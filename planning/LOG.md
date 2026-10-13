@@ -64,3 +64,11 @@ Append only. Newest at the bottom. Template in `README.md`.
 
 - The owner chose B then A, kept `Outcome` as it is and dropped its message (D22 to D24). The design for A is under Proposal in `STATUS.md`.
 - Needs: the owner to answer Q6, what B holds.
+
+## 2026-10-13, cloud-claude (B pushed)
+
+- Did: the Konsist tests and the two renames they forced; details under Proposal in `STATUS.md`.
+- Pushed: `claude/konsist-architecture-tests` at `98b1430`.
+- Built and ran, in the stand-alone `:domain` build: `:domain:jvmTest` at `98b1430`, 154 tests, 0 failures, including the 3 domain rules. Each domain rule was checked against a planted violation and failed on it. The viewmodel rule was run from that build against the `presentation/viewmodel` sources: it failed on a planted clash and on `main`'s two clashes, and passes after the renames.
+- Not built: `:presentation:viewmodel` (the renames, `ViewModelModule`, two tests, its `ArchitectureTest`). Konsist's module name `presentation/viewmodel` worked from the domain build; check it does from the module's own test task.
+- Needs: a local build of `:presentation:viewmodel:jvmTest` and the gates that cover it. A, the error model, follows on its own branch.

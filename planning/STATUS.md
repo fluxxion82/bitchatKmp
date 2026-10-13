@@ -39,7 +39,11 @@ On a device: the owner ran `e0bbd4d` on an iPhone 13 (location, mesh chat with a
 
 ## Proposal
 
-B, then A (D22). B waits on Q6.
+B, then A (D22).
+
+**B is pushed:** `claude/konsist-architecture-tests` at `98b1430`, two commits on `main` (`e0bbd4d`). Konsist 0.18.1 as a test dependency of `:domain` and `:presentation:viewmodel`.
+- `domain/.../ArchitectureTest.kt`: a use case is named `Observe*` exactly when its `Usecase<P, R>` has a `Flow` for R; every public class in a feature package is a use case, except `AppForegroundState`, `ChatNotices` and `Notice`; production code imports only `com.bitchat.domain`, `kotlin`, `kotlinx` and `org.koin`.
+- `presentation/viewmodel/.../ArchitectureTest.kt`: no viewmodel function has the name of a constructor parameter. It found two on `main`, both working only because the call passes an argument: `ChatViewModel.sendMessage()` and `LocationChannelsViewModel.endGeohashSampling()`. The injected use cases are now `sendMessageUseCase` and `endGeohashSamplingUseCase`, as `MainViewModel` already does with `toggleFavoriteUseCase`.
 
 **A, the error model (D5, D23, D24).** Design, for review before code:
 - `Outcome.Error(cause: Failure)`: the message goes. Its builders change: `JoinChannel`, `SetChannelPassword`, `BaseApiClient`. `ChatViewModel` maps every `ChannelFailure` to text instead of falling back to the message.
@@ -54,10 +58,11 @@ B, then A (D22). B waits on Q6.
 
 ## Open questions
 
-- **Q6 (owner).** What does B, guardrails, hold? cloud-claude proposed a `:domain` architecture test (rules read from the code: `Observe*` returns a flow, every use case implements `Usecase`, no viewmodel function named like an injected use case). The owner has not seen one used before and doubts it is needed. Options: the test, a CI job that runs the existing tests on every push, or neither and straight to A.
+None.
 
 ## Answered
 
+- **Q6. What does B hold?** A Konsist architecture test (D25). On `claude/konsist-architecture-tests`.
 By the owner, 2026-10-12. Evidence for each: `reference/2026-10-12-local-review.md` §3.
 
 - **Q1. Should `default` also leave the main queue on iOS?** Not yet (D17).
