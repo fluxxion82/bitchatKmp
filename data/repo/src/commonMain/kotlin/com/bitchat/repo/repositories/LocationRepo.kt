@@ -4,12 +4,14 @@ import com.bitchat.repo.utils.RepeatedLogLimiter
 import com.bitchat.domain.base.CoroutineScopeFacade
 import com.bitchat.domain.base.CoroutinesContextFacade
 import com.bitchat.domain.location.eventbus.LocationEventBus
+import com.bitchat.domain.location.model.DEFAULT_PLACE
 import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.location.model.GeoPoint
 import com.bitchat.domain.location.model.GeohashChannel
 import com.bitchat.domain.location.model.LocationFixInfo
 import com.bitchat.domain.location.model.LocationUnavailableException
 import com.bitchat.domain.location.model.GeohashChannelLevel
+import com.bitchat.domain.location.model.NearbyChannels
 import com.bitchat.domain.location.model.Note
 import com.bitchat.domain.location.model.PermissionState
 import com.bitchat.domain.location.repository.LocationRepository
@@ -32,6 +34,7 @@ import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.concurrent.Volatile
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -53,6 +56,10 @@ class LocationRepo(
     private val locationNames = mutableMapOf<GeohashChannelLevel, String>()
     private val locationNamesLock = SynchronizedObject()
     private var lastFix: GeoPoint? = null
+
+    /** Why the last call fell back to [DEFAULT_PLACE], or null while there is a real fix. */
+    @Volatile
+    private var defaultPlaceReason: LocationUnavailableException.Reason? = null
 
     /** The five-second poll's "no location fix" line, let through once per reason and ten minutes. */
     private val noFixLog = RepeatedLogLimiter(intervalMillis = 10 * 60_000L)
@@ -149,9 +156,24 @@ class LocationRepo(
             GeohashUtils.encode(fix.lat, fix.lon, level.precision)
         }
 
-    override suspend fun getAvailableGeohashChannels(): List<GeohashChannel> = withContext(coroutinesContextFacade.io) {
+    override suspend fun getAvailableGeohashChannels(): NearbyChannels = withContext(coroutinesContextFacade.io) {
         try {
-            val fix = locationService.getCurrentLocation()
+            // This call's own outcome, in locals: defaultPlaceReason is shared with other calls.
+            val (fix, fixInfo) = try {
+                val real = locationService.getCurrentLocation()
+                defaultPlaceReason = null
+                real to locationService.lastFixInfo()
+            } catch (e: LocationUnavailableException) {
+                // The sheet polls every five seconds, so no stack trace and a rate-limited line.
+                noFixLog.next("no location fix: ${e.reason.message}; using the default place")
+                    ?.let { logNostrDebug("LocationRepo", it) }
+                defaultPlaceReason = e.reason
+                DEFAULT_PLACE to LocationFixInfo(
+                    LocationFixInfo.Source.DEFAULT,
+                    ageMillis = 0,
+                    unavailableReason = e.reason
+                )
+            }
             lastFix = fix
             resolveLocationNamesForFix(fix)
 
@@ -163,29 +185,19 @@ class LocationRepo(
                 GeohashChannelLevel.REGION
             )
 
-            levels.map { level ->
-                val geohash = GeohashUtils.encode(fix.lat, fix.lon, level.precision)
-                GeohashChannel(
-                    level = level,
-                    geohash = geohash
-                )
-            }
-        } catch (e: LocationUnavailableException) {
-            /*
-             * Expected, not exceptional, and deliberately rethrown rather than flattened to an
-             * empty list. An empty list is indistinguishable from "still looking", which is why the
-             * channel sheet span for ever on a machine with no location source. The one caller
-             * turns this into a finished, explained state.
-             *
-             * No stack trace: the sheet polls every five seconds, so printing one produced a trace
-             * every five seconds for as long as there was no fix. For the same reason the line
-             * itself is rate-limited: once, then on a change of reason or every ten minutes.
-             */
-            noFixLog.next("no location fix: ${e.reason.message}")?.let { logNostrDebug("LocationRepo", it) }
-            throw e
+            NearbyChannels(
+                levels.map { level ->
+                    val geohash = GeohashUtils.encode(fix.lat, fix.lon, level.precision)
+                    GeohashChannel(
+                        level = level,
+                        geohash = geohash
+                    )
+                },
+                fixInfo
+            )
         } catch (e: Exception) {
             e.printStackTrace()
-            emptyList()
+            NearbyChannels(emptyList(), null)
         }
     }
 
@@ -304,9 +316,10 @@ class LocationRepo(
         nickname: String,
         isTeleported: Boolean
     ) = withContext(coroutinesContextFacade.io) {
-        this@LocationRepo.isTeleported = isTeleported
+        val teleported = isTeleported || cannotBeThere()
+        this@LocationRepo.isTeleported = teleported
         participantTracker.setCurrentGeohash(geohash)
-        addSelfAsParticipant(geohash, isTeleported, nickname)
+        addSelfAsParticipant(geohash, teleported, nickname)
         locationEventBus.update(com.bitchat.domain.location.model.LocationEvent.ParticipantsChanged)
     }
 
@@ -316,8 +329,15 @@ class LocationRepo(
     }
 
     override suspend fun isTeleported(): Boolean = withContext(coroutinesContextFacade.io) {
-        isTeleported
+        isTeleported || cannotBeThere()
     }
+
+    /**
+     * The device may be shown as in a location channel only if nothing says otherwise. Asks no
+     * lookup and no permission: the default place in use, or no permission, means no real fix.
+     */
+    private suspend fun cannotBeThere(): Boolean =
+        defaultPlaceReason != null || !locationService.hasLocationPermission()
 
     private suspend fun addSelfAsParticipant(geohash: String, isTeleported: Boolean, nickname: String): Unit =
         withContext(coroutinesContextFacade.io) {
@@ -375,10 +395,6 @@ class LocationRepo(
 
     override suspend fun isLocationServicesEnabled(): Boolean = withContext(coroutinesContextFacade.io) {
         geohashPreferences.getLocationServicesEnabled()
-    }
-
-    override suspend fun getLastFixInfo(): LocationFixInfo? = withContext(coroutinesContextFacade.io) {
-        locationService.lastFixInfo()
     }
 
     override suspend fun getPermissionState(): PermissionState = withContext(coroutinesContextFacade.io) {
@@ -460,6 +476,7 @@ class LocationRepo(
             locationNames.clear()
         }
         lastFix = null
+        defaultPlaceReason = null
         lastResolvedGeohash = null
         synchronized(samplingLock) {
             samplingSubscriptions.clear()

@@ -127,6 +127,38 @@ class LocationsScreenTest {
         )
     }
 
+    /** A place that is a default: the notice says so, and the nearby channels are its own. */
+    private val defaultPlaceNotice = "location not set. showing channels for the default place (San Francisco)"
+    private val inTheDefaultPlace = nearby.copy(locationUnavailableReason = defaultPlaceNotice)
+
+    @Test fun theDefaultPlaceNoticeAndHintComeBeforeItsChannels() = runTest {
+        assertEquals(
+            listOf(
+                " Locations",
+                pad("   #mesh", "0 people ", 90),
+                "   $defaultPlaceNotice",
+                "   t: join by code, g: browse by region",
+                pad("   region #9q *", "0 people ", 90),
+                pad(" > city #9q8yy San Francisco", "1 person ", 90),
+                pad("   * #9q", "0 people ", 90),
+                "   Join a channel by geohash code...",
+                "   Browse the world by region...",
+                "",
+                "",
+            ),
+            render(AnsiLevel.NONE, inTheDefaultPlace, IntSize(90, 11)),
+        )
+    }
+
+    @Test fun theNoticeIsSkippedAndTheDefaultPlaceChannelsJoin() = runTest {
+        runMosaicTest {
+            setContentAndSnapshot { Screen(inTheDefaultPlace, IntSize(90, 11)) }
+            type(KeyboardEvent.Down, 13) // Down past the mesh and the two notes onto the first channel.
+            awaitSnapshot()
+        }
+        assertEquals(listOf("channel=REGION 9q"), actions)
+    }
+
     @Test fun notesAreDimAndTheSelectedRowIsReversed() = runTest {
         val rows = render(AnsiLevel.ANSI16, pi, IntSize(40, 9))
         assertEquals(bar + pad(" > #mesh", "3 people ", 40) + reset, rows[1])

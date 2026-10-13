@@ -18,10 +18,9 @@ data class LocationChannelsState(
     val locationServicesEnabled: Boolean = false,
     val isLoading: Boolean = false,
     /**
-     * Why there are no nearby channels, when the reason is permanent rather than "not yet".
-     *
-     * Null means the list is simply still being built. Non-null means it never will be, and the UI
-     * must stop showing a progress spinner and say this instead.
+     * Non-null means the nearby channels are those of the built-in default place, not of the
+     * device: the text says why there is no real position and that they are the default's. Null
+     * means they come from a real fix, or are still being built.
      */
     val locationUnavailableReason: String? = null,
     /** The fix came from an IP lookup, so it is city-level at best. */

@@ -25,12 +25,12 @@ import com.jakewharton.mosaic.ui.unit.IntSize
  * Location channels, in three views.
  *
  * **List** (`Up`/`Down`, `Enter`): the mesh with its participant count, the nearby channels
- * (level, geohash, place name, count, `*` when bookmarked), or instead of them the reason there are
- * none (the Pi has no location source), then the bookmarks, then rows that open the other two
- * views. `>` marks the current channel. `Enter` joins ([onSelectMesh], [onSelectChannel]; a
- * bookmark joins at the level its length implies), `b` toggles the selected geohash's bookmark,
- * `t` and `g` open the entry and the grid, `n` the selected place's notes ([onOpenNotes]).
- * `Esc` is left to the shell. A channel the user has
+ * (level, geohash, place name, count, `*` when bookmarked), led by a notice when they are the
+ * default place's because the device has no position (the Pi has no location source), then the
+ * bookmarks, then rows that open the other two views. `>` marks the current channel. `Enter` joins
+ * ([onSelectMesh], [onSelectChannel]; a bookmark joins at the level its length implies), `b`
+ * toggles the selected geohash's bookmark, `t` and `g` open the entry and the grid, `n` the
+ * selected place's notes ([onOpenNotes]). `Esc` is left to the shell. A channel the user has
  * teleported into gets a row of its own, since it is neither nearby nor bookmarked and would
  * otherwise be missing from the only screen that can bookmark it.
  *
@@ -215,11 +215,13 @@ private fun placeRows(state: LocationChannelsState): List<PlaceRow> = buildList 
     add(PlaceRow.Mesh)
     val reason = state.locationUnavailableReason
     when {
-        state.availableChannels.isNotEmpty() -> state.availableChannels.forEach { add(PlaceRow.Nearby(it)) }
+        // The channels are the default place's: say so above them.
         reason != null -> {
             add(PlaceRow.Note(reason))
             add(PlaceRow.Note(HINT_WITHOUT_LOCATION))
+            state.availableChannels.forEach { add(PlaceRow.Nearby(it)) }
         }
+        state.availableChannels.isNotEmpty() -> state.availableChannels.forEach { add(PlaceRow.Nearby(it)) }
         !state.locationServicesEnabled -> {
             add(PlaceRow.Note("location services are off"))
             add(PlaceRow.Note(HINT_WITHOUT_LOCATION))

@@ -68,6 +68,7 @@ val commonRepoModule = module {
             blockListPreferences = get(),
             participantTracker = get(),
             locationEventBus = get(),
+            locationRepository = get(),
             chatEventBus = get(),
             userRepository = get(),
             appRepository = get(),

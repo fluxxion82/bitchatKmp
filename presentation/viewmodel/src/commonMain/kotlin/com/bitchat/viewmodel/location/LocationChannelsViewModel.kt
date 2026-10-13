@@ -10,7 +10,6 @@ import com.bitchat.domain.location.EndGeohashSampling
 import com.bitchat.domain.location.GetAvailableChannels
 import com.bitchat.domain.location.GetBookmarkNames
 import com.bitchat.domain.location.GetBookmarkedChannels
-import com.bitchat.domain.location.GetLastFixInfo
 import com.bitchat.domain.tor.ObserveRequestedTorMode
 import com.bitchat.domain.location.GetLocationNames
 import com.bitchat.domain.location.GetLocationServicesEnabled
@@ -20,10 +19,11 @@ import com.bitchat.domain.location.ResolveLocationName
 import com.bitchat.domain.location.ToggleBookmark
 import com.bitchat.domain.location.ToggleLocationServices
 import com.bitchat.domain.location.model.Channel
+import com.bitchat.domain.location.model.DEFAULT_PLACE_NAME
 import com.bitchat.domain.location.model.GeohashChannel
 import com.bitchat.domain.location.model.GeohashChannelLevel
 import com.bitchat.domain.location.model.LocationFixInfo
-import com.bitchat.domain.location.model.LocationUnavailableException
+import com.bitchat.domain.location.model.LocationUnavailableException.Reason
 import com.bitchat.domain.user.GetUserState
 import com.bitchat.domain.user.SaveUserStateAction
 import com.bitchat.domain.user.model.UserStateAction
@@ -56,7 +56,6 @@ class LocationChannelsViewModel(
     private val getTeleportState: GetTeleportState,
     private val getLocationServicesEnabled: GetLocationServicesEnabled,
     private val getLocationNames: GetLocationNames,
-    private val getLastFixInfo: GetLastFixInfo,
     private val observeRequestedTorMode: ObserveRequestedTorMode,
     private val resolveLocationName: ResolveLocationName,
     private val getUserState: GetUserState,
@@ -134,13 +133,19 @@ class LocationChannelsViewModel(
 
     /**
      * The location-dependent half of the sheet. Shared by the initial load and the five-second
-     * refresh so both report an unavailable fix the same way.
+     * refresh so both label the default place the same way.
      */
     private suspend fun loadChannels(locationNames: Map<GeohashChannelLevel, String>, initial: Boolean) {
         try {
-            val channels = getAvailableChannels(Unit)
+            // Channels and the fix behind them come from one read, so a load that overlaps another
+            // cannot pair one's channels with the other's fix.
+            val nearby = getAvailableChannels(Unit)
+            val channels = nearby.channels
+            val fixInfo = nearby.fix
             val freshNames = if (initial) locationNames else getLocationNames(Unit)
-            val fixInfo = orDefault(null) { getLastFixInfo(Unit) }
+            val notice = fixInfo
+                ?.takeIf { it.source == LocationFixInfo.Source.DEFAULT }
+                ?.let { defaultPlaceNotice(it.unavailableReason) }
 
             _state.update {
                 it.copy(
@@ -148,29 +153,13 @@ class LocationChannelsViewModel(
                     locationNames = freshNames,
                     isLoading = false,
                     isRefreshing = false,
-                    locationUnavailableReason = null,
+                    locationUnavailableReason = notice,
                     locationApproximate = fixInfo?.source == LocationFixInfo.Source.IP_ADDRESS,
                     locationStale = fixInfo != null && isStale(fixInfo)
                 )
             }
 
             resolveLocationNamesInBackground(channels, freshNames)
-        } catch (e: LocationUnavailableException) {
-            /*
-             * A finished state, not a pause -- without this the sheet spun for ever. Stale channels
-             * are cleared: leaving the previous list up would present channels derived from a fix
-             * the app has just said it cannot obtain.
-             */
-            _state.update {
-                it.copy(
-                    isLoading = false,
-                    isRefreshing = false,
-                    availableChannels = emptyList(),
-                    locationUnavailableReason = e.reason.message,
-                    locationApproximate = false,
-                    locationStale = false
-                )
-            }
         } catch (e: Exception) {
             _state.update { it.copy(isLoading = false, isRefreshing = false) }
         }
@@ -196,6 +185,16 @@ class LocationChannelsViewModel(
     }
 
     private fun isStale(info: LocationFixInfo): Boolean = info.ageMillis > STALE_AFTER_MS
+
+    private fun defaultPlaceNotice(reason: Reason?): String {
+        val why = when (reason) {
+            Reason.NO_SOURCE, null -> "location not set"
+            Reason.PERMISSION_DENIED -> "location permission denied"
+            Reason.LOOKUP_FAILED -> "could not determine your location"
+            Reason.SUPPRESSED_BY_POLICY -> "location lookup is off while Tor is on"
+        }
+        return "$why. showing channels for the default place ($DEFAULT_PLACE_NAME)"
+    }
 
     /**
      * Runs [block], falling back to [default] if it fails.
@@ -247,8 +246,6 @@ class LocationChannelsViewModel(
 
     private suspend fun refreshData() {
         _state.update { it.copy(isRefreshing = true) }
-        // Was a bare catch (Exception) that set neither the reason nor cleared the channels, so an
-        // unavailable fix on the poll was silently swallowed every five seconds.
         loadChannels(_state.value.locationNames, initial = false)
     }
 
@@ -279,9 +276,10 @@ class LocationChannelsViewModel(
 
     fun onSelectChannel(channel: GeohashChannel) {
         viewModelScope.launch {
-            // Determine if this is a teleport
             val currentChannels = _state.value.availableChannels
-            val isTeleport = !currentChannels.any { it.geohash == channel.geohash }
+            // The default place is not where the device is, so others must not be told it is.
+            val isTeleport = _state.value.locationUnavailableReason != null ||
+                !currentChannels.any { it.geohash == channel.geohash }
 
             val locationChannel = Channel.Location(channel.level, channel.geohash)
 

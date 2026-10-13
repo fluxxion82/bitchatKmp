@@ -122,7 +122,6 @@ val viewModelModule = module {
             getTeleportState = get(),
             getLocationServicesEnabled = get(),
             getLocationNames = get(),
-            getLastFixInfo = get(),
             observeRequestedTorMode = get(),
             resolveLocationName = get(),
             getUserState = get(),

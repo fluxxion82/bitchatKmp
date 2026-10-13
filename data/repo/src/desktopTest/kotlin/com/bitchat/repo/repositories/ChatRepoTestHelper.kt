@@ -9,6 +9,7 @@ import com.bitchat.domain.chat.eventbus.ChatEventBus
 import com.bitchat.domain.connectivity.eventbus.ConnectionEventBus
 import com.bitchat.domain.connectivity.model.BluetoothConnectionEvent
 import com.bitchat.domain.location.eventbus.LocationEventBus
+import com.bitchat.domain.location.repository.LocationRepository
 import com.bitchat.domain.user.eventbus.UserEventBus
 import com.bitchat.domain.user.model.FavoriteRelationship
 import com.bitchat.domain.user.model.BlockType
@@ -65,6 +66,8 @@ internal fun chatRepo(
     // A real relay, for tests about what a relay can make the repository show. Without one, each
     // subscription's handler is handed out through [subscriptions] and events are fed to it directly.
     relay: NostrRelay? = null,
+    // Whether this device may be shown as where its channel is; false, so nothing is marked teleported.
+    locationRepository: LocationRepository = mockk<LocationRepository>(relaxed = true).also { coEvery { it.isTeleported() } returns false },
 ): ChatRepo {
     val contextFacade = object : CoroutinesContextFacade {
         override val io: CoroutineContext = dispatcher
@@ -126,6 +129,7 @@ internal fun chatRepo(
         },
         participantTracker = participantTracker,
         locationEventBus = mockk<LocationEventBus>(relaxed = true),
+        locationRepository = locationRepository,
         chatEventBus = chatEventBus,
         userRepository = userRepository,
         appRepository = mockk<AppRepository>(relaxed = true).also {

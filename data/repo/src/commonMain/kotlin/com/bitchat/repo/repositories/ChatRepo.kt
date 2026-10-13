@@ -37,6 +37,7 @@ import com.bitchat.domain.location.eventbus.LocationEventBus
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.location.model.LocationEvent
+import com.bitchat.domain.location.repository.LocationRepository
 import com.bitchat.domain.lora.model.LoRaBandwidth
 import com.bitchat.domain.lora.model.LoRaProtocolType as DomainLoRaProtocolType
 import com.bitchat.domain.lora.model.LoRaRegion
@@ -145,6 +146,7 @@ class ChatRepo(
     private val blockListPreferences: BlockListPreferences,
     private val participantTracker: NostrParticipantTracker,
     private val locationEventBus: LocationEventBus,
+    private val locationRepository: LocationRepository,
     private val chatEventBus: ChatEventBus,
     private val userRepository: com.bitchat.domain.user.repository.UserRepository,
     private val appRepository: com.bitchat.domain.app.repository.AppRepository,
@@ -655,6 +657,7 @@ class ChatRepo(
 
                 val identity = nostrClient.deriveIdentity(geohash)
                 println("✅ ChatRepo: Identity derived, pubkey=${identity.publicKeyHex.take(16)}...")
+                var teleported = locationRepository.isTeleported()
 
                 // Generate temporary ID for mining tracking
                 val tempId = "mining-${Clock.System.now().toEpochMilliseconds()}"
@@ -689,14 +692,27 @@ class ChatRepo(
 
                 // ✨ STEP 2: NOW mine the event (this will trigger animation via tempId tracking)
                 println("🔨 ChatRepo: Creating ephemeral geohash event...")
-                val event = nostrClient.createEphemeralGeohashEvent(
+                var event = nostrClient.createEphemeralGeohashEvent(
                     content = content,
                     geohash = geohash,
                     senderIdentity = identity,
                     nickname = nickname,
-                    teleported = false,
+                    teleported = teleported,
                     tempId = tempId
                 )
+                // Mining takes seconds and the device may stop being where its channel is meanwhile.
+                // A tagged event is always safe to publish, an untagged one is not.
+                if (!teleported && locationRepository.isTeleported()) {
+                    teleported = true
+                    event = nostrClient.createEphemeralGeohashEvent(
+                        content = content,
+                        geohash = geohash,
+                        senderIdentity = identity,
+                        nickname = nickname,
+                        teleported = true,
+                        tempId = tempId
+                    )
+                }
                 println("✅ ChatRepo: Event created with FINAL id=${event.id.take(16)}... kind=${event.kind}")
 
                 // ✨ STEP 3: Update message from tempId to final event.id
@@ -736,7 +752,7 @@ class ChatRepo(
                 // The user has just posted here, so they are present. This used to happen when a
                 // relay echoed the event back; that echo is a duplicate of the local echo and marks
                 // nothing any more.
-                markGeohashParticipant(geohash, identity.publicKeyHex, sanitizedNickname(nickname), event.createdAt, isTeleported = false)
+                markGeohashParticipant(geohash, identity.publicKeyHex, sanitizedNickname(nickname), event.createdAt, isTeleported = teleported)
 
                 // Note: Geohash messages are ONLY sent via Nostr, not Bluetooth mesh
                 // (matches legacy Android behavior - Bluetooth is for mesh broadcasts only)

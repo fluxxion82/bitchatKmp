@@ -85,7 +85,7 @@ class LoRaSavedConfigTest {
             geohashConversationCache = mockk(relaxed = true), channelPreferences = mockk(relaxed = true),
             userPreferences = userPrefs, blockListPreferences = mockk(relaxed = true),
             participantTracker = mockk(relaxed = true), locationEventBus = mockk(relaxed = true),
-            chatEventBus = mockk(relaxed = true), userRepository = users,
+            locationRepository = mockk(relaxed = true), chatEventBus = mockk(relaxed = true), userRepository = users,
             appRepository = mockk(relaxed = true), userEventBus = events,
             connectEventBus = mockk(relaxed = true), lora = manager, loraPreferences = preferences)
         assertEquals(Outcome.Success(Unit), repo.switchLoRaProtocol(LoRaProtocolType.BITCHAT))

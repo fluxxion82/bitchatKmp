@@ -56,7 +56,6 @@ import com.bitchat.domain.location.GetLocationGeohash
 import com.bitchat.domain.location.GetLocationNames
 import com.bitchat.domain.location.GetLocationServicesEnabled
 import com.bitchat.domain.location.GetParticipantCounts
-import com.bitchat.domain.location.GetLastFixInfo
 import com.bitchat.domain.location.GetPermissionState
 import com.bitchat.domain.location.GetTeleportState
 import com.bitchat.domain.location.ObserveChannelParticipants
@@ -216,7 +215,6 @@ val domainModule = module {
     single { ObserveLocationServicesEnabled(locationRepository = get(), locationEventBus = get()) }
     single { ObservePermissionState(locationRepository = get(), locationEventBus = get()) }
     single { GetPermissionState(locationRepository = get()) }
-    single { GetLastFixInfo(locationRepository = get()) }
     single { RequestLocationPermission(locationRepository = get(), locationEventBus = get()) }
     single { ObserveCurrentChannelBookmarkState(locationRepository = get(), locationEventBus = get(), userRepository = get()) }
     single { ObserveHasNotes(locationRepository = get(), locationEventBus = get(), userRepository = get()) }

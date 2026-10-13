@@ -2,8 +2,8 @@ package com.bitchat.domain.location.repository
 
 import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.location.model.GeohashChannel
-import com.bitchat.domain.location.model.LocationFixInfo
 import com.bitchat.domain.location.model.GeohashChannelLevel
+import com.bitchat.domain.location.model.NearbyChannels
 import com.bitchat.domain.location.model.Note
 import com.bitchat.domain.location.model.PermissionState
 
@@ -11,7 +11,7 @@ interface LocationRepository {
     suspend fun getNotes(geoHash: String): List<Note>
     suspend fun sendNote(content: String, nickname: String, geohash: String)
 
-    suspend fun getAvailableGeohashChannels(): List<GeohashChannel>
+    suspend fun getAvailableGeohashChannels(): NearbyChannels
     suspend fun getLocationGeohash(level: GeohashChannelLevel): String
     suspend fun getBookmarkedChannel(): List<GeohashChannel>
 
@@ -31,8 +31,6 @@ interface LocationRepository {
 
     suspend fun toggleLocationServices()
     suspend fun isLocationServicesEnabled(): Boolean
-    /** Provenance of the most recent fix, so a stale one can be labelled rather than shown as current. */
-    suspend fun getLastFixInfo(): LocationFixInfo?
 
     suspend fun getPermissionState(): PermissionState
     suspend fun hasNotes(geohash: String): Boolean

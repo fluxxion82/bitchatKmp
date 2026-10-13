@@ -11,13 +11,18 @@ package com.bitchat.domain.location.model
 data class LocationFixInfo(
     val source: Source,
     /** How long ago the fix was observed. Computed where a clock already exists, so consumers need none. */
-    val ageMillis: Long
+    val ageMillis: Long,
+    /** Why there was no real fix. Set only with [Source.DEFAULT]. */
+    val unavailableReason: LocationUnavailableException.Reason? = null
 ) {
     enum class Source {
         /** The operating system's own location service. Precise. */
         DEVICE,
 
         /** Derived from the public IP address. City-level at best, often tens of km out. */
-        IP_ADDRESS
+        IP_ADDRESS,
+
+        /** No real fix: the built-in default place stands in for it. */
+        DEFAULT
     }
 }

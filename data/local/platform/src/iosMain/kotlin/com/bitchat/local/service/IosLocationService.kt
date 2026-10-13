@@ -154,7 +154,10 @@ class IosLocationService : LocationService {
                     println("📍 [IosLocationService] Permission denied/restricted, failing immediately")
                     resumed = true
                     cont.resumeWithException(
-                        RuntimeException("Location permission ${authStatusString(currentStatus)}")
+                        LocationUnavailableException(
+                            LocationUnavailableException.Reason.PERMISSION_DENIED,
+                            RuntimeException("Location permission ${authStatusString(currentStatus)}")
+                        )
                     )
                 }
 
