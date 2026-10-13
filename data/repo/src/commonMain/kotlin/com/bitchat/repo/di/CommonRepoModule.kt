@@ -139,6 +139,7 @@ val commonRepoModule = module {
             appRepository = get(),
             connectivityRepository = get(),
             userRepository = get(),
+            chatRepository = get(),
         )
     } bind AppInitializer::class
     single {

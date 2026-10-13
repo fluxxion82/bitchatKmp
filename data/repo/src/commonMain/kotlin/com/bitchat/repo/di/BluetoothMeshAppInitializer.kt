@@ -3,6 +3,7 @@ package com.bitchat.repo.di
 import com.bitchat.bluetooth.service.BluetoothMeshService
 import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.app.repository.AppRepository
+import com.bitchat.domain.chat.repository.ChatRepository
 import com.bitchat.domain.connectivity.repository.ConnectivityRepository
 import com.bitchat.domain.initialization.AppInitializer
 import com.bitchat.domain.user.repository.UserRepository
@@ -12,6 +13,8 @@ class BluetoothMeshAppInitializer(
     private val appRepository: AppRepository,
     private val connectivityRepository: ConnectivityRepository,
     private val userRepository: UserRepository,
+    // The mesh's delegate: taken here so that it exists before the mesh starts.
+    @Suppress("UNUSED_PARAMETER") chatRepository: ChatRepository,
 ) : AppInitializer {
 
     override suspend fun initialize() {
