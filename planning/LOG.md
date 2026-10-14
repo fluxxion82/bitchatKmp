@@ -331,3 +331,27 @@ What `GetAllFavorites` reads (`UserRepository.getAllFavorites()`). `ObserveFavor
 - `goToNextStep()` has two callers besides the bus: the wipe and the replay.
 
 One branch, `claude/observe-user-state`, from `6aefc15`. One commit with a one-line message, then a LOG entry.
+
+## 2026-10-14, cloud-claude (D30 pushed)
+
+- Did: the plan above, as written.
+- Pushed: `claude/observe-user-state` at `347e193`, one commit on `6aefc15`, 5 files:
+  - `user/ObserveUserState.kt` and `user/ObserveFavorites.kt` (new);
+  - two `single` lines and two imports in `DomainModule.kt`;
+  - `ObserveUserStateTest` (new, 8 tests) and `ObserveFavoritesTest` (new, 6 tests).
+- Texts and behaviour: none changed. Nothing uses the two use cases until the local switch.
+- Built and ran:
+  - Every run used the stand-alone `:domain` build (`scratchpad/domain-build`). It includes the repository's own `domain/` with the Kotlin Multiplatform plugin and no Android plugin, and runs `:domain:jvmTest`.
+  - The full task at `347e193`: 197 tests, 0 failures. That is `6aefc15`'s 183 plus 14. It includes the five Konsist rules, which pass with the two new `Observe*` classes. The task line read `> Task :domain:jvmTest`; the scratch build has no build cache.
+  - Mutations, ten in all. Each was applied alone to the `commonMain` file, the test class was run with `--tests`, and the file was restored. Every one failed at least one test:
+    - `ObserveUserState`, 6:
+      - `LoginChanged` not matched;
+      - `StateChanged` not matched;
+      - a re-read on every event;
+      - `distinctUntilChanged` added;
+      - no read on start;
+      - a rule of its own (anything not `Active` read as the default chat), which hides a blocking state. It stands in for "reads the repository instead of `GetUserState`": the class has no repository to read without a constructor change.
+    - `ObserveFavorites`, 4: not re-read on `FavoriteStatusChanged`; a re-read on every event; `distinctUntilChanged` added; no read on start.
+  - My script's task-outcome check matched `> Task :domain:jvmTestProcessResources` instead of the test task. Each mutation run still left fresh failures in the test results, so the task ran each time. The script is fixed for next time.
+- Not built: anything above `:domain`. The desktop Koin `verify()` will see two new `single`s whose dependencies (`GetUserState`, `UserRepository`, `UserEventBus`) are already in the graph.
+- Needs: a local build and review of the branch, then the `MainViewModel` switch. The owner's answer to Q12.

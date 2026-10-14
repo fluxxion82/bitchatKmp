@@ -5,13 +5,14 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-13 by local-claude (D28 and D29 pushed; D30 decided).
+Updated 2026-10-14 by cloud-claude (D30 pushed).
 
 ## In flight
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | `6aefc15`. Since `ff4697c`: three commits of the owner's side (`c923790` REST client engine close, `e1416cc` string resources, `b572169` the default place for location), then D28 and D29: `dca893b` (the two placement rules), `519ba25` (four file names), `6aefc15` (the rules cannot be skipped by the build cache or a `@Suppress`) | Pushed 2026-10-13 | cloud-claude: start D30 from here |
+| `main` | `6aefc15`. Since `ff4697c`: three commits of the owner's side (`c923790` REST client engine close, `e1416cc` string resources, `b572169` the default place for location), then D28 and D29: `dca893b` (the two placement rules), `519ba25` (four file names), `6aefc15` (the rules cannot be skipped by the build cache or a `@Suppress`) | Pushed 2026-10-13 | |
+| `claude/observe-user-state` | D30: `ObserveUserState`, `ObserveFavorites`, their tests and Koin lines. One commit on `6aefc15` | Pushed 2026-10-14 at `347e193` | local agents: build and review, then switch `MainViewModel` |
 
 ## D28 and D29, as landed
 
@@ -46,26 +47,8 @@ Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **cloud-claude: the next slice is decided (D30).** Fetch `main` at `6aefc15`. Read `reference/2026-10-13-local-review-d29.md` (section 5 lists what `main` gained) and the two new lines under Verification in `CONVENTIONS.md`. Put the plan in `LOG.md` first. One branch, inside `:domain`.
-
-   **Why.** `MainViewModel` collects `UserEventBus` itself: on start, `StateChanged` and `LoginChanged` it reads the user state with `GetUserState`; on `FavoriteStatusChanged` it reads the favourites with `GetAllFavorites`. A viewmodel should take use cases, not a bus.
-
-   **First, in the plan: the writers.** Before any code, list every writer of what each observer will read, in every layer, and say whether it publishes the event (the rule under Observers and events).
-   - For the user state: everything `GetUserState` reads. That is the saved state in `UserRepository`, and also the permissions, Bluetooth, location services and battery optimisation answers of `AppRepository` and `ConnectivityRepository`. Name what changes each and what, if anything, publishes `StateChanged` afterwards.
-   - For the favourites: `ToggleFavorite`, the favourite notifications handled in `data:repo`, the trim at start, the wipe.
-   - A writer that publishes nothing is a finding. Report it; do not fix it in `data:*`.
-
-   **Then the two use cases.**
-   - `ObserveUserState : Usecase<Unit, Flow<UserState>>`. It emits what `GetUserState` returns on start, and again on `StateChanged` and on `LoginChanged`. It takes `GetUserState`; it does not copy its rules.
-   - `ObserveFavorites : Usecase<Unit, Flow<Map<String, FavoriteRelationship>>>`. On start and on `FavoriteStatusChanged`.
-   - Same shape as `ObserveUserNickname`. No `distinctUntilChanged` and no conflation: today every matching event runs the viewmodel's refresh, and the local switch must not change that unnoticed.
-   - Their lines in `domainModule`. `GetUserState` and `GetAllFavorites` stay; they have other callers.
-
-   **Tests,** like `ObserveUserNicknameTest`: the first value; one more read for each matching event; no read for an unrelated event, also when it sits in the replay slot at start; two matching events give two reads. A test that records behaviour nobody decided says "today" in its name.
-
-   **Not in this branch:** `MainViewModel` or anything else outside `:domain`. Local agents switch the viewmodel afterwards and run the desktop Koin check. `ChatViewModel` and `ChatEventBus` are a later slice.
-
-   Report what the scratch build ran. For anything planted, read the task's outcome before believing a pass.
+1. **Local agents: build and review `claude/observe-user-state` (`347e193`), then switch `MainViewModel` to it** as D30 says. The writers, the findings (F1 to F3) and notes for the switch are in `LOG.md` (2026-10-14, D30 plan); what was built and run is in the entry after it.
+2. **Owner: Q12,** the wipe's missing favourites and nickname events.
 
 ## Open questions
 
