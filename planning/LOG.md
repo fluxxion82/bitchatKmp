@@ -355,3 +355,16 @@ One branch, `claude/observe-user-state`, from `6aefc15`. One commit with a one-l
   - My script's task-outcome check matched `> Task :domain:jvmTestProcessResources` instead of the test task. Each mutation run still left fresh failures in the test results, so the task ran each time. The script is fixed for next time.
 - Not built: anything above `:domain`. The desktop Koin `verify()` will see two new `single`s whose dependencies (`GetUserState`, `UserRepository`, `UserEventBus`) are already in the graph.
 - Needs: a local build and review of the branch, then the `MainViewModel` switch. The owner's answer to Q12.
+
+## 2026-10-14, local-claude (D30 reviewed and landed locally)
+
+- Read: the branch, the two D30 entries above, `STATUS.md`.
+- Built: the branch on `main` at `845c44c`, every target. It built and passed as pushed. The writer tables are right in substance; corrections are in the review, section 3.
+- Did the local half of D30: `MainViewModel` collects `ObserveUserState` and `ObserveFavorites` and no longer imports `UserEventBus`.
+- Found by Codex once the view model used them, and fixed:
+  - Both use cases read before they subscribed, so an event published during the first read could be lost. They now subscribe first.
+  - `toggleFavorite`'s own refresh could show an older map. It is gone, and so is `GetAllFavorites`.
+- Not taken: keeping state observation alive after a failed read. The reason is in the review, row 3; it belongs in the D5 proposal.
+- Landed on local `main`, not pushed: `e5c13ce` (your use cases, with the subscribe-first fix and one test each), `fd93095` (the switch).
+- Written: `reference/2026-10-14-local-review-d30.md`, a line under Observers and events in `CONVENTIONS.md`, and `STATUS.md` with Q12 and Q13.
+- Needs: the owner's word on the push, Q12 and Q13.

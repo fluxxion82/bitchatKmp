@@ -5,54 +5,44 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-14 by cloud-claude (D30 pushed).
+Updated 2026-10-14 by local-claude (D30 landed locally).
 
 ## In flight
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | `6aefc15`. Since `ff4697c`: three commits of the owner's side (`c923790` REST client engine close, `e1416cc` string resources, `b572169` the default place for location), then D28 and D29: `dca893b` (the two placement rules), `519ba25` (four file names), `6aefc15` (the rules cannot be skipped by the build cache or a `@Suppress`) | Pushed 2026-10-13 | |
-| `claude/observe-user-state` | D30: `ObserveUserState`, `ObserveFavorites`, their tests and Koin lines. One commit on `6aefc15` | Pushed 2026-10-14 at `347e193` | local agents: build and review, then switch `MainViewModel` |
+| `main` | Locally `fd93095`; `origin/main` is `845c44c`. Since `6aefc15`: three commits of the owner's side (`c2866a4` a board's city from its public address, `7006a10` Curl transfers, `845c44c` a saved place as this device's location), then D30: `e5c13ce` (`ObserveUserState`, `ObserveFavorites`), `fd93095` (`MainViewModel` uses them) | Landed locally 2026-10-14, not pushed | the owner: the push, Q12, Q13 |
+| `claude/observe-user-state` | In `main` as `e5c13ce`, with a fix | To be deleted after the push | the owner |
 
-## D28 and D29, as landed
+## D30, as landed
 
-Both branches built and passed as pushed, and neither needed a change. The review is in `reference/2026-10-13-local-review-d29.md`. One commit was added, `6aefc15`, for two faults older than the branches:
+The branch built and passed as pushed. The review is in `reference/2026-10-14-local-review-d30.md`.
 
-- **The build did not run the rules again after some source changes.** Konsist reads sources, Gradle compared classes: a misplaced interface in `linuxMain` passed from the build cache. Both modules with an `ArchitectureTest` now declare `src` as an input of `jvmTest`.
-- **A `@Suppress` in the checked code switched a rule off.** Konsist's `assertTrue` and `assertFalse` leave out a declaration annotated `@Suppress` with the calling function's name. Neither `ArchitectureTest` uses them any more.
-
-For the next rule: **use `assertEach` in the domain's `ArchitectureTest`, not Konsist's assertions.** It also asserts that the rule selected something. Both points are in `CONVENTIONS.md` under Verification.
-
-## What `main` has that the cloud session has not seen
-
-From `b572169`, in the domain:
-
-- `LocationRepository.getAvailableGeohashChannels()` and `GetAvailableChannels` return `NearbyChannels(channels, fix)`.
-- `LocationRepository.getLastFixInfo()` and the use case `GetLastFixInfo` are gone.
-- New in `location/model`: `NearbyChannels`, `DefaultPlace.kt`, `LocationFixInfo.Source.DEFAULT`, `LocationFixInfo.unavailableReason`.
-
-`c923790` and `e1416cc` do not touch the domain.
+- **Both use cases subscribe to the bus before their first read.** Read first, a matching event published during that read was lost once an unrelated event took the replay slot. One new test in each class shows it. This is now a line under Observers and events in `CONVENTIONS.md`.
+- **`MainViewModel` collects them** and no longer imports `UserEventBus`. Each state is shown in its own coroutine, because `navigation` is a rendezvous channel.
+- **`toggleFavorite` no longer refreshes the favourites itself.** That read could show an older map after the observer had shown a newer one. `GetAllFavorites` had no caller left and is deleted.
+- **Not taken:** making the observers survive a failed read. On Android and iOS such an exception ends the app before and after. Elsewhere every other observer in the view model already stops at its first one. It goes into the D5 proposal.
 
 ## What was built and run
 
 By local-claude on macOS arm64, on the tree that landed:
 
 - `scripts/verify.sh full`: OK. That is `quick`, `desktop` (with `packageDmg`), `android`, `ios`, `embedded` and `tui` (debug and release links for linuxArm64), `desktop-tui`.
-- Module tests, all green: `:domain:jvmTest` (183 tests with the five rules, 2 skipped), `:presentation:viewmodel:jvmTest` (79), `:data:repo:desktopTest` (331), `:apps:desktop:test`, and with `-Ptui.enabled=true` the terminal UI tests.
 - `scripts/tui-smoke.py`: the desktop terminal UI starts from the real Koin graph and shows its four screens.
-- Plants: listed in the review, section 2. Every must-fail plant fails without `--rerun`; the clean tree passes.
-- `dca893b` and `519ba25` were built together, before the third commit, on every target; they were not built one by one.
+- Module tests, all green, among them `:domain:jvmTest`, `:presentation:viewmodel:jvmTest` (with the new `MainViewModelUserStateTest`) and `:apps:desktop:test` (the desktop Koin check).
+- Five changes each turned a test red (review, section 2).
+- `e5c13ce` was not built on its own; the tree with both commits was.
 
 Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **Local agents: build and review `claude/observe-user-state` (`347e193`), then switch `MainViewModel` to it** as D30 says. The writers, the findings (F1 to F3) and notes for the switch are in `LOG.md` (2026-10-14, D30 plan); what was built and run is in the entry after it.
-2. **Owner: Q12,** the wipe's missing favourites and nickname events.
+1. **cloud-claude: nothing to build until the owner answers Q12 and Q13.** Read `reference/2026-10-14-local-review-d30.md` and the new line under Observers and events in `CONVENTIONS.md`.
 
 ## Open questions
 
-- **Q12 (D30, `6aefc15`). Should the wipe publish what it changes, as it now does for the theme?** `ClearAllData` clears the favourites and gives the user a new nickname. It publishes neither `FavoriteStatusChanged` nor `NicknameUpdated`, so the sidebar keeps the old favourites and the header the old nickname until something else changes them or the app restarts (F2 and F3 in `LOG.md`, 2026-10-14). The fix is two lines in `ClearAllData`, the domain use case, next to its `ThemeUpdated`. `FavoriteStatusChanged` takes a peer id, so the event would need a key for "all", or a separate event. That choice is the owner's. Not part of D30's branch.
+- **Q12. Should the wipe publish what it changes?** Recommended: yes. `NicknameUpdated` right after `userRepository.clearData()`, inside the barrier, and a new `UserEvent.FavoritesCleared` that `ObserveFavorites` reads again on. `LoRaAppInitializer` matches `UserEvent` exhaustively, so the new event needs a line in `data:repo`. The review's section 5 has the reasons.
+- **Q13. The next cloud slice.** Recommended: Q12's fix, and the domain half of taking `ChatViewModel` off `ChatEventBus`. Local agents then switch the view model and add the Konsist rule that no view model imports a bus or a repository. The other candidates are in the review's section 5.
 
 ## Answered
 
@@ -70,7 +60,8 @@ Not run: any app on a phone or a board.
 ## Next
 
 - **D5 is partly done.** Channel and LoRa commands return typed failures. Exceptions still pass through: discovery, verification, the password write and the join in `JoinChannel`'s existing-channel path, and all three LoRa commands (tests pin that those propagate). Turning any into an `Outcome` changes a tested contract: write the mapping and the texts first.
-- **Two viewmodels import a bus:** `MainViewModel` (`UserEventBus`, D30 is its domain half) and `ChatViewModel` (`ChatEventBus`, not started).
+- **One view model still imports a bus:** `ChatViewModel` (`ChatEventBus`). `MainViewModel` no longer does (D30).
+- **The older observers read before they subscribe:** `ObserveUserNickname`, `ObserveJoinedChannels`, `ObserveAppTheme` and the others (see Observers and events in `CONVENTIONS.md`).
 - **File names:** `app/model/AppState.kt` holds `UserState` and `ActiveState`; rename it when those move to `user/model`. The rest is in the review's section 6.
 - **Unlocked collections** in `ChatRepo`, `LocalChannelPreferences`, `NostrClient` and the Apple Bluetooth services: local work, design first.
 - **Open from the plan:** (d) pass-through use cases, (e) scopes and dispatchers, (f) a transport port; where tracked rules live. Plan §3 is a list of old proposals, not instructions (see the note at the top of the plan).
