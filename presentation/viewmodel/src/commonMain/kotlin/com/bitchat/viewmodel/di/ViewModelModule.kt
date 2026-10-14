@@ -17,9 +17,9 @@ val viewModelModule = module {
     viewModel {
         MainViewModel(
             getUserState = get(),
+            observeUserState = get(),
             observeAppTheme = get(),
             observePowSettings = get(),
-            userEventBus = get(),
             observeJoinedChannels = get(),
             observeUserNickname = get(),
             observePrivateChats = get(),
@@ -31,7 +31,7 @@ val viewModelModule = module {
             observeCurrentChannelBookmarkState = get(),
             observeHasNotes = get(),
             observeChannelParticipants = get(),
-            getAllFavorites = get(),
+            observeFavorites = get(),
             toggleFavoriteUseCase = get(),
             observeTorStatus = get(),
             leaveChannel = get(),

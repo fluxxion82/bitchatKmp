@@ -28,15 +28,14 @@ import com.bitchat.domain.location.model.GeoPerson
 import com.bitchat.domain.nostr.ObservePowSettings
 import com.bitchat.domain.tor.ObserveTorStatus
 import com.bitchat.domain.tor.model.TorMode
-import com.bitchat.domain.user.GetAllFavorites
 import com.bitchat.domain.user.ObserveUserNickname
 import com.bitchat.domain.user.GetUserState
+import com.bitchat.domain.user.ObserveFavorites
+import com.bitchat.domain.user.ObserveUserState
 import com.bitchat.domain.user.SaveUserStateAction
 import com.bitchat.domain.user.SetUserNickname
 import com.bitchat.domain.user.ToggleFavorite
-import com.bitchat.domain.user.eventbus.UserEventBus
 import com.bitchat.domain.user.model.FavoriteRelationship
-import com.bitchat.domain.user.model.UserEvent
 import com.bitchat.domain.user.model.UserStateAction
 import com.bitchat.viewmodel.navigation.Back
 import com.bitchat.viewmodel.navigation.BluetoothDisabled
@@ -55,7 +54,6 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
@@ -63,10 +61,10 @@ import com.bitchat.domain.location.model.Channel as BitchatChannel
 
 class MainViewModel(
     private val getUserState: GetUserState,
+    private val observeUserState: ObserveUserState,
     private val observeAppTheme: ObserveAppTheme,
     private val observePowSettings: ObservePowSettings,
     private val observeTorStatus: ObserveTorStatus,
-    private val userEventBus: UserEventBus,
     private val observeJoinedChannels: ObserveJoinedChannels,
     private val observeUserNickname: ObserveUserNickname,
     private val observePrivateChats: ObservePrivateChats,
@@ -78,7 +76,7 @@ class MainViewModel(
     private val observeCurrentChannelBookmarkState: ObserveCurrentChannelBookmarkState,
     private val observeHasNotes: ObserveHasNotes,
     private val observeChannelParticipants: ObserveChannelParticipants,
-    private val getAllFavorites: GetAllFavorites,
+    private val observeFavorites: ObserveFavorites,
     private val toggleFavoriteUseCase: ToggleFavorite,
     private val leaveChannel: LeaveChannel,
     private val setUserNickname: SetUserNickname,
@@ -103,17 +101,10 @@ class MainViewModel(
 
     init {
         viewModelScope.launch {
-            userEventBus.events()
-                .onStart { goToNextStep() }
-                .collect { event ->
-                    when (event) {
-                        UserEvent.StateChanged,
-                        is UserEvent.LoginChanged -> goToNextStep()
-
-                        is UserEvent.FavoriteStatusChanged -> refreshFavorites()
-                        else -> Unit
-                    }
-                }
+            observeUserState().collect { userState ->
+                // A coroutine per state: a navigation nobody takes yet must not hold up the next one.
+                viewModelScope.launch { showUserState(userState) }
+            }
         }
 
         viewModelScope.launch {
@@ -251,89 +242,91 @@ class MainViewModel(
         }
 
         viewModelScope.launch {
-            refreshFavorites()
+            observeFavorites().collect(::showFavorites)
         }
     }
 
     fun goToNextStep() {
-        viewModelScope.launch {
-            when (val userState = getUserState()) {
-                is UserState.Active -> {
-                    when (val activeState = userState.activeState) {
-                        is ActiveState.Chat -> {
-                            val channel = activeState.channel
-                            println("user state is active chat, channel: $channel")
-                            when (channel) {
-                                is BitchatChannel.Location -> {
-                                    _headerState.update {
-                                        it.copy(
-                                            selectedLocationChannel = channel,
-                                            selectedChannel = channel,
-                                            selectedPrivatePeer = null,
-                                            currentChannel = null,
-                                        )
-                                    }
-                                }
+        viewModelScope.launch { showUserState(getUserState()) }
+    }
 
-                                BitchatChannel.Mesh -> {
-                                    _headerState.update {
-                                        it.copy(
-                                            selectedLocationChannel = channel,
-                                            selectedChannel = channel,
-                                            selectedPrivatePeer = null,
-                                            currentChannel = null,
-                                        )
-                                    }
-                                }
-
-                                is BitchatChannel.NamedChannel -> {
-                                    _headerState.update {
-                                        it.copy(
-                                            selectedChannel = channel,
-                                            currentChannel = channel.channelName,
-                                            selectedPrivatePeer = null
-                                        )
-                                    }
-                                }
-
-                                is BitchatChannel.MeshDM -> _headerState.update {
+    private suspend fun showUserState(userState: UserState) {
+        when (userState) {
+            is UserState.Active -> {
+                when (val activeState = userState.activeState) {
+                    is ActiveState.Chat -> {
+                        val channel = activeState.channel
+                        println("user state is active chat, channel: $channel")
+                        when (channel) {
+                            is BitchatChannel.Location -> {
+                                _headerState.update {
                                     it.copy(
+                                        selectedLocationChannel = channel,
                                         selectedChannel = channel,
-                                        currentChannel = channel.peerID,
-                                        selectedPrivatePeer = channel.peerID,
-                                    )
-                                }
-
-                                is BitchatChannel.NostrDM -> _headerState.update {
-                                    it.copy(
-                                        selectedChannel = channel,
-                                        currentChannel = channel.peerID,
-                                        selectedPrivatePeer = channel.peerID,
-                                    )
-                                }
-
-                                is BitchatChannel.Meshtastic -> _headerState.update {
-                                    it.copy(
-                                        selectedChannel = channel,
-                                        currentChannel = channel.nodeNum?.toString(16)?.padStart(8, '0'),
-                                        selectedPrivatePeer = channel.nodeNum?.toString(16)?.padStart(8, '0'),
+                                        selectedPrivatePeer = null,
+                                        currentChannel = null,
                                     )
                                 }
                             }
-                            navigation.send(Chat(activeState.channel.toNavigationString()))
+
+                            BitchatChannel.Mesh -> {
+                                _headerState.update {
+                                    it.copy(
+                                        selectedLocationChannel = channel,
+                                        selectedChannel = channel,
+                                        selectedPrivatePeer = null,
+                                        currentChannel = null,
+                                    )
+                                }
+                            }
+
+                            is BitchatChannel.NamedChannel -> {
+                                _headerState.update {
+                                    it.copy(
+                                        selectedChannel = channel,
+                                        currentChannel = channel.channelName,
+                                        selectedPrivatePeer = null
+                                    )
+                                }
+                            }
+
+                            is BitchatChannel.MeshDM -> _headerState.update {
+                                it.copy(
+                                    selectedChannel = channel,
+                                    currentChannel = channel.peerID,
+                                    selectedPrivatePeer = channel.peerID,
+                                )
+                            }
+
+                            is BitchatChannel.NostrDM -> _headerState.update {
+                                it.copy(
+                                    selectedChannel = channel,
+                                    currentChannel = channel.peerID,
+                                    selectedPrivatePeer = channel.peerID,
+                                )
+                            }
+
+                            is BitchatChannel.Meshtastic -> _headerState.update {
+                                it.copy(
+                                    selectedChannel = channel,
+                                    currentChannel = channel.nodeNum?.toString(16)?.padStart(8, '0'),
+                                    selectedPrivatePeer = channel.nodeNum?.toString(16)?.padStart(8, '0'),
+                                )
+                            }
                         }
-
-                        is ActiveState.LocationNotes -> navigation.send(LocationNotes)
-                        ActiveState.Locations -> navigation.send(Locations)
-                        ActiveState.Settings -> navigation.send(Settings)
+                        navigation.send(Chat(activeState.channel.toNavigationString()))
                     }
-                }
 
-                is UserState.BatteryOptimization -> navigation.send(OptimizationsSuggested(userState.status))
-                UserState.BluetoothDisabled -> navigation.send(BluetoothDisabled)
-                UserState.LocationServicesDisabled -> navigation.send(LocationServicesDisabled)
-                UserState.PermissionsRequired -> navigation.send(PermissionsRequest)
+                    is ActiveState.LocationNotes -> navigation.send(LocationNotes)
+                    ActiveState.Locations -> navigation.send(Locations)
+                    ActiveState.Settings -> navigation.send(Settings)
+                }
             }
+
+            is UserState.BatteryOptimization -> navigation.send(OptimizationsSuggested(userState.status))
+            UserState.BluetoothDisabled -> navigation.send(BluetoothDisabled)
+            UserState.LocationServicesDisabled -> navigation.send(LocationServicesDisabled)
+            UserState.PermissionsRequired -> navigation.send(PermissionsRequest)
         }
     }
 
@@ -454,7 +447,6 @@ class MainViewModel(
                 ?: peerID
 
             toggleFavoriteUseCase(ToggleFavorite.Params(peerID = peerID, peerNickname = nickname))
-            refreshFavorites()
         }
     }
 
@@ -576,9 +568,8 @@ class MainViewModel(
         }
     }
 
-    private suspend fun refreshFavorites() {
+    private fun showFavorites(favorites: Map<String, FavoriteRelationship>) {
         _headerState.update { current ->
-            val favorites = getAllFavorites()
             val favoriteState = buildFavoriteState(favorites, current.nicknameDirectory)
             current.copy(
                 favoritePeers = favoriteState.favoritePeers,

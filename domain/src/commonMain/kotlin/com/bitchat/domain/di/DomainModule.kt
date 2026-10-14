@@ -94,7 +94,6 @@ import com.bitchat.domain.tor.ObserveTorStatus
 import com.bitchat.domain.tor.eventbus.InMemoryTorEventBus
 import com.bitchat.domain.tor.eventbus.TorEventBus
 import com.bitchat.domain.user.BlockUser
-import com.bitchat.domain.user.GetAllFavorites
 import com.bitchat.domain.user.GetBlockedUsers
 import com.bitchat.domain.user.GetUserNickname
 import com.bitchat.domain.user.ObserveUserNickname
@@ -254,7 +253,6 @@ val domainModule = module {
     single { DisableTor(torRepository = get(), requestedIntent = get(), torEventBus = get(), routeLifecycle = getOrNull()) }
     single { GetTorAvailability(torRepository = get()) }
 
-    single { GetAllFavorites(userRepository = get()) }
     single { ObserveFavorites(userRepository = get(), userEventBus = get()) }
     single { ToggleFavorite(userRepository = get(), chatRepository = get(), userEventBus = get()) }
 
