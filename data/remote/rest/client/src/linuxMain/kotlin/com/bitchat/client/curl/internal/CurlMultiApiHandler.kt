@@ -278,11 +278,12 @@ internal class CurlMultiApiHandler : Closeable {
             }
 
             val responseBuilder = responseDataRef.value!!.fromCPointer<CurlResponseBuilder>()
+            val failure = collectFailedResponse(message, responseBuilder.request, result, httpStatusCode.value)
             try {
-                collectFailedResponse(message, responseBuilder.request, result, httpStatusCode.value)
-                    ?: collectSuccessResponse(easyHandle)!!
+                failure ?: collectSuccessResponse(easyHandle)!!
             } finally {
-                responseBuilder.responseBody.close()
+                // With a cause, a reader of a body that is already streaming gets the failure, not its end.
+                responseBuilder.responseBody.close(failure?.cause)
                 responseBuilder.headersBytes.close()
             }
         } finally {
@@ -305,7 +306,11 @@ internal class CurlMultiApiHandler : Closeable {
         }
 
         if (httpStatusCode != 0L) {
-            return null
+            // A transfer that broke after its headers would otherwise read as a complete body. A
+            // WebSocket's end is reported by its session, not here.
+            if (result == CURLE_OK || request.isUpgradeRequest) return null
+            val reason = curl_easy_strerror(result)?.toKStringFromUtf8()
+            return CurlFail(IllegalStateException("Transfer failed after the response began for request: $request. Reason: $reason"))
         }
 
         if (result == CURLE_OPERATION_TIMEDOUT) {

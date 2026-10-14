@@ -38,15 +38,19 @@ class DirectHttpGet(
             null
         }
     }
+}
 
-    private suspend fun ByteReadChannel.readAtMost(limit: Int): String? {
-        val bytes = ByteArray(limit + 1)
-        var offset = 0
-        while (offset < bytes.size) {
-            val read = readAvailable(bytes, offset, bytes.size - offset)
-            if (read == -1) break
-            offset += read
+internal suspend fun ByteReadChannel.readAtMost(limit: Int): String? {
+    val bytes = ByteArray(limit + 1)
+    var offset = 0
+    while (offset < bytes.size) {
+        val read = readAvailable(bytes, offset, bytes.size - offset)
+        if (read == -1) {
+            // A channel closed with a failure reads as its end too, and keeps nothing it held.
+            closedCause?.let { throw it }
+            break
         }
-        return if (offset > limit) null else bytes.copyOf(offset).decodeToString()
+        offset += read
     }
+    return if (offset > limit) null else bytes.copyOf(offset).decodeToString()
 }

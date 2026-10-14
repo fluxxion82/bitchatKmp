@@ -19,6 +19,8 @@ import io.ktor.util.date.GMTDate
 import io.ktor.utils.io.ByteChannel
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.InternalAPI
+import io.ktor.utils.io.close
+import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -204,6 +206,21 @@ class DirectHttpGetTest {
         assertNull(DirectHttpGet(provider).get("http://held.invalid/") { true })
 
         assertEquals(10_000, currentTime)
+    }
+
+    @Test
+    fun `a body closed with a failure is not read as its end`() = runBlocking {
+        val broken = ByteChannel(autoFlush = true).apply {
+            writeFully("""{"latitude":1.5,"longitude":2.5}""".encodeToByteArray())
+            close(IllegalStateException("the transfer broke"))
+        }
+        assertTrue(runCatching { broken.readAtMost(64) }.isFailure)
+
+        val whole = ByteChannel(autoFlush = true).apply {
+            writeFully("""{"latitude":1.5}""".encodeToByteArray())
+            close(null)
+        }
+        assertEquals("""{"latitude":1.5}""", whole.readAtMost(64))
     }
 
     @Test
