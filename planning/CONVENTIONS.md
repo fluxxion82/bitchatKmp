@@ -31,6 +31,8 @@ The project's working rules, for agents that cannot see the owner's local instru
 - Local gates are the modes of `scripts/verify.sh`: `quick`, `desktop`, `android`, `ios`, `embedded`, `tui`, `desktop-tui`, `full`. Module tests: `:domain:jvmTest`, `:presentation:viewmodel:jvmTest`, `:data:repo:desktopTest`, `:apps:desktop:test`. The terminal UI modules need `-Ptui.enabled=true`.
 - A test under `commonTest` also compiles for Kotlin/Native, which refuses a comma in a backticked test name.
 - `:domain:jvmTest` and `:presentation:viewmodel:jvmTest` each hold an `ArchitectureTest` (Konsist, D25). A new exception to one of its rules goes into the test's own list, on the owner's word.
+- A rule in an `ArchitectureTest` asserts with `kotlin.test` on a list it computed itself; the domain's helper for that is `assertEach`. Konsist's own `assertTrue` and `assertFalse` pass on an empty list, and they leave out a declaration annotated `@Suppress` with the calling function's name. No annotation in the checked code may switch a rule off.
+- Konsist reads sources; Gradle compares classes. A module with an `ArchitectureTest` declares its `src` as an input of `jvmTest`, so the rules run again after any source change. A plant that must fail proves a rule only if the task ran: read its outcome (`FROM-CACHE`, `UP-TO-DATE`) before believing a pass, and try the plant without `--rerun` too.
 - A scratch build is reported as what it was: the input commits, what was stubbed or left out, and the tasks. It is not the module's own test task.
 
 ## Failures

@@ -243,3 +243,15 @@ Each branch: one commit with a one-line message, then a LOG entry naming the inp
   - The suffix changed to `Repositories` so the selection is empty: the repository rule failed on its non-empty assertion. The change was then reverted.
 - Not built: anything above `:domain`. Neither branch changes a declaration, a package or an import, but the renames only show their full effect in the apps' builds.
 - Needs: a local build and review of both branches.
+
+## 2026-10-13, local-claude (D28 and D29 reviewed and landed locally)
+
+- Read: both branches, the two D29 entries above, `STATUS.md`.
+- Built: both branches together on `main` at `b572169`, every target. They built and passed as pushed; neither needed a change.
+- Found, older than the branches, and fixed in a third commit:
+  - The build did not run the rules again after a change the JVM does not compile into different classes. A misplaced interface in `linuxMain` passed from the build cache. Your scratch build has no cache, so it could not show this.
+  - `@Suppress("assertPlacedIn")` on a misplaced interface switched both rules off; the older rules had the same way out under their own names (Codex found it).
+- Landed on local `main`, not pushed: `dca893b` (your rules, unchanged), `519ba25` (your renames, unchanged), `6aefc15` (the two fixes).
+- Written: `reference/2026-10-13-local-review-d29.md`; two lines under Verification in `CONVENTIONS.md`; `STATUS.md`.
+- Corrections to the D29 entries are in the review, section 4. The one that matters: the `appleMain` plant failed in your build and would have passed in the repository's.
+- Needs: the owner's word on the push and on Q11. cloud-claude: for a new rule use `assertEach`, and read a plant's task outcome before believing a pass.
