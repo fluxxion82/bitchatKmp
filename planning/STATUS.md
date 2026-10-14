@@ -5,14 +5,13 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-13 by local-claude (D28 and D29 landed locally).
+Updated 2026-10-13 by local-claude (D28 and D29 pushed; D30 decided).
 
 ## In flight
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | Locally `6aefc15`; `origin/main` is `b572169`. Since `ff4697c`: three commits of the owner's side (`c923790` REST client engine close, `e1416cc` string resources, `b572169` the default place for location), then this slice: `dca893b` (the two placement rules), `519ba25` (four file names), `6aefc15` (the rules cannot be skipped by the build cache or a `@Suppress`) | Landed locally 2026-10-13, not pushed | the owner: the push, and the next slice (Q11) |
-| `claude/konsist-placement-rules`, `claude/domain-file-names` | In `main` as `dca893b` and `519ba25`, unchanged | To be deleted after the push | the owner |
+| `main` | `6aefc15`. Since `ff4697c`: three commits of the owner's side (`c923790` REST client engine close, `e1416cc` string resources, `b572169` the default place for location), then D28 and D29: `dca893b` (the two placement rules), `519ba25` (four file names), `6aefc15` (the rules cannot be skipped by the build cache or a `@Suppress`) | Pushed 2026-10-13 | cloud-claude: start D30 from here |
 
 ## D28 and D29, as landed
 
@@ -47,11 +46,30 @@ Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **cloud-claude: nothing to build until the owner answers Q11.** Read `reference/2026-10-13-local-review-d29.md` and the two new lines under Verification in `CONVENTIONS.md`. When the next slice is decided it will be here, with `main` pushed.
+1. **cloud-claude: the next slice is decided (D30).** Fetch `main` at `6aefc15`. Read `reference/2026-10-13-local-review-d29.md` (section 5 lists what `main` gained) and the two new lines under Verification in `CONVENTIONS.md`. Put the plan in `LOG.md` first. One branch, inside `:domain`.
+
+   **Why.** `MainViewModel` collects `UserEventBus` itself: on start, `StateChanged` and `LoginChanged` it reads the user state with `GetUserState`; on `FavoriteStatusChanged` it reads the favourites with `GetAllFavorites`. A viewmodel should take use cases, not a bus.
+
+   **First, in the plan: the writers.** Before any code, list every writer of what each observer will read, in every layer, and say whether it publishes the event (the rule under Observers and events).
+   - For the user state: everything `GetUserState` reads. That is the saved state in `UserRepository`, and also the permissions, Bluetooth, location services and battery optimisation answers of `AppRepository` and `ConnectivityRepository`. Name what changes each and what, if anything, publishes `StateChanged` afterwards.
+   - For the favourites: `ToggleFavorite`, the favourite notifications handled in `data:repo`, the trim at start, the wipe.
+   - A writer that publishes nothing is a finding. Report it; do not fix it in `data:*`.
+
+   **Then the two use cases.**
+   - `ObserveUserState : Usecase<Unit, Flow<UserState>>`. It emits what `GetUserState` returns on start, and again on `StateChanged` and on `LoginChanged`. It takes `GetUserState`; it does not copy its rules.
+   - `ObserveFavorites : Usecase<Unit, Flow<Map<String, FavoriteRelationship>>>`. On start and on `FavoriteStatusChanged`.
+   - Same shape as `ObserveUserNickname`. No `distinctUntilChanged` and no conflation: today every matching event runs the viewmodel's refresh, and the local switch must not change that unnoticed.
+   - Their lines in `domainModule`. `GetUserState` and `GetAllFavorites` stay; they have other callers.
+
+   **Tests,** like `ObserveUserNicknameTest`: the first value; one more read for each matching event; no read for an unrelated event, also when it sits in the replay slot at start; two matching events give two reads. A test that records behaviour nobody decided says "today" in its name.
+
+   **Not in this branch:** `MainViewModel` or anything else outside `:domain`. Local agents switch the viewmodel afterwards and run the desktop Koin check. `ChatViewModel` and `ChatEventBus` are a later slice.
+
+   Report what the scratch build ran. For anything planted, read the task's outcome before believing a pass.
 
 ## Open questions
 
-- **Q11. The next cloud slice.** The review's section 7 lists four candidates. Recommended: `ObserveUserState` and `ObserveFavorites` in the domain with tests (cloud), then `MainViewModel` switched over locally.
+None.
 
 ## Answered
 
@@ -63,12 +81,13 @@ Not run: any app on a phone or a board.
 - **Q7.** The changed texts are accepted (D26).
 - **Q8.** Domain tests for the error contract, then the narrow observer fixes (D27). Done, on `main`.
 - **Q9.** The two placement rules inside `:domain` now; the other three candidates wait (D28, the owner, 2026-10-13).
-- **Q10.** Next: those two rules, then the file names that differ from their class (D29, the owner, 2026-10-13).
+- **Q10.** Next: those two rules, then the file names that differ from their class (D29, the owner, 2026-10-13). Done, on `main`.
+- **Q11.** Next: `ObserveUserState` and `ObserveFavorites` in the domain (D30, the owner, 2026-10-13).
 
 ## Next
 
 - **D5 is partly done.** Channel and LoRa commands return typed failures. Exceptions still pass through: discovery, verification, the password write and the join in `JoinChannel`'s existing-channel path, and all three LoRa commands (tests pin that those propagate). Turning any into an `Outcome` changes a tested contract: write the mapping and the texts first.
-- **Two viewmodels import a bus:** `MainViewModel` (`UserEventBus`) and `ChatViewModel` (`ChatEventBus`). A use case each would end that.
+- **Two viewmodels import a bus:** `MainViewModel` (`UserEventBus`, D30 is its domain half) and `ChatViewModel` (`ChatEventBus`, not started).
 - **File names:** `app/model/AppState.kt` holds `UserState` and `ActiveState`; rename it when those move to `user/model`. The rest is in the review's section 6.
 - **Unlocked collections** in `ChatRepo`, `LocalChannelPreferences`, `NostrClient` and the Apple Bluetooth services: local work, design first.
 - **Open from the plan:** (d) pass-through use cases, (e) scopes and dispatchers, (f) a transport port; where tracked rules live. Plan §3 is a list of old proposals, not instructions (see the note at the top of the plan).

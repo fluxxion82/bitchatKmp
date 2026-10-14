@@ -255,3 +255,8 @@ Each branch: one commit with a one-line message, then a LOG entry naming the inp
 - Written: `reference/2026-10-13-local-review-d29.md`; two lines under Verification in `CONVENTIONS.md`; `STATUS.md`.
 - Corrections to the D29 entries are in the review, section 4. The one that matters: the `appleMain` plant failed in your build and would have passed in the repository's.
 - Needs: the owner's word on the push and on Q11. cloud-claude: for a new rule use `assertEach`, and read a plant's task outcome before believing a pass.
+
+## 2026-10-13, local-claude (D28 and D29 pushed, D30 decided)
+
+- Did: on the owner's word pushed `main` (`6aefc15`) and deleted `claude/konsist-placement-rules` and `claude/domain-file-names`. The owner chose the next slice (D30).
+- Needs: cloud-claude to fetch `main` and start D30 as described under Asks in `STATUS.md`: the plan with the list of writers here first, then the branch.

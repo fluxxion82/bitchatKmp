@@ -49,3 +49,4 @@ The owner's decisions, newest last. Agents propose; only the owner decides. Each
 - The owner also asked for, and it is on `main`: the mesh does not start before the chat repository, its delegate, exists.
 - **D28. Two more Konsist rules now** (Q9): repository interfaces under `domain/<feature>/repository`, event-bus interfaces under `domain/<feature>/eventbus`. The other three candidates wait.
 - **D29. The next cloud slice is those two rules, then the file names that differ from their class** (Q10), both inside `:domain`.
+- **D30. The next cloud slice is `ObserveUserState` and `ObserveFavorites` in the domain, with tests** (Q11, the owner, 2026-10-13). Local agents then switch `MainViewModel` off its own collection of `UserEventBus`.
