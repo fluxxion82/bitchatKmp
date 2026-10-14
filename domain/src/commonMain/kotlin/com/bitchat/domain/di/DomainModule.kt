@@ -99,6 +99,8 @@ import com.bitchat.domain.user.GetBlockedUsers
 import com.bitchat.domain.user.GetUserNickname
 import com.bitchat.domain.user.ObserveUserNickname
 import com.bitchat.domain.user.GetUserState
+import com.bitchat.domain.user.ObserveFavorites
+import com.bitchat.domain.user.ObserveUserState
 import com.bitchat.domain.user.SaveUserStateAction
 import com.bitchat.domain.user.SetUserNickname
 import com.bitchat.domain.user.ToggleFavorite
@@ -151,6 +153,7 @@ val domainModule = module {
     single { InMemoryUserEventBus(contextFacade = get()) } bind UserEventBus::class
 
     single { GetUserState(userRepository = get(), appRepository = get(), connectivityRepository = get()) }
+    single { ObserveUserState(getUserState = get(), userEventBus = get()) }
     single {
         SaveUserStateAction(
             repository = get(),
@@ -252,6 +255,7 @@ val domainModule = module {
     single { GetTorAvailability(torRepository = get()) }
 
     single { GetAllFavorites(userRepository = get()) }
+    single { ObserveFavorites(userRepository = get(), userEventBus = get()) }
     single { ToggleFavorite(userRepository = get(), chatRepository = get(), userEventBus = get()) }
 
     single { GetLoRaSettings(loraSettingsRepository = get()) }
