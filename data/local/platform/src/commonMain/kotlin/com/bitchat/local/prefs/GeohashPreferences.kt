@@ -7,4 +7,7 @@ interface GeohashPreferences {
     fun getLevel(): GeohashChannelLevel?
     fun saveLocationServicesEnabled(enabled: Boolean)
     fun getLocationServicesEnabled(): Boolean
+    fun getSavedPlace(): String?
+    fun saveSavedPlace(geohash: String)
+    fun clearSavedPlace()
 }

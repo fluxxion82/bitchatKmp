@@ -304,6 +304,8 @@ private fun LocationsBody(
             scoped.act { onMapResult(geohash) }
             navigation.mode = Mode.Chat
         },
+        onUseAsDeviceLocation = { geohash -> scoped.act { onUseAsDeviceLocation(geohash) } },
+        onClearDeviceLocation = { scoped.act { onClearDeviceLocation() } },
         onOpenNotes = onOpenNotes,
     )
 }

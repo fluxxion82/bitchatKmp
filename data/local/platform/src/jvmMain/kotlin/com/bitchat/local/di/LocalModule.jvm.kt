@@ -6,11 +6,13 @@ import com.bitchat.local.identity.NoDomainInspector
 import com.bitchat.local.identity.NoLedgerStore
 import com.bitchat.local.prefs.DesktopEncryptionSettingsFactory
 import com.bitchat.local.prefs.EncryptionSettingsFactory
+import com.bitchat.local.prefs.GeohashPreferences
 import com.bitchat.local.service.GeocoderService
 import com.bitchat.local.service.JvmLocationService
 import com.bitchat.local.service.JvmSettingsService
 import com.bitchat.local.service.LocationService
 import com.bitchat.local.service.SettingsService
+import com.bitchat.local.service.placeSaved
 import com.bitchat.local.service.impl.StubGeocoderService
 import com.russhwolf.settings.PreferencesSettings
 import com.russhwolf.settings.Settings
@@ -36,5 +38,8 @@ actual val localModule = module {
 
     single<SettingsService> { JvmSettingsService() }
 
-    single<LocationService> { JvmLocationService(settingsFactory = get(), requestedTorIntent = get()) }
+    single<LocationService> {
+        val prefs = get<GeohashPreferences>()
+        JvmLocationService(settingsFactory = get(), requestedTorIntent = get(), placeSaved = { prefs.placeSaved() })
+    }
 }

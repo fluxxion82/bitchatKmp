@@ -6,6 +6,7 @@ import com.bitchat.local.identity.LinuxDomainInspector
 import com.bitchat.local.identity.LinuxLedgerStore
 import com.bitchat.local.identity.LinuxIdentityPaths
 import com.bitchat.local.prefs.EncryptionSettingsFactory
+import com.bitchat.local.prefs.GeohashPreferences
 import com.bitchat.local.prefs.LinuxEncryptionSettingsFactory
 import com.bitchat.local.prefs.LinuxFileSettings
 import com.bitchat.local.prefs.ensureDirectory
@@ -14,6 +15,7 @@ import com.bitchat.local.service.IpLocationService
 import com.bitchat.local.service.LinuxSettingsService
 import com.bitchat.local.service.LocationService
 import com.bitchat.local.service.SettingsService
+import com.bitchat.local.service.placeSaved
 import com.bitchat.local.service.impl.StubGeocoderService
 import com.bitchat.client.DirectHttpGet
 import com.russhwolf.settings.Settings
@@ -47,11 +49,13 @@ actual val localModule = module {
     single<SettingsService> { LinuxSettingsService() }
 
     single<LocationService> {
+        val prefs = get<GeohashPreferences>()
         IpLocationService(
             settingsFactory = get(),
             requestedTorIntent = get(),
             environment = { name -> getenv(name)?.toKString() },
             httpGet = get<DirectHttpGet>()::get,
+            placeSaved = { prefs.placeSaved() },
         )
     }
 }

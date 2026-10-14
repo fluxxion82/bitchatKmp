@@ -48,8 +48,10 @@ import com.bitchat.domain.initialization.AppInitializer
 import com.bitchat.domain.initialization.GetAppInformation
 import com.bitchat.domain.initialization.InitializeApplication
 import com.bitchat.domain.location.BeginGeohashSampling
+import com.bitchat.domain.location.ClearSavedPlace
 import com.bitchat.domain.location.EndGeohashSampling
 import com.bitchat.domain.location.GetAvailableChannels
+import com.bitchat.domain.location.GetSavedPlace
 import com.bitchat.domain.location.GetBookmarkNames
 import com.bitchat.domain.location.GetBookmarkedChannels
 import com.bitchat.domain.location.GetLocationGeohash
@@ -67,6 +69,7 @@ import com.bitchat.domain.location.ObservePermissionState
 import com.bitchat.domain.location.RequestLocationPermission
 import com.bitchat.domain.location.ResolveLocationName
 import com.bitchat.domain.location.SendNote
+import com.bitchat.domain.location.SetSavedPlace
 import com.bitchat.domain.location.ToggleBookmark
 import com.bitchat.domain.location.ToggleLocationServices
 import com.bitchat.domain.location.eventbus.InMemoryLocationEventBus
@@ -205,6 +208,9 @@ val domainModule = module {
     single { ResolveChatFallback(userRepository = get(), chatRepository = get()) }
 
     single { GetAvailableChannels(locationRepository = get()) }
+    single { GetSavedPlace(locationRepository = get()) }
+    single { SetSavedPlace(locationRepository = get()) }
+    single { ClearSavedPlace(locationRepository = get()) }
     single { GetParticipantCounts(locationRepository = get(), chatRepository = get()) }
     single { GetBookmarkedChannels(locationRepository = get()) }
     single { BeginGeohashSampling(locationRepository = get()) }

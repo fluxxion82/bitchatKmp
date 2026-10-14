@@ -14,6 +14,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +41,7 @@ fun CustomGeohashInput(
     error: String?,
     onValueChange: (String) -> Unit,
     onTeleport: () -> Unit,
+    onUseAsDeviceLocation: () -> Unit,
     onOpenMap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -126,6 +128,18 @@ fun CustomGeohashInput(
                     }
                 }
             }
+        }
+
+        TextButton(
+            onClick = onUseAsDeviceLocation,
+            enabled = value.length >= 2,
+            modifier = Modifier.align(Alignment.End),
+        ) {
+            Text(
+                text = "use as this device's location",
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+            )
         }
 
         if (error != null) {

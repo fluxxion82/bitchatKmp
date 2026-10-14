@@ -7,6 +7,9 @@ import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.location.BeginGeohashSampling
 import com.bitchat.domain.location.EndGeohashSampling
 import com.bitchat.domain.location.GetAvailableChannels
+import com.bitchat.domain.location.GetSavedPlace
+import com.bitchat.domain.location.SetSavedPlace
+import com.bitchat.domain.location.ClearSavedPlace
 import com.bitchat.domain.location.GetBookmarkNames
 import com.bitchat.domain.location.GetBookmarkedChannels
 import com.bitchat.domain.tor.ObserveRequestedTorMode
@@ -24,6 +27,7 @@ import com.bitchat.domain.location.model.GeohashChannel
 import com.bitchat.domain.location.model.GeohashChannelLevel
 import com.bitchat.domain.location.model.LocationFixInfo
 import com.bitchat.domain.location.model.NearbyChannels
+import com.bitchat.domain.location.model.SavedPlace
 import com.bitchat.domain.location.model.LocationUnavailableException.Reason
 import com.bitchat.domain.location.model.ParticipantCounts
 import com.bitchat.domain.user.GetUserState
@@ -66,6 +70,9 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
     private val getLocationNames = mockk<GetLocationNames>(relaxed = true)
     private val resolveLocationName = mockk<ResolveLocationName>(relaxed = true)
     private val getUserState = mockk<GetUserState>(relaxed = true)
+    private val getSavedPlace = mockk<GetSavedPlace>(relaxed = true)
+    private val setSavedPlace = mockk<SetSavedPlace>(relaxed = true)
+    private val clearSavedPlace = mockk<ClearSavedPlace>(relaxed = true)
     private val observeRequestedTorMode = mockk<ObserveRequestedTorMode>(relaxed = true)
     private val torMode = MutableStateFlow(TorMode.OFF)
 
@@ -82,6 +89,7 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
         coEvery { getTeleportState(Unit) } returns false
         coEvery { getLocationServicesEnabled(Unit) } returns false
         coEvery { getLocationNames(Unit) } returns emptyMap()
+        coEvery { getSavedPlace(Unit) } returns null
         coEvery { resolveLocationName(any()) } returns null
         coEvery { getUserState(Unit) } returns UserState.Active(ActiveState.Chat(Channel.Mesh))
         coEvery { observeRequestedTorMode(Unit) } returns torMode
@@ -104,6 +112,9 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
             observeRequestedTorMode = observeRequestedTorMode,
             resolveLocationName = resolveLocationName,
             getUserState = getUserState,
+            getSavedPlace = getSavedPlace,
+            setSavedPlace = setSavedPlace,
+            clearSavedPlace = clearSavedPlace,
         )
     }
 
@@ -392,6 +403,480 @@ class LocationChannelsViewModelTest : BaseViewModelTest() {
         )
 
         viewModel.clearForTest()
+    }
+
+    @Test
+    fun `using and clearing a device location updates its notice`() = runTest {
+        var saved: SavedPlace? = null
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getSavedPlace(Unit) } answers { saved }
+            coEvery { setSavedPlace(any()) } answers { saved = firstArg() }
+            coEvery { clearSavedPlace(Unit) } answers { saved = null }
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+
+            viewModel.onUseAsDeviceLocation("#9Q8YY")
+            instantExecutorRule.scheduler.runCurrent()
+            assertEquals("9q8yy", viewModel.state.value.savedPlace)
+            assertEquals("location set on this device (#9q8yy)", viewModel.state.value.savedPlaceNotice)
+
+            viewModel.onClearDeviceLocation()
+            instantExecutorRule.scheduler.runCurrent()
+            assertNull(viewModel.state.value.savedPlace)
+            assertNull(viewModel.state.value.savedPlaceNotice)
+        }
+    }
+
+    @Test
+    fun `an invalid device location saves nothing`() = runTest {
+        val viewModel = buildViewModel()
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+
+            viewModel.onUseAsDeviceLocation("invalid")
+            instantExecutorRule.scheduler.runCurrent()
+
+            assertEquals("invalid geohash", viewModel.state.value.customGeohashError)
+            coVerify(exactly = 0) { setSavedPlace(any()) }
+        }
+    }
+
+    @Test
+    fun `a load started before setting a device location cannot replace its channels`() = runTest {
+        val firstLoadStarted = CompletableDeferred<Unit>()
+        val finishFirstLoad = CompletableDeferred<Unit>()
+        val oldChannels = listOf(GeohashChannel(GeohashChannelLevel.CITY, "u33db"))
+        val savedChannels = listOf(
+            GeohashChannel(GeohashChannelLevel.CITY, "9q8yy"),
+            GeohashChannel(GeohashChannelLevel.PROVINCE, "9q8y"),
+            GeohashChannel(GeohashChannelLevel.REGION, "9q"),
+        )
+        var saved: SavedPlace? = null
+        var calls = 0
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getSavedPlace(Unit) } answers { saved }
+            coEvery { setSavedPlace(any()) } answers { saved = firstArg() }
+            coEvery { getAvailableChannels(Unit) } coAnswers {
+                if (calls++ == 0) {
+                    firstLoadStarted.complete(Unit)
+                    finishFirstLoad.await()
+                    NearbyChannels(oldChannels, deviceFix())
+                } else {
+                    NearbyChannels(savedChannels, LocationFixInfo(LocationFixInfo.Source.MANUAL, ageMillis = 0))
+                }
+            }
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+            firstLoadStarted.await()
+
+            viewModel.onUseAsDeviceLocation("9q8yy")
+            instantExecutorRule.scheduler.runCurrent()
+            assertEquals(savedChannels, viewModel.state.value.availableChannels)
+
+            finishFirstLoad.complete(Unit)
+            instantExecutorRule.scheduler.runCurrent()
+            assertEquals(savedChannels, viewModel.state.value.availableChannels)
+        }
+    }
+
+    @Test
+    fun `a load started before clearing a device location cannot replace its channels`() = runTest {
+        val firstLoadStarted = CompletableDeferred<Unit>()
+        val finishFirstLoad = CompletableDeferred<Unit>()
+        val savedChannels = listOf(GeohashChannel(GeohashChannelLevel.CITY, "9q8yy"))
+        val clearedChannels = listOf(GeohashChannel(GeohashChannelLevel.CITY, "u33db"))
+        var saved: SavedPlace? = SavedPlace.of("9q8yy")
+        var calls = 0
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getSavedPlace(Unit) } answers { saved }
+            coEvery { clearSavedPlace(Unit) } answers { saved = null }
+            coEvery { getAvailableChannels(Unit) } coAnswers {
+                if (calls++ == 0) {
+                    firstLoadStarted.complete(Unit)
+                    finishFirstLoad.await()
+                    NearbyChannels(savedChannels, LocationFixInfo(LocationFixInfo.Source.MANUAL, ageMillis = 0))
+                } else {
+                    NearbyChannels(clearedChannels, deviceFix())
+                }
+            }
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+            firstLoadStarted.await()
+
+            viewModel.onClearDeviceLocation()
+            instantExecutorRule.scheduler.runCurrent()
+            assertEquals(clearedChannels, viewModel.state.value.availableChannels)
+
+            finishFirstLoad.complete(Unit)
+            instantExecutorRule.scheduler.runCurrent()
+            assertEquals(clearedChannels, viewModel.state.value.availableChannels)
+        }
+    }
+
+    @Test
+    fun `a load started while setting a device location cannot restore the old place`() = runTest {
+        val writeStarted = CompletableDeferred<Unit>()
+        val finishWrite = CompletableDeferred<Unit>()
+        val oldLoadStarted = CompletableDeferred<Unit>()
+        val finishOldLoad = CompletableDeferred<Unit>()
+        val oldChannels = listOf(GeohashChannel(GeohashChannelLevel.CITY, "u33db"))
+        val savedChannels = listOf(GeohashChannel(GeohashChannelLevel.CITY, "9q8yy"))
+        var saved: SavedPlace? = null
+        var loads = 0
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getSavedPlace(Unit) } answers { saved }
+            coEvery { setSavedPlace(any()) } coAnswers {
+                saved = firstArg()
+                writeStarted.complete(Unit)
+                finishWrite.await()
+            }
+            coEvery { getAvailableChannels(Unit) } coAnswers {
+                when (loads++) {
+                    0 -> NearbyChannels(emptyList(), deviceFix())
+                    1 -> {
+                        oldLoadStarted.complete(Unit)
+                        finishOldLoad.await()
+                        NearbyChannels(oldChannels, deviceFix())
+                    }
+                    else -> NearbyChannels(savedChannels, LocationFixInfo(LocationFixInfo.Source.MANUAL, ageMillis = 0))
+                }
+            }
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+
+            viewModel.onUseAsDeviceLocation("9q8yy")
+            instantExecutorRule.scheduler.runCurrent()
+            writeStarted.await()
+            torMode.value = TorMode.ON
+            instantExecutorRule.scheduler.runCurrent()
+            oldLoadStarted.await()
+
+            finishWrite.complete(Unit)
+            instantExecutorRule.scheduler.runCurrent()
+            assertEquals(savedChannels, viewModel.state.value.availableChannels)
+
+            finishOldLoad.complete(Unit)
+            instantExecutorRule.scheduler.runCurrent()
+            assertEquals(savedChannels, viewModel.state.value.availableChannels)
+        }
+    }
+
+    @Test
+    fun `setting a device location clears prior rows before its refresh`() = runTest {
+        val refreshStarted = CompletableDeferred<Unit>()
+        val finishRefresh = CompletableDeferred<Unit>()
+        val oldChannels = listOf(GeohashChannel(GeohashChannelLevel.BLOCK, "u33db7k"))
+        var saved: SavedPlace? = null
+        var loads = 0
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getSavedPlace(Unit) } answers { saved }
+            coEvery { setSavedPlace(any()) } answers { saved = firstArg() }
+            coEvery { getAvailableChannels(Unit) } coAnswers {
+                if (loads++ == 0) {
+                    NearbyChannels(oldChannels, deviceFix())
+                } else {
+                    refreshStarted.complete(Unit)
+                    finishRefresh.await()
+                    NearbyChannels(emptyList(), LocationFixInfo(LocationFixInfo.Source.MANUAL, ageMillis = 0))
+                }
+            }
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+
+            viewModel.onUseAsDeviceLocation("9q")
+            instantExecutorRule.scheduler.runCurrent()
+            refreshStarted.await()
+
+            val state = viewModel.state.value
+            assertTrue(state.availableChannels.isEmpty())
+            assertEquals("location set on this device (#9q)", state.savedPlaceNotice)
+
+            finishRefresh.complete(Unit)
+        }
+    }
+
+    @Test
+    fun `a resumed older set cannot replace a cleared device location`() = runTest {
+        val afterWrite = CompletableDeferred<Unit>()
+        val resumeSet = CompletableDeferred<Unit>()
+        var saved: SavedPlace? = null
+        var locationReads = 0
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } coAnswers {
+                when (locationReads++) {
+                    1 -> {
+                        afterWrite.complete(Unit)
+                        resumeSet.await()
+                        false
+                    }
+                    else -> false
+                }
+            }
+            coEvery { getSavedPlace(Unit) } answers { saved }
+            coEvery { setSavedPlace(any()) } answers { saved = firstArg() }
+            coEvery { clearSavedPlace(Unit) } answers { saved = null }
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+
+            viewModel.onUseAsDeviceLocation("9q8yy")
+            instantExecutorRule.scheduler.runCurrent()
+            afterWrite.await()
+
+            viewModel.onClearDeviceLocation()
+            instantExecutorRule.scheduler.runCurrent()
+            assertNull(viewModel.state.value.savedPlace)
+
+            resumeSet.complete(Unit)
+            instantExecutorRule.scheduler.runCurrent()
+            assertNull(viewModel.state.value.savedPlace)
+        }
+    }
+
+    @Test
+    fun `clearing a device location wins over a toggle started while it reads the preference`() = runTest {
+        val clearReadStarted = CompletableDeferred<Unit>()
+        val resumeClear = CompletableDeferred<Unit>()
+        var saved: SavedPlace? = requireNotNull(SavedPlace.of("9q8yy"))
+        var enabled = false
+        var locationReads = 0
+        val viewModel = buildViewModel {
+            coEvery { getSavedPlace(Unit) } answers { saved }
+            coEvery { clearSavedPlace(Unit) } answers { saved = null }
+            coEvery { toggleLocationServices(Unit) } answers { enabled = !enabled }
+            coEvery { getLocationServicesEnabled(Unit) } coAnswers {
+                when (locationReads++) {
+                    1 -> {
+                        clearReadStarted.complete(Unit)
+                        resumeClear.await()
+                        enabled
+                    }
+                    else -> enabled
+                }
+            }
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+
+            viewModel.onClearDeviceLocation()
+            instantExecutorRule.scheduler.runCurrent()
+            clearReadStarted.await()
+
+            viewModel.onToggleLocationServices()
+            instantExecutorRule.scheduler.runCurrent()
+
+            resumeClear.complete(Unit)
+            instantExecutorRule.scheduler.runCurrent()
+
+            assertNull(viewModel.state.value.savedPlace)
+            assertNull(viewModel.state.value.savedPlaceNotice)
+        }
+    }
+
+    @Test
+    fun `a clear made while a toggle reads the saved place wins`() = runTest {
+        val toggleRead = CompletableDeferred<Unit>()
+        val resumeToggle = CompletableDeferred<Unit>()
+        var saved: SavedPlace? = requireNotNull(SavedPlace.of("9q8yy"))
+        var reads = 0
+        var enabled = false
+        val viewModel = buildViewModel {
+            coEvery { getSavedPlace(Unit) } coAnswers {
+                val value = saved
+                if (reads++ == 1) {
+                    toggleRead.complete(Unit)
+                    resumeToggle.await()
+                }
+                value
+            }
+            coEvery { clearSavedPlace(Unit) } answers { saved = null }
+            coEvery { toggleLocationServices(Unit) } answers { enabled = !enabled }
+            coEvery { getLocationServicesEnabled(Unit) } answers { enabled }
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+
+            viewModel.onToggleLocationServices()
+            instantExecutorRule.scheduler.runCurrent()
+            toggleRead.await()
+            viewModel.onClearDeviceLocation()
+            instantExecutorRule.scheduler.runCurrent()
+            resumeToggle.complete(Unit)
+            instantExecutorRule.scheduler.runCurrent()
+
+            assertNull(viewModel.state.value.savedPlace)
+        }
+    }
+
+    @Test
+    fun `saving a place while the sheet opens keeps its bookmarks and selection`() = runTest {
+        val namesAsked = CompletableDeferred<Unit>()
+        val finishNames = CompletableDeferred<Unit>()
+        var saved: SavedPlace? = null
+        val viewModel = buildViewModel {
+            coEvery { getSavedPlace(Unit) } answers { saved }
+            coEvery { setSavedPlace(any()) } answers { saved = firstArg() }
+            coEvery { getBookmarkedChannels(Unit) } returns listOf("u33db")
+            coEvery { getBookmarkNames(Unit) } coAnswers {
+                namesAsked.complete(Unit)
+                finishNames.await()
+                mapOf("u33db" to "berlin")
+            }
+            coEvery { getUserState(Unit) } returns UserState.Active(ActiveState.Chat(Channel.Location(GeohashChannelLevel.CITY, "u33db")))
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+            namesAsked.await()
+
+            viewModel.onUseAsDeviceLocation("9q")
+            instantExecutorRule.scheduler.runCurrent()
+            finishNames.complete(Unit)
+            instantExecutorRule.scheduler.runCurrent()
+
+            assertEquals(listOf("u33db"), viewModel.state.value.bookmarkedGeohashes)
+            assertEquals(mapOf("u33db" to "berlin"), viewModel.state.value.bookmarkNames)
+            assertEquals(Channel.Location(GeohashChannelLevel.CITY, "u33db"), viewModel.state.value.selectedChannel)
+            assertEquals("9q", viewModel.state.value.savedPlace)
+        }
+    }
+
+    @Test
+    fun `a toggle that cuts the opening load short still shows the saved place`() = runTest {
+        val namesAsked = CompletableDeferred<Unit>()
+        val finishNames = CompletableDeferred<Unit>()
+        var enabled = false
+        val viewModel = buildViewModel {
+            coEvery { getSavedPlace(Unit) } returns SavedPlace.of("9q8yy")
+            coEvery { getBookmarkNames(Unit) } coAnswers {
+                namesAsked.complete(Unit)
+                finishNames.await()
+                emptyMap()
+            }
+            coEvery { toggleLocationServices(Unit) } answers { enabled = !enabled }
+            coEvery { getLocationServicesEnabled(Unit) } answers { enabled }
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+            namesAsked.await()
+
+            viewModel.onToggleLocationServices()
+            instantExecutorRule.scheduler.runCurrent()
+            finishNames.complete(Unit)
+            instantExecutorRule.scheduler.runCurrent()
+
+            assertEquals("9q8yy", viewModel.state.value.savedPlace)
+            assertEquals("location set on this device (#9q8yy)", viewModel.state.value.savedPlaceNotice)
+        }
+    }
+
+    @Test
+    fun `a load started before toggling location services cannot change the screen afterwards`() = runTest {
+        val loadStarted = CompletableDeferred<Unit>()
+        val finishLoad = CompletableDeferred<Unit>()
+        val oldChannels = listOf(GeohashChannel(GeohashChannelLevel.CITY, "u33db"))
+        var enabled = true
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } answers { enabled }
+            coEvery { toggleLocationServices(Unit) } answers { enabled = false }
+            coEvery { getAvailableChannels(Unit) } coAnswers {
+                loadStarted.complete(Unit)
+                finishLoad.await()
+                NearbyChannels(oldChannels, deviceFix())
+            }
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+            loadStarted.await()
+
+            viewModel.onToggleLocationServices()
+            instantExecutorRule.scheduler.runCurrent()
+            assertTrue(viewModel.state.value.availableChannels.isEmpty())
+
+            finishLoad.complete(Unit)
+            instantExecutorRule.scheduler.runCurrent()
+            assertTrue(viewModel.state.value.availableChannels.isEmpty())
+        }
+    }
+
+    @Test
+    fun `background names from before setting a device location are not applied afterwards`() = runTest {
+        val nameStarted = CompletableDeferred<Unit>()
+        val finishName = CompletableDeferred<Unit>()
+        var saved: SavedPlace? = null
+        var loads = 0
+        val oldChannel = GeohashChannel(GeohashChannelLevel.CITY, "u33db")
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getSavedPlace(Unit) } answers { saved }
+            coEvery { setSavedPlace(any()) } answers { saved = firstArg() }
+            coEvery { getAvailableChannels(Unit) } coAnswers {
+                if (loads++ == 0) NearbyChannels(listOf(oldChannel), deviceFix())
+                else NearbyChannels(emptyList(), LocationFixInfo(LocationFixInfo.Source.MANUAL, ageMillis = 0))
+            }
+            coEvery { resolveLocationName(any()) } coAnswers {
+                nameStarted.complete(Unit)
+                finishName.await()
+                "old place"
+            }
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+            nameStarted.await()
+
+            viewModel.onUseAsDeviceLocation("9q")
+            instantExecutorRule.scheduler.runCurrent()
+            finishName.complete(Unit)
+            instantExecutorRule.scheduler.runCurrent()
+
+            assertTrue(viewModel.state.value.locationNames.isEmpty())
+        }
+    }
+
+    @Test
+    fun `a background name job from before setting a device location asks for no further name`() = runTest {
+        val nameStarted = CompletableDeferred<Unit>()
+        val finishName = CompletableDeferred<Unit>()
+        var saved: SavedPlace? = null
+        var loads = 0
+        val oldChannels = listOf(
+            GeohashChannel(GeohashChannelLevel.NEIGHBORHOOD, "u33dbf"),
+            GeohashChannel(GeohashChannelLevel.CITY, "u33db"),
+        )
+        val viewModel = buildViewModel {
+            coEvery { getLocationServicesEnabled(Unit) } returns true
+            coEvery { getSavedPlace(Unit) } answers { saved }
+            coEvery { setSavedPlace(any()) } answers { saved = firstArg() }
+            coEvery { getAvailableChannels(Unit) } coAnswers {
+                if (loads++ == 0) NearbyChannels(oldChannels, deviceFix())
+                else NearbyChannels(emptyList(), LocationFixInfo(LocationFixInfo.Source.MANUAL, ageMillis = 0))
+            }
+            coEvery { resolveLocationName(ResolveLocationName.Params("u33dbf", GeohashChannelLevel.NEIGHBORHOOD)) } coAnswers {
+                nameStarted.complete(Unit)
+                finishName.await()
+                "old neighbourhood"
+            }
+        }
+        viewModel.clearedAfter {
+            instantExecutorRule.scheduler.runCurrent()
+            nameStarted.await()
+
+            viewModel.onUseAsDeviceLocation("9q")
+            instantExecutorRule.scheduler.runCurrent()
+            finishName.complete(Unit)
+            instantExecutorRule.scheduler.runCurrent()
+
+            coVerify(exactly = 0) { resolveLocationName(ResolveLocationName.Params("u33db", GeohashChannelLevel.CITY)) }
+        }
     }
 
     @Test

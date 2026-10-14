@@ -22,6 +22,9 @@ data class LocationFixInfo(
         /** Derived from the public IP address. City-level at best, often tens of km out. */
         IP_ADDRESS,
 
+        /** Set by the user on this device. */
+        MANUAL,
+
         /** No real fix: the built-in default place stands in for it. */
         DEFAULT
     }

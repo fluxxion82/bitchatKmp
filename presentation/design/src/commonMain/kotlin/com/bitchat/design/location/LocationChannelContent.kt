@@ -59,6 +59,8 @@ fun LocationChannelContent(
     onToggleBookmark: (String) -> Unit,
     onCustomGeohashChange: (String) -> Unit,
     onTeleport: () -> Unit,
+    onUseAsDeviceLocation: () -> Unit,
+    onClearDeviceLocation: () -> Unit,
     onOpenMap: () -> Unit,
     onToggleLocationServices: () -> Unit,
     onRequestPermission: () -> Unit,
@@ -104,7 +106,7 @@ fun LocationChannelContent(
                 }
             }
 
-            if (state.locationServicesEnabled) {
+            if (state.locationServicesEnabled && state.savedPlace == null) {
                 item(key = "permissions") {
                     Column(
                         modifier = Modifier
@@ -199,6 +201,27 @@ fun LocationChannelContent(
             if (state.locationServicesEnabled) {
                 val nearbyChannels = state.availableChannels.filter {
                     it.level != GeohashChannelLevel.BUILDING
+                }
+                state.savedPlaceNotice?.let { notice ->
+                    item(key = "saved_place") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = notice,
+                                modifier = Modifier.weight(1f),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            )
+                            androidx.compose.material3.TextButton(onClick = onClearDeviceLocation) {
+                                Text("clear", fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                            }
+                        }
+                    }
                 }
                 /*
                  * Say how good the fix is, when it is not good.
@@ -316,6 +339,7 @@ fun LocationChannelContent(
                     error = state.customGeohashError,
                     onValueChange = { onCustomGeohashChange(it) },
                     onTeleport = { onTeleport() },
+                    onUseAsDeviceLocation = { onUseAsDeviceLocation() },
                     onOpenMap = { onOpenMap() },
                     modifier = Modifier
                         .fillMaxWidth()

@@ -15,6 +15,8 @@ data class LocationChannelsState(
     val bookmarkNames: Map<String, String> = emptyMap(),
     val customGeohash: String = "",
     val customGeohashError: String? = null,
+    val savedPlace: String? = null,
+    val savedPlaceNotice: String? = null,
     val locationServicesEnabled: Boolean = false,
     val isLoading: Boolean = false,
     /**

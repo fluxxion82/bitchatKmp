@@ -63,6 +63,8 @@ fun LocationsScreen(
     onSelectChannel: (GeohashChannel) -> Unit,
     onToggleBookmark: (String) -> Unit,
     onTeleport: (String) -> Unit,
+    onUseAsDeviceLocation: (String) -> Unit = {},
+    onClearDeviceLocation: () -> Unit = {},
     modifier: Modifier = Modifier,
     onOpenNotes: (String) -> Unit = {},
     geohashEditor: LineEditor = remember { LineEditor(maxLength = MAX_GEOHASH_LENGTH + 1) },
@@ -112,10 +114,14 @@ fun LocationsScreen(
             grid.moveTo("")
             true
         }
-        else -> grid.key(key, onTeleport)
+        else -> grid.key(key, onTeleport, onUseAsDeviceLocation)
     }
 
     fun listKey(key: String): Boolean {
+        if (key == "x" && state.savedPlace != null) {
+            onClearDeviceLocation()
+            return true
+        }
         if (selectable.isEmpty()) return false
         // Read the cursor when the key arrives: Mosaic delivers every key since the last frame first.
         val at = cursor.coerceIn(0, selectable.lastIndex)
@@ -142,6 +148,12 @@ fun LocationsScreen(
                 is PlaceRow.Nearby -> onOpenNotes(row.channel.geohash)
                 is PlaceRow.Joined -> onOpenNotes(row.channel.geohash)
                 is PlaceRow.Bookmark -> onOpenNotes(row.geohash)
+                else -> Unit
+            }
+            "h" -> when (row) {
+                is PlaceRow.Nearby -> onUseAsDeviceLocation(row.channel.geohash)
+                is PlaceRow.Joined -> onUseAsDeviceLocation(row.channel.geohash)
+                is PlaceRow.Bookmark -> onUseAsDeviceLocation(row.geohash)
                 else -> Unit
             }
             "t" -> openEntry()
@@ -220,6 +232,10 @@ private fun fixQualityNote(state: LocationChannelsState): String? = when {
 
 private fun placeRows(state: LocationChannelsState): List<PlaceRow> = buildList {
     add(PlaceRow.Mesh)
+    state.savedPlaceNotice?.let {
+        add(PlaceRow.Note(it))
+        add(PlaceRow.Note("h: use another place, x: clear"))
+    }
     val reason = state.locationUnavailableReason
     when {
         // The channels are the default place's: say so above them.
@@ -336,7 +352,7 @@ private class GridCursor {
         }
     }
 
-    fun key(key: String, onPick: (String) -> Unit): Boolean {
+    fun key(key: String, onPick: (String) -> Unit, onUseAsDeviceLocation: (String) -> Unit): Boolean {
         val grid = geohashGrid(parent)
         val selected = grid[row][column]
         // Arrows go to the geographic neighbour, rebuilding the grid when it lies in another parent.
@@ -355,6 +371,7 @@ private class GridCursor {
             // Terminals disagree about which of the two a Backspace key sends, so take both.
             "Backspace", "Delete" -> if (parent.isNotEmpty()) moveTo(parent)
             "p" -> if (selected.length >= 2) onPick(selected)
+            "h" -> if (selected.length >= 2) onUseAsDeviceLocation(selected)
             else -> return false
         }
         return true
@@ -395,6 +412,7 @@ private fun GridView(cursor: GridCursor, size: IntSize) {
         remember(deepest) {
             buildList {
                 add(KeyHint("p", "join"))
+                add(KeyHint("h", "set here"))
                 add(KeyHint("Bksp", "out"))
                 add(KeyHint("w", "world"))
                 if (!deepest) add(KeyHint("Enter", "in"))
@@ -652,4 +670,4 @@ private fun Double.pow(exponent: Int): Double = kotlin.math.exp(exponent * kotli
 /** Kilometres per degree of latitude, and of longitude at the equator (a spherical Earth: this is a rough size). */
 private const val KM_PER_DEGREE = 111.2
 
-private const val HINT_WITHOUT_LOCATION = "t: join by code, g: browse by region"
+private const val HINT_WITHOUT_LOCATION = "t: join by code, g: browse by region, h: set a place as this device's location"

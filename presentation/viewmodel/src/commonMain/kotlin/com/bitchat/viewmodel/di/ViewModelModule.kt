@@ -125,6 +125,9 @@ val viewModelModule = module {
             observeRequestedTorMode = get(),
             resolveLocationName = get(),
             getUserState = get(),
+            getSavedPlace = get(),
+            setSavedPlace = get(),
+            clearSavedPlace = get(),
         )
     }
 

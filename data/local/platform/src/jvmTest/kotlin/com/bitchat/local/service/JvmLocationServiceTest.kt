@@ -44,11 +44,13 @@ class JvmLocationServiceTest {
     private fun service(
         factory: Settings.Factory = RecordingFactory(),
         intent: RequestedTorIntent = Intent(),
+        placeSaved: () -> Boolean = { false },
         lookup: suspend (admit: () -> Boolean) -> GeoPoint?
     ) = JvmLocationService(
         settingsFactory = factory,
         requestedTorIntent = intent,
         ipLookup = lookup,
+        placeSaved = placeSaved,
     )
 
     @Test
@@ -220,6 +222,38 @@ class JvmLocationServiceTest {
 
         assertEquals(0, calls.get(), "the lookup must not run at all")
         assertEquals(LocationUnavailableException.Reason.SUPPRESSED_BY_POLICY, failure.reason)
+    }
+
+    @Test
+    fun `a saved place suppresses an IP lookup`() = runTest {
+        var calls = 0
+        val subject = service(placeSaved = { true }) { _ ->
+            calls++
+            GeoPoint(37.7749, -122.4194)
+        }
+
+        val failure = assertFailsWith<LocationUnavailableException> { subject.getCurrentLocation() }
+
+        assertEquals(0, calls)
+        assertEquals(LocationUnavailableException.Reason.SUPPRESSED_BY_POLICY, failure.reason)
+    }
+
+    @Test
+    fun `a saved place stops a provider chain after its first failure`() = runTest {
+        var placeSaved = false
+        val providersAsked = mutableListOf<Int>()
+        val subject = service(placeSaved = { placeSaved }) { admit ->
+            listOf(1, 2).firstNotNullOfOrNull { provider ->
+                if (!admit()) return@firstNotNullOfOrNull null
+                providersAsked += provider
+                if (provider == 1) placeSaved = true
+                null
+            }
+        }
+
+        assertFailsWith<LocationUnavailableException> { subject.getCurrentLocation() }
+
+        assertEquals(listOf(1), providersAsked)
     }
 
     @Test

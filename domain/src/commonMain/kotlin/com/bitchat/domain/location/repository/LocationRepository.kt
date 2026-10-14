@@ -6,6 +6,7 @@ import com.bitchat.domain.location.model.GeohashChannelLevel
 import com.bitchat.domain.location.model.NearbyChannels
 import com.bitchat.domain.location.model.Note
 import com.bitchat.domain.location.model.PermissionState
+import com.bitchat.domain.location.model.SavedPlace
 
 interface LocationRepository {
     suspend fun getNotes(geoHash: String): List<Note>
@@ -13,6 +14,9 @@ interface LocationRepository {
 
     suspend fun getAvailableGeohashChannels(): NearbyChannels
     suspend fun getLocationGeohash(level: GeohashChannelLevel): String
+    suspend fun getSavedPlace(): SavedPlace?
+    suspend fun setSavedPlace(place: SavedPlace)
+    suspend fun clearSavedPlace()
     suspend fun getBookmarkedChannel(): List<GeohashChannel>
 
     suspend fun getParticipantCounts(): Map<String, Int>

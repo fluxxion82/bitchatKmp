@@ -3,7 +3,9 @@ package com.bitchat.local.service
 import com.bitchat.domain.location.model.GeoPoint
 import com.bitchat.domain.location.model.LocationFixInfo
 import com.bitchat.domain.location.model.LocationUnavailableException
+import com.bitchat.domain.location.model.SavedPlace
 import com.bitchat.domain.tor.RequestedTorIntent
+import com.bitchat.local.prefs.GeohashPreferences
 import com.russhwolf.settings.Settings
 import kotlinx.coroutines.flow.flow
 
@@ -15,13 +17,14 @@ class IpLocationService internal constructor(private val source: IpLocationSourc
         requestedTorIntent: RequestedTorIntent,
         environment: (String) -> String?,
         httpGet: suspend (url: String, admit: () -> Boolean) -> String?,
+        placeSaved: () -> Boolean = { false },
     ) : this(
         IpLocationSource(
             settingsFactory = settingsFactory,
             requestedTorIntent = requestedTorIntent,
             ipLookup = { admit -> lookUpIpLocation(admit, httpGet) },
             // libcurl takes a proxy from the environment when the client names none.
-            lookupEnabled = { !proxyNamedInEnvironment(environment) },
+            lookupEnabled = { !proxyNamedInEnvironment(environment) && !placeSaved() },
         ),
     )
 
@@ -39,3 +42,5 @@ class IpLocationService internal constructor(private val source: IpLocationSourc
 
     override suspend fun clearCachedLocation() = source.clear()
 }
+
+internal fun GeohashPreferences.placeSaved(): Boolean = getSavedPlace()?.let(SavedPlace::of) != null

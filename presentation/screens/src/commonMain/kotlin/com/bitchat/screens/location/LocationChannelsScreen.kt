@@ -104,6 +104,10 @@ fun LocationChannelsScreen(
         onTeleport = {
             viewModel.onTeleport()
         },
+        onUseAsDeviceLocation = {
+            viewModel.onUseAsDeviceLocation(state.customGeohash)
+        },
+        onClearDeviceLocation = viewModel::onClearDeviceLocation,
         onOpenMap = viewModel::onOpenMap,
         onToggleLocationServices = viewModel::onToggleLocationServices,
         onRequestPermission = {

@@ -5,6 +5,8 @@ import com.bitchat.domain.location.model.LocationUnavailableException
 import com.bitchat.domain.location.model.LocationUnavailableException.Reason
 import com.bitchat.domain.tor.RequestedTorIntent
 import com.bitchat.domain.tor.model.TorMode
+import com.bitchat.domain.location.model.GeohashChannelLevel
+import com.bitchat.local.prefs.GeohashPreferences
 import com.russhwolf.settings.PropertiesSettings
 import com.russhwolf.settings.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +18,16 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 
 class IpLocationServiceTest {
+    private class PlacePreferences(var storedPlace: String? = null) : GeohashPreferences {
+        override fun saveLevel(level: GeohashChannelLevel) = Unit
+        override fun getLevel(): GeohashChannelLevel? = null
+        override fun saveLocationServicesEnabled(enabled: Boolean) = Unit
+        override fun getLocationServicesEnabled(): Boolean = true
+        override fun getSavedPlace(): String? = storedPlace
+        override fun saveSavedPlace(geohash: String) { storedPlace = geohash }
+        override fun clearSavedPlace() { storedPlace = null }
+    }
+
     private class Factory : Settings.Factory {
         private val properties = java.util.Properties()
         override fun create(name: String?): Settings = PropertiesSettings(properties)
@@ -32,8 +44,9 @@ class IpLocationServiceTest {
         factory: Settings.Factory = Factory(),
         mode: TorMode = TorMode.OFF,
         environment: (String) -> String? = { null },
+        placeSaved: () -> Boolean = { false },
         httpGet: suspend (url: String, admit: () -> Boolean) -> String?,
-    ) = IpLocationService(factory, Intent(mode), environment, httpGet)
+    ) = IpLocationService(factory, Intent(mode), environment, httpGet, placeSaved)
 
     @Test
     fun `asks the first provider and reports a fix from the address`() = runTest {
@@ -52,6 +65,33 @@ class IpLocationServiceTest {
     fun `asks nobody while Tor is requested`() = runTest {
         var asked = 0
         val service = service(mode = TorMode.ON) { _, _ -> asked++; answer }
+
+        val failure = assertFailsWith<LocationUnavailableException> { service.getCurrentLocation() }
+
+        assertEquals(Reason.SUPPRESSED_BY_POLICY, failure.reason)
+        assertEquals(0, asked)
+    }
+
+    @Test
+    fun `a saved place stops the next provider`() = runTest {
+        var placeSaved = false
+        val asked = mutableListOf<String>()
+        val service = service(placeSaved = { placeSaved }) { url, _ ->
+            asked += url
+            placeSaved = true
+            null
+        }
+
+        val failure = assertFailsWith<LocationUnavailableException> { service.getCurrentLocation() }
+
+        assertEquals(Reason.SUPPRESSED_BY_POLICY, failure.reason)
+        assertEquals(1, asked.size)
+    }
+
+    @Test
+    fun `a saved place asks nobody`() = runTest {
+        var asked = 0
+        val service = service(placeSaved = { true }) { _, _ -> asked++; answer }
 
         val failure = assertFailsWith<LocationUnavailableException> { service.getCurrentLocation() }
 
@@ -102,5 +142,18 @@ class IpLocationServiceTest {
     @Test
     fun `a board does not report permission`() = runTest {
         assertFalse(service { _, _ -> null }.hasLocationPermission())
+    }
+
+    @Test
+    fun `only a valid saved place suppresses an IP lookup`() {
+        val preferences = PlacePreferences("ai!")
+
+        assertFalse(preferences.placeSaved())
+
+        preferences.storedPlace = "9q8yy"
+        assertEquals(true, preferences.placeSaved())
+
+        preferences.storedPlace = null
+        assertFalse(preferences.placeSaved())
     }
 }

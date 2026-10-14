@@ -14,6 +14,7 @@ import com.bitchat.domain.location.model.GeohashChannelLevel
 import com.bitchat.domain.location.model.NearbyChannels
 import com.bitchat.domain.location.model.Note
 import com.bitchat.domain.location.model.PermissionState
+import com.bitchat.domain.location.model.SavedPlace
 import com.bitchat.domain.location.repository.LocationRepository
 import com.bitchat.local.prefs.BookmarkPreferences
 import com.bitchat.local.prefs.GeohashPreferences
@@ -29,9 +30,11 @@ import com.bitchat.nostr.participant.NostrParticipantTracker
 import com.bitchat.nostr.util.GeohashUtils
 import com.bitchat.repo.location.resolveBookmarkName
 import com.bitchat.repo.mappers.toDomain
+import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.concurrent.Volatile
@@ -56,6 +59,14 @@ class LocationRepo(
     private val locationNames = mutableMapOf<GeohashChannelLevel, String>()
     private val locationNamesLock = SynchronizedObject()
     private var lastFix: GeoPoint? = null
+    private val locationGeneration = atomic(0L)
+
+    // A load's "still current?" and the write it guards are one step with every change of place.
+    private val placeLock = SynchronizedObject()
+
+    private inline fun ifCurrent(generation: Long, write: () -> Unit) = synchronized(placeLock) {
+        if (generation == locationGeneration.value) write()
+    }
 
     /** Why the last call fell back to [DEFAULT_PLACE], or null while there is a real fix. */
     @Volatile
@@ -152,30 +163,102 @@ class LocationRepo(
 
     override suspend fun getLocationGeohash(level: GeohashChannelLevel): String =
         withContext(coroutinesContextFacade.io) {
-            val fix = locationService.getCurrentLocation()
+            savedPlace()?.let { return@withContext it.at(level) }
+            // A place saved while the platform answered wins over that answer, or its failure.
+            val fix = try {
+                locationService.getCurrentLocation()
+            } catch (e: LocationUnavailableException) {
+                savedPlace()?.let { return@withContext it.at(level) }
+                throw e
+            }
+            savedPlace()?.let { return@withContext it.at(level) }
             GeohashUtils.encode(fix.lat, fix.lon, level.precision)
         }
 
+    private fun SavedPlace.at(level: GeohashChannelLevel): String =
+        if (geohash.length >= level.precision) geohash.take(level.precision)
+        else throw LocationUnavailableException(LocationUnavailableException.Reason.NO_SOURCE)
+
+    override suspend fun getSavedPlace(): SavedPlace? = withContext(coroutinesContextFacade.io) { savedPlace() }
+
+    override suspend fun setSavedPlace(place: SavedPlace) = withContext(coroutinesContextFacade.io) {
+        geohashPreferences.saveSavedPlace(place.geohash)
+        forgetPlace()
+    }
+
+    override suspend fun clearSavedPlace() = withContext(coroutinesContextFacade.io) {
+        geohashPreferences.clearSavedPlace()
+        // The place was the only claim to be there.
+        forgetPlace(noFix = true)
+    }
+
+    /**
+     * The names and fix of the place listed before belong to it, not to what comes next. With [noFix]
+     * nothing stands for a fix until a load finds one, so the device does not count as there.
+     */
+    private fun forgetPlace(noFix: Boolean = false) = synchronized(placeLock) {
+        locationGeneration.incrementAndGet()
+        synchronized(locationNamesLock) {
+            locationNames.clear()
+            lastFix = null
+            lastResolvedGeohash = null
+        }
+        if (noFix) defaultPlaceReason = LocationUnavailableException.Reason.NO_SOURCE
+    }
+
     override suspend fun getAvailableGeohashChannels(): NearbyChannels = withContext(coroutinesContextFacade.io) {
+        val generation = locationGeneration.value
         try {
+            if (!geohashPreferences.getLocationServicesEnabled()) return@withContext NearbyChannels(emptyList(), null)
+            savedPlace()?.let { place ->
+                val geohash = place.geohash
+                val fix = GeohashUtils.decodeToCenterOrNull(geohash)
+                if (fix != null) {
+                    val point = GeoPoint(fix.first, fix.second)
+                    ifCurrent(generation) {
+                        lastFix = point
+                        defaultPlaceReason = null
+                    }
+                    resolveLocationNamesForFix(point, generation)
+                }
+                val levels = listOf(
+                    GeohashChannelLevel.BLOCK,
+                    GeohashChannelLevel.NEIGHBORHOOD,
+                    GeohashChannelLevel.CITY,
+                    GeohashChannelLevel.PROVINCE,
+                    GeohashChannelLevel.REGION
+                )
+                return@withContext NearbyChannels(
+                    levels.filter { it.precision <= geohash.length }.map { level ->
+                        GeohashChannel(level, geohash.take(level.precision))
+                    },
+                    LocationFixInfo(LocationFixInfo.Source.MANUAL, ageMillis = 0)
+                )
+            }
             // This call's own outcome, in locals: defaultPlaceReason is shared with other calls.
             val (fix, fixInfo) = try {
                 val real = locationService.getCurrentLocation()
-                defaultPlaceReason = null
+                ifCurrent(generation) {
+                    defaultPlaceReason = null
+                }
                 real to locationService.lastFixInfo()
             } catch (e: LocationUnavailableException) {
                 // The sheet polls every five seconds, so no stack trace and a rate-limited line.
                 noFixLog.next("no location fix: ${e.reason.message}; using the default place")
                     ?.let { logNostrDebug("LocationRepo", it) }
-                defaultPlaceReason = e.reason
+                ifCurrent(generation) {
+                    defaultPlaceReason = e.reason
+                }
                 DEFAULT_PLACE to LocationFixInfo(
                     LocationFixInfo.Source.DEFAULT,
                     ageMillis = 0,
                     unavailableReason = e.reason
                 )
             }
-            lastFix = fix
-            resolveLocationNamesForFix(fix)
+            ifCurrent(generation) {
+                lastFix = fix
+            }
+            resolveLocationNamesForFix(fix, generation)
 
             val levels = listOf(
                 GeohashChannelLevel.BLOCK,
@@ -195,6 +278,8 @@ class LocationRepo(
                 },
                 fixInfo
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             e.printStackTrace()
             NearbyChannels(emptyList(), null)
@@ -337,7 +422,9 @@ class LocationRepo(
      * lookup and no permission: the default place in use, or no permission, means no real fix.
      */
     private suspend fun cannotBeThere(): Boolean =
-        defaultPlaceReason != null || !locationService.hasLocationPermission()
+        savedPlace() == null && (defaultPlaceReason != null || !locationService.hasLocationPermission())
+
+    private fun savedPlace(): SavedPlace? = geohashPreferences.getSavedPlace()?.let(SavedPlace::of)
 
     private suspend fun addSelfAsParticipant(geohash: String, isTeleported: Boolean, nickname: String): Unit =
         withContext(coroutinesContextFacade.io) {
@@ -391,6 +478,8 @@ class LocationRepo(
     override suspend fun toggleLocationServices() = withContext(coroutinesContextFacade.io) {
         val isEnabled = geohashPreferences.getLocationServicesEnabled()
         geohashPreferences.saveLocationServicesEnabled(!isEnabled)
+        synchronized(placeLock) { locationGeneration.incrementAndGet() }
+        Unit
     }
 
     override suspend fun isLocationServicesEnabled(): Boolean = withContext(coroutinesContextFacade.io) {
@@ -418,6 +507,8 @@ class LocationRepo(
     override suspend fun resolveLocationName(geohash: String, level: GeohashChannelLevel): String? =
         withContext(coroutinesContextFacade.io) {
             try {
+                // Two places can share a coarse prefix, so the prefix alone cannot tell a stale answer.
+                val generation = locationGeneration.value
                 val fix = lastFix?.takeIf {
                     GeohashUtils.encode(it.lat, it.lon, level.precision) == geohash
                 }
@@ -432,7 +523,11 @@ class LocationRepo(
                 }
 
                 synchronized(locationNamesLock) {
-                    locationNames[level] = name
+                    if (generation == locationGeneration.value &&
+                        lastFix?.let { GeohashUtils.encode(it.lat, it.lon, level.precision) } == geohash
+                    ) {
+                        locationNames[level] = name
+                    }
                 }
 
                 name
@@ -447,7 +542,8 @@ class LocationRepo(
         }
     }
 
-    private suspend fun resolveLocationNamesForFix(fix: GeoPoint) {
+    private suspend fun resolveLocationNamesForFix(fix: GeoPoint, generation: Long) {
+        if (generation != locationGeneration.value) return
         val neighborhoodHash = GeohashUtils.encode(
             fix.lat,
             fix.lon,
@@ -460,31 +556,36 @@ class LocationRepo(
             return
         }
 
-        val names = geocoder.reverseGeocodeAll(fix.lat, fix.lon)
+        val names = try {
+            geocoder.reverseGeocodeAll(fix.lat, fix.lon)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
         if (names.isNotEmpty()) {
             synchronized(locationNamesLock) {
-                locationNames.clear()
-                locationNames.putAll(names)
+                if (generation == locationGeneration.value && lastFix == fix) {
+                    locationNames.clear()
+                    locationNames.putAll(names)
+                    lastResolvedGeohash = neighborhoodHash
+                }
             }
-            lastResolvedGeohash = neighborhoodHash
         }
     }
 
     override suspend fun clearData() = withContext(coroutinesContextFacade.io) {
+        bookmarkPrefs.clearAllBookmarks()
+        geohashPreferences.clearSavedPlace()
+        geohashPreferences.saveLocationServicesEnabled(false)
+        // After the stored place is gone: a load that read it before can write nothing back.
+        forgetPlace()
         isTeleported = false
-        synchronized(locationNamesLock) {
-            locationNames.clear()
-        }
-        lastFix = null
         defaultPlaceReason = null
-        lastResolvedGeohash = null
         synchronized(samplingLock) {
             samplingSubscriptions.clear()
             sampledGeohashes.clear()
         }
-
-        bookmarkPrefs.clearAllBookmarks()
-        geohashPreferences.saveLocationServicesEnabled(false)
         participantTracker.setCurrentGeohash(null)
 
         /*

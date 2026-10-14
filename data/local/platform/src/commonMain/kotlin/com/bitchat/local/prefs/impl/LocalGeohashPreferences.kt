@@ -23,11 +23,22 @@ class LocalGeohashPreferences(
         return settings.getBooleanOrNull(LOCATION_SERVICES_ENABLED) ?: true
     }
 
+    override fun getSavedPlace(): String? = settings.getStringOrNull(SAVED_PLACE)
+
+    override fun saveSavedPlace(geohash: String) {
+        settings.putString(SAVED_PLACE, geohash)
+    }
+
+    override fun clearSavedPlace() {
+        settings.remove(SAVED_PLACE)
+    }
+
     companion object {
         private const val PREFS_NAME = "geo_prefs"
 
         private const val CHANNEL_LEVEL = "level"
         private const val LOCATION_SERVICES_ENABLED = "location_services_enabled"
+        private const val SAVED_PLACE = "saved_place"
 
         private const val STORE_KEY = "bookmarks"
         private const val NAMES_STORE_KEY = "bookmarkNames"

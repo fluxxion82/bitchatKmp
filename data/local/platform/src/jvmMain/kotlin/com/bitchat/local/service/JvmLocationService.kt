@@ -17,6 +17,7 @@ class JvmLocationService(
         lookUpIpLocation(admit, IpGeolocation::get)
     },
     now: () -> Long = System::currentTimeMillis,
+    placeSaved: () -> Boolean = { false },
 ) : LocationService {
     private val nativeEnabled = System.getProperty("location.native")?.lowercase() == "macos"
     private val nativeAvailable = if (nativeEnabled) NativeLocationBridge.init() else false
@@ -24,7 +25,7 @@ class JvmLocationService(
         settingsFactory = settingsFactory,
         requestedTorIntent = requestedTorIntent,
         ipLookup = ipLookup,
-        lookupEnabled = { System.getProperty("location.iplookup")?.lowercase() != "false" },
+        lookupEnabled = { System.getProperty("location.iplookup")?.lowercase() != "false" && !placeSaved() },
         // The system clock, not a monotonic one: a laptop that slept has to look up again.
         timeSource = SystemClockTimeSource(now),
         wallClock = now,

@@ -63,6 +63,8 @@ class LocationsScreenTest {
                 onSelectChannel = { actions += "channel=${it.level} ${it.geohash}" },
                 onToggleBookmark = { actions += "bookmark=$it" },
                 onTeleport = { actions += "teleport=$it" },
+                onUseAsDeviceLocation = { actions += "use=$it" },
+                onClearDeviceLocation = { actions += "clear" },
             )
         }
     }
@@ -94,7 +96,7 @@ class LocationsScreenTest {
                 " Locations",
                 pad(" > #mesh", "3 people ", 40),
                 "   no location source",
-                "   t: join by code, g: browse by region",
+                "   t: join by code, g: browse by regi...",
                 pad("   * #9q8yy SF", "2 people ", 40),
                 "   Join a channel by geohash code...",
                 "   Browse the world by region...",
@@ -137,7 +139,7 @@ class LocationsScreenTest {
                 " Locations",
                 pad("   #mesh", "0 people ", 90),
                 "   $defaultPlaceNotice",
-                "   t: join by code, g: browse by region",
+                "   t: join by code, g: browse by region, h: set a place as this device's location",
                 pad("   region #9q *", "0 people ", 90),
                 pad(" > city #9q8yy San Francisco", "1 person ", 90),
                 pad("   * #9q", "0 people ", 90),
@@ -248,7 +250,7 @@ class LocationsScreenTest {
                 " Locations",
                 pad(" > #mesh", "3 people ", 40),
                 "   location services are off",
-                "   t: join by code, g: browse by region",
+                "   t: join by code, g: browse by regi...",
                 pad("   * #9q8yy SF", "2 people ", 40),
                 "   Join a channel by geohash code...",
                 "   Browse the world by region...",
@@ -275,6 +277,68 @@ class LocationsScreenTest {
             awaitSnapshot()
         }
         assertEquals(listOf("channel=REGION 9q", "bookmark=9q8yy"), actions)
+    }
+
+    @Test fun `a saved place shows its notice and clear hint above nearby rows`() = runTest {
+        val rows = render(
+            AnsiLevel.NONE,
+            nearby.copy(savedPlace = "9q8yy", savedPlaceNotice = "location set on this device (#9q8yy)"),
+            IntSize(90, 12),
+        )
+
+        assertEquals("   location set on this device (#9q8yy)", rows[2])
+        assertEquals("   h: use another place, x: clear", rows[3])
+        assertTrue(rows.indexOfFirst { it.contains("region #9q") } > 3)
+    }
+
+    @Test fun `x clears only a saved place`() = runTest {
+        runMosaicTest {
+            setContentAndSnapshot { Screen(nearby.copy(savedPlace = "9q8yy", savedPlaceNotice = "location set on this device (#9q8yy)"), IntSize(90, 12)) }
+            type('x'.code)
+            awaitSnapshot()
+        }
+        assertEquals(listOf("clear"), actions)
+
+        runMosaicTest {
+            setContentAndSnapshot { Screen(nearby, IntSize(90, 12)) }
+            type('x'.code)
+            awaitSnapshot()
+        }
+        assertEquals(listOf("clear"), actions)
+    }
+
+    @Test fun `h on a grid cell uses that cell geohash`() = runTest {
+        runMosaicTest {
+            setContentAndSnapshot { Screen(nearby.copy(customGeohash = "9q"), IntSize(85, 22)) }
+            type('g'.code)
+            awaitSnapshot()
+            type('h'.code)
+            awaitSnapshot()
+        }
+        assertEquals(listOf("use=9q"), actions)
+    }
+
+    @Test fun `h uses the geohash of nearby and bookmark rows but not a top level grid cell`() = runTest {
+        runMosaicTest {
+            setContentAndSnapshot { Screen(nearby, IntSize(85, 22)) }
+            type(KeyboardEvent.Down, 'h'.code)
+            awaitSnapshot()
+        }
+        assertEquals(listOf("use=9q"), actions)
+
+        runMosaicTest {
+            setContentAndSnapshot { Screen(pi, IntSize(85, 22)) }
+            type(KeyboardEvent.Down, 'h'.code)
+            awaitSnapshot()
+        }
+        assertEquals(listOf("use=9q", "use=9q8yy"), actions)
+
+        runMosaicTest {
+            setContentAndSnapshot { Screen(nearby.copy(selectedChannel = Channel.Mesh), IntSize(85, 22)) }
+            type('g'.code, 'h'.code)
+            awaitSnapshot()
+        }
+        assertEquals(listOf("use=9q", "use=9q8yy"), actions)
     }
 
     @Test fun teleportEntryAcceptsAGeohash() = runTest {

@@ -7,12 +7,15 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.asSkiaBitmap
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.SkikoComposeUiTest
 import androidx.compose.ui.test.runSkikoComposeUiTest
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import com.bitchat.domain.location.model.GeohashChannel
 import com.bitchat.domain.location.model.GeohashChannelLevel
 import com.bitchat.domain.location.model.PermissionState
@@ -21,7 +24,9 @@ import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Image
 import java.io.File
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * With no real fix the sheet lists the default place's channels, and says first that they are the
@@ -53,6 +58,8 @@ class LocationChannelContentTest {
     private fun androidx.compose.ui.test.ComposeUiTest.show(
         state: LocationChannelsState,
         permission: State<PermissionState?> = mutableStateOf(PermissionState.AUTHORIZED),
+        onUseAsDeviceLocation: () -> Unit = {},
+        onClearDeviceLocation: () -> Unit = {},
     ) = setContent {
             MaterialTheme {
                 LocationChannelContent(
@@ -63,6 +70,8 @@ class LocationChannelContentTest {
                     onToggleBookmark = {},
                     onCustomGeohashChange = {},
                     onTeleport = {},
+                    onUseAsDeviceLocation = onUseAsDeviceLocation,
+                    onClearDeviceLocation = onClearDeviceLocation,
                     onOpenMap = {},
                     onToggleLocationServices = {},
                     onRequestPermission = {},
@@ -107,5 +116,47 @@ class LocationChannelContentTest {
         onNodeWithText(notice).assertDoesNotExist()
         onNodeWithText(hint).assertDoesNotExist()
         onNode(hasText("#9q8yy •", substring = true)).assertExists()
+    }
+
+    @Test
+    fun `a saved place shows its notice and clear button without permission controls`() = runSheetTest {
+        var cleared = 0
+        show(
+            inTheDefaultPlace.copy(
+                savedPlace = "9q8yy",
+                savedPlaceNotice = "location set on this device (#9q8yy)",
+            ),
+            onClearDeviceLocation = { cleared++ },
+        )
+
+        onNodeWithText("location set on this device (#9q8yy)").assertExists()
+        onNodeWithText("clear").performClick()
+        assertEquals(1, cleared)
+        onNodeWithText("✓ location permission granted").assertDoesNotExist()
+
+        show(inTheDefaultPlace)
+        onNodeWithText("✓ location permission granted").assertExists()
+    }
+
+    @Test
+    fun `the use as this device location button calls its callback`() = runSheetTest {
+        var used = 0
+        show(
+            inTheDefaultPlace.copy(customGeohash = "9q8yy"),
+            onUseAsDeviceLocation = { used++ },
+        )
+
+        onNodeWithText("use as this device's location").performClick()
+        assertEquals(1, used)
+    }
+
+    @Test
+    fun `the teleport and device location buttons both have width at phone size`() = runSheetTest {
+        show(inTheDefaultPlace.copy(customGeohash = "9q8yy"))
+
+        val teleportBounds = onNodeWithText("teleport").getUnclippedBoundsInRoot()
+        val deviceLocationBounds = onNodeWithText("use as this device's location").getUnclippedBoundsInRoot()
+        assertTrue(teleportBounds.right - teleportBounds.left > 0.dp)
+        assertTrue(deviceLocationBounds.right - deviceLocationBounds.left > 0.dp)
     }
 }

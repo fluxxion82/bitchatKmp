@@ -8,6 +8,7 @@ import com.bitchat.domain.base.invoke
 import com.bitchat.domain.location.BeginGeohashSampling
 import com.bitchat.domain.location.EndGeohashSampling
 import com.bitchat.domain.location.GetAvailableChannels
+import com.bitchat.domain.location.GetSavedPlace
 import com.bitchat.domain.location.GetBookmarkNames
 import com.bitchat.domain.location.GetBookmarkedChannels
 import com.bitchat.domain.tor.ObserveRequestedTorMode
@@ -18,11 +19,14 @@ import com.bitchat.domain.location.GetTeleportState
 import com.bitchat.domain.location.ResolveLocationName
 import com.bitchat.domain.location.ToggleBookmark
 import com.bitchat.domain.location.ToggleLocationServices
+import com.bitchat.domain.location.SetSavedPlace
+import com.bitchat.domain.location.ClearSavedPlace
 import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.DEFAULT_PLACE_NAME
 import com.bitchat.domain.location.model.GeohashChannel
 import com.bitchat.domain.location.model.GeohashChannelLevel
 import com.bitchat.domain.location.model.LocationFixInfo
+import com.bitchat.domain.location.model.SavedPlace
 import com.bitchat.domain.location.model.LocationUnavailableException.Reason
 import com.bitchat.domain.user.GetUserState
 import com.bitchat.domain.user.SaveUserStateAction
@@ -42,6 +46,8 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class LocationChannelsViewModel(
     private val saveUserStateAction: SaveUserStateAction,
@@ -59,6 +65,9 @@ class LocationChannelsViewModel(
     private val observeRequestedTorMode: ObserveRequestedTorMode,
     private val resolveLocationName: ResolveLocationName,
     private val getUserState: GetUserState,
+    private val getSavedPlace: GetSavedPlace,
+    private val setSavedPlace: SetSavedPlace,
+    private val clearSavedPlace: ClearSavedPlace,
 ) : ViewModel() {
     private val _state = MutableStateFlow(LocationChannelsState())
     val state: StateFlow<LocationChannelsState> = _state.asStateFlow()
@@ -66,6 +75,8 @@ class LocationChannelsViewModel(
     val effects: SharedFlow<LocationChannelsEffect> = _effects.asSharedFlow()
 
     private var refreshJob: Job? = null
+    private var revision = 0
+    private val locationActionMutex = Mutex()
 
     init {
         println("🎬 [LocationChannelsViewModel] Initializing...")
@@ -76,6 +87,7 @@ class LocationChannelsViewModel(
 
     private fun loadInitialData() {
         viewModelScope.launch {
+            val loadRevision = revision
             _state.update { it.copy(isLoading = true) }
 
             /*
@@ -89,6 +101,7 @@ class LocationChannelsViewModel(
              * written for.
              */
             val locationServicesEnabled = orDefault(true) { getLocationServicesEnabled() }
+            val savedPlace = orDefault(null) { getSavedPlace() }
             val bookmarks = orDefault(emptyList()) { getBookmarkedChannels() }
             val bookmarkNames = orDefault(emptyMap()) { getBookmarkNames() }
             val isTeleported = orDefault(false) { getTeleportState() }
@@ -104,6 +117,19 @@ class LocationChannelsViewModel(
                 }
             }
 
+            if (loadRevision != revision) {
+                // A location action came first and owns the place; the rest is still this load's.
+                _state.update {
+                    it.copy(
+                        bookmarkedGeohashes = bookmarks,
+                        bookmarkNames = bookmarkNames,
+                        selectedChannel = selectedChannel,
+                        isTeleported = isTeleported,
+                    )
+                }
+                refreshParticipantCounts()
+                return@launch
+            }
             _state.update {
                 it.copy(
                     bookmarkedGeohashes = bookmarks,
@@ -111,7 +137,9 @@ class LocationChannelsViewModel(
                     selectedChannel = selectedChannel,
                     isTeleported = isTeleported,
                     locationServicesEnabled = locationServicesEnabled,
-                    locationNames = locationNames
+                    locationNames = locationNames,
+                    savedPlace = savedPlace?.geohash,
+                    savedPlaceNotice = savedPlace?.let(::savedPlaceNotice),
                 )
             }
 
@@ -124,7 +152,7 @@ class LocationChannelsViewModel(
              * outbound request to a geolocation provider they had just declined.
              */
             if (locationServicesEnabled) {
-                loadChannels(locationNames, initial = true)
+                loadChannels(locationNames, initial = true, loadRevision)
             } else {
                 _state.update { it.copy(isLoading = false) }
             }
@@ -135,7 +163,7 @@ class LocationChannelsViewModel(
      * The location-dependent half of the sheet. Shared by the initial load and the five-second
      * refresh so both label the default place the same way.
      */
-    private suspend fun loadChannels(locationNames: Map<GeohashChannelLevel, String>, initial: Boolean) {
+    private suspend fun loadChannels(locationNames: Map<GeohashChannelLevel, String>, initial: Boolean, loadRevision: Int = revision) {
         try {
             // Channels and the fix behind them come from one read, so a load that overlaps another
             // cannot pair one's channels with the other's fix.
@@ -147,6 +175,7 @@ class LocationChannelsViewModel(
                 ?.takeIf { it.source == LocationFixInfo.Source.DEFAULT }
                 ?.let { defaultPlaceNotice(it.unavailableReason) }
 
+            if (loadRevision != revision) return
             _state.update {
                 it.copy(
                     availableChannels = channels,
@@ -159,9 +188,9 @@ class LocationChannelsViewModel(
                 )
             }
 
-            resolveLocationNamesInBackground(channels, freshNames)
+            resolveLocationNamesInBackground(channels, freshNames, loadRevision)
         } catch (e: Exception) {
-            _state.update { it.copy(isLoading = false, isRefreshing = false) }
+            if (loadRevision == revision) _state.update { it.copy(isLoading = false, isRefreshing = false) }
         }
     }
 
@@ -245,8 +274,9 @@ class LocationChannelsViewModel(
     }
 
     private suspend fun refreshData() {
+        val loadRevision = revision
         _state.update { it.copy(isRefreshing = true) }
-        loadChannels(_state.value.locationNames, initial = false)
+        loadChannels(_state.value.locationNames, initial = false, loadRevision)
     }
 
     fun startGeohashSampling(geohashes: List<String>) {
@@ -348,28 +378,96 @@ class LocationChannelsViewModel(
 
     fun onToggleLocationServices() {
         viewModelScope.launch {
-            toggleLocationServices(Unit)
-            val enabled = getLocationServicesEnabled(Unit)
+            val enabled = locationActionMutex.withLock {
+                toggleLocationServices(Unit)
+                revision++
+                val enabled = getLocationServicesEnabled(Unit)
+                // The opening load may have been the one to publish it, and this switch outdated it.
+                val saved = getSavedPlace()
 
-            _state.update {
-                if (enabled) {
-                    it.copy(locationServicesEnabled = true)
-                } else {
-                    // Otherwise the channels computed from the last fix stay on screen after the
-                    // user has switched the thing that produced them off.
-                    it.copy(
-                        locationServicesEnabled = false,
-                        availableChannels = emptyList(),
-                        locationUnavailableReason = null,
-                        locationApproximate = false,
-                        locationStale = false,
-                    )
+                _state.update {
+                    if (enabled) {
+                        it.copy(
+                            locationServicesEnabled = true,
+                            savedPlace = saved?.geohash,
+                            savedPlaceNotice = saved?.let(::savedPlaceNotice),
+                        )
+                    } else {
+                        // Otherwise the channels computed from the last fix stay on screen after the
+                        // user has switched the thing that produced them off.
+                        it.copy(
+                            locationServicesEnabled = false,
+                            savedPlace = saved?.geohash,
+                            savedPlaceNotice = saved?.let(::savedPlaceNotice),
+                            availableChannels = emptyList(),
+                            locationUnavailableReason = null,
+                            locationApproximate = false,
+                            locationStale = false,
+                        )
+                    }
                 }
+                enabled
             }
 
             if (enabled) {
                 refreshData()
             }
+        }
+    }
+
+    fun onUseAsDeviceLocation(geohash: String) {
+        viewModelScope.launch {
+            val place = SavedPlace.of(geohash)
+            if (place == null) {
+                _state.update { it.copy(customGeohashError = "invalid geohash") }
+                return@launch
+            }
+            val locationServicesEnabled = locationActionMutex.withLock {
+                setSavedPlace(place)
+                revision++
+                val locationServicesEnabled = getLocationServicesEnabled()
+
+                _state.update {
+                    it.copy(
+                        savedPlace = place.geohash,
+                        savedPlaceNotice = savedPlaceNotice(place),
+                        customGeohashError = null,
+                        locationServicesEnabled = locationServicesEnabled,
+                        availableChannels = emptyList(),
+                        locationNames = emptyMap(),
+                        locationUnavailableReason = null,
+                        locationApproximate = false,
+                        locationStale = false,
+                    )
+                }
+                locationServicesEnabled
+            }
+            if (locationServicesEnabled) refreshData()
+        }
+    }
+
+    fun onClearDeviceLocation() {
+        viewModelScope.launch {
+            val locationServicesEnabled = locationActionMutex.withLock {
+                clearSavedPlace()
+                revision++
+                val locationServicesEnabled = getLocationServicesEnabled()
+
+                _state.update {
+                    it.copy(
+                        savedPlace = null,
+                        savedPlaceNotice = null,
+                        locationServicesEnabled = locationServicesEnabled,
+                        availableChannels = emptyList(),
+                        locationNames = emptyMap(),
+                        locationUnavailableReason = null,
+                        locationApproximate = false,
+                        locationStale = false,
+                    )
+                }
+                locationServicesEnabled
+            }
+            if (locationServicesEnabled) refreshData()
         }
     }
 
@@ -420,16 +518,19 @@ class LocationChannelsViewModel(
 
     private fun resolveLocationNamesInBackground(
         channels: List<GeohashChannel>,
-        existingNames: Map<GeohashChannelLevel, String>
+        existingNames: Map<GeohashChannelLevel, String>,
+        loadRevision: Int,
     ) {
         viewModelScope.launch {
             val updated = existingNames.toMutableMap()
             for (channel in channels) {
+                // Outdated: its later lookups would be measured against the next place.
+                if (loadRevision != revision) return@launch
                 if (!updated.containsKey(channel.level)) {
                     resolveLocationName(ResolveLocationName.Params(channel.geohash, channel.level))?.let { name ->
                         updated[channel.level] = name
                         // Update state incrementally as each name is resolved
-                        _state.update { it.copy(locationNames = updated.toMap()) }
+                        if (loadRevision == revision) _state.update { it.copy(locationNames = updated.toMap()) }
                     }
                 }
             }
@@ -444,6 +545,8 @@ class LocationChannelsViewModel(
             .filter { it in allowed }
             .take(12)
     }
+
+    private fun savedPlaceNotice(place: SavedPlace): String = "location set on this device (#${place.geohash})"
 
     private companion object {
         /**

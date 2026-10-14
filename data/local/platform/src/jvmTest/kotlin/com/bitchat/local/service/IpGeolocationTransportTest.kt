@@ -28,11 +28,12 @@ class IpGeolocationTransportTest {
     }
 
     @Test
-    fun `follows a redirect to its two hundred body`() = runBlocking {
+    fun `a redirect is no answer and its target is not asked`() = runBlocking {
         LoopbackServer.responding(200, "redirected").use { destination ->
             LoopbackServer.responding(302, "", "Location: ${destination.url}\r\n").use { redirect ->
-                assertEquals("redirected", IpGeolocation.get(redirect.url) { true })
+                assertNull(IpGeolocation.get(redirect.url) { true })
             }
+            assertTrue(destination.awaitNoConnection())
         }
     }
 

@@ -16,6 +16,8 @@ internal object IpGeolocation {
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             requestMethod = "GET"
+            // A redirect would be a second request that nothing has admitted.
+            instanceFollowRedirects = false
             setRequestProperty("Accept", "application/json")
         }
         try {
