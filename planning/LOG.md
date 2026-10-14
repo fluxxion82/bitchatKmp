@@ -260,3 +260,74 @@ Each branch: one commit with a one-line message, then a LOG entry naming the inp
 
 - Did: on the owner's word pushed `main` (`6aefc15`) and deleted `claude/konsist-placement-rules` and `claude/domain-file-names`. The owner chose the next slice (D30).
 - Needs: cloud-claude to fetch `main` and start D30 as described under Asks in `STATUS.md`: the plan with the list of writers here first, then the branch.
+
+## 2026-10-14, cloud-claude (D30 plan)
+
+- Read: `STATUS.md`, `reference/2026-10-13-local-review-d29.md` (with section 5), the Verification and Observers and events sections of `CONVENTIONS.md`, D30, and `main` at `6aefc15`.
+- Taken on board:
+  - A new rule uses `assertEach`, never a Konsist assertion.
+  - A plant proves nothing until the task's outcome is read.
+  - `GetLastFixInfo` is gone and `getAvailableGeohashChannels()` returns `NearbyChannels`. Nothing in this slice touches either.
+
+**The writers.** Paths are from `6aefc15`. "Publishes" means: is an event the observer re-reads on published after the write?
+
+What `GetUserState` reads, in its order. `ObserveUserState` re-reads on `StateChanged` and `LoginChanged`.
+
+| Input | Writer | Publishes |
+|---|---|---|
+| `AppRepository.hasRequiredPermissions()` | The user answering the permission request: `PermissionsViewModel` then calls `SaveUserStateAction(GrantPermissions)` | yes, `StateChanged` |
+| same | The user revoking a permission in the system's settings while the app runs | **no** |
+| `ConnectivityRepository.isBluetoothEnabled()` | The user switching Bluetooth in the system. The platform `ConnectionEventBus` emits a `BluetoothConnectionEvent`, which only `ChatRepo` reads, to start or stop the mesh | **no** |
+| `ConnectivityRepository.isLocationServicesEnabled()` | The user switching location services in the system. `LocationConnectionEvent`, and `ObserveLocationServicesEnabled` for the header | **no** |
+| `AppRepository.isBatteryOptimizationSkipped()` | `SkipBatteryOptimization`, then `SaveUserStateAction(HandledOptimizations)` (`BatteryOptimizationViewModel`) | yes |
+| same | `AppRepo.clearData()` resets it inside the wipe; `ClearAllData` publishes after the barrier | yes |
+| `AppRepository.getBatteryOptimizationStatus()` | `DisableBatteryOptimization` (opens the system screen), then `HandledOptimizations` | yes |
+| same | The user changing it in the system's settings at any other time | **no** |
+| `UserRepository.getUserState()` | `SaveUserStateAction`, on its blocking path and on its normal path | yes, both |
+| same | `HeadlessUserStateInitializer` (`data:repo`), when no state is saved | yes, `LoginChanged` |
+| same | The wipe: `UserRepo.clearData()` does not touch the saved state. `ClearAllData` publishes `StateChanged` anyway | yes |
+
+What `GetAllFavorites` reads (`UserRepository.getAllFavorites()`). `ObserveFavorites` re-reads on `FavoriteStatusChanged`.
+
+| Writer | Publishes |
+|---|---|
+| `ToggleFavorite`, through `UserRepository.updateFavorite` | yes |
+| A favourite notification from a peer: `ChatRepo.handleFavoriteNotificationIfNeeded` | yes, when a record changed |
+| The trim at start: `ChatRepo`'s `init` cuts records the user never favourited to the limit | yes, once, when it removed one |
+| The wipe: `UserRepo.clearData()` calls `clearAllFavorites()`; `ClearAllData` publishes only `StateChanged` | **no** |
+| `UserRepository.saveFavorite`, `deleteFavorite` | no caller outside `UserRepo` today |
+
+**Findings.** I report these and do not fix them; none is in `:domain`'s use cases except the wipe.
+- **F1. Nothing publishes when the system changes a blocking input while the app runs.** That covers a permission, Bluetooth, location services and the battery status. The user state follows only at the next `SaveUserStateAction`, which every navigation in the app runs, or at a restart. That is today's behaviour, and it holds the same with `ObserveUserState`. I have not checked which platforms end the process on a revoke.
+- **F2. The wipe clears the favourites and publishes no `FavoriteStatusChanged`.** Today `MainViewModel.handleTripleClick` calls `goToNextStep()` after the wipe but not `refreshFavorites()`. The sidebar keeps the old favourites until the next favourite change or a restart. `ObserveFavorites` will not fix that alone. The fix is one line in `ClearAllData` (domain), like the theme in D27. It changes a use case outside this slice's ask, so it is Q12.
+- **F3, near this slice.** The wipe also gives the user a new nickname (`UserRepo.clearData()` calls `updateNickname`) and publishes no `NicknameUpdated`. `ObserveUserNickname` therefore keeps showing the old one. Same shape as F2; it goes in Q12 with it.
+
+**The use cases.**
+- `user/ObserveUserState : Usecase<Unit, Flow<UserState>>`. It takes `GetUserState` and `UserEventBus`. It emits `getUserState()` on start, and again on `StateChanged` and on any `LoginChanged`.
+- `user/ObserveFavorites : Usecase<Unit, Flow<Map<String, FavoriteRelationship>>>`. It takes `UserRepository` and `UserEventBus`, as `ObserveUserNickname` does. `GetAllFavorites` is one call to the same method, with no rule to keep. It emits on start and on any `FavoriteStatusChanged`.
+- Both have the shape of `ObserveUserNickname`: `channelFlow`, `onStart`, `when` with `else -> Unit`. No `distinctUntilChanged`, no conflation.
+- `domainModule` gets `single` lines next to their siblings. `GetUserState` and `GetAllFavorites` stay.
+
+**Tests.** Each uses `InMemoryUserEventBus` and counts the reads with `coVerify`.
+- `ObserveUserStateTest` builds a real `GetUserState` on mocked repositories, so the test shows its rules come through.
+  - The start emits the saved state.
+  - A blocking input comes through: Bluetooth off gives `BluetoothDisabled`, and the saved state is not read.
+  - `StateChanged` gives one more read, and `LoginChanged` gives one more.
+  - `FavoriteStatusChanged` after the start gives no read.
+  - `NicknameUpdated` in the replay slot at the start gives no second read.
+  - Two `StateChanged` with the same state give two emissions.
+  - Today, `StateChanged` in the replay slot at the start gives a second read. That is D4's pattern, and it matters for the local switch: `MainViewModel` does the same now.
+- `ObserveFavoritesTest`, the same set for favourites:
+  - the first value;
+  - `FavoriteStatusChanged` gives one more read;
+  - `StateChanged` after the start gives none;
+  - `StateChanged` in the replay slot gives none;
+  - two `FavoriteStatusChanged` give two emissions of the same map;
+  - today, `FavoriteStatusChanged` in the replay slot gives a second read.
+- Each is checked to bite with mutations: a branch dropped, re-reading on every event, `distinctUntilChanged` added, no read on start, and `ObserveUserState` reading `UserRepository` itself instead of `GetUserState`. Each run's outcome is read from the task.
+
+**For the local switch (not this branch).**
+- `MainViewModel` reads the favourites once at init and on `FavoriteStatusChanged`. It also calls `refreshFavorites()` after its own `toggleFavorite`, which publishes the event as well, so a toggle refreshes twice today. `ObserveFavorites`' start read takes the place of the init read.
+- `goToNextStep()` has two callers besides the bus: the wipe and the replay.
+
+One branch, `claude/observe-user-state`, from `6aefc15`. One commit with a one-line message, then a LOG entry.

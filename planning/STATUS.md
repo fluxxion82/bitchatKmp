@@ -69,7 +69,7 @@ Not run: any app on a phone or a board.
 
 ## Open questions
 
-None.
+- **Q12 (D30, `6aefc15`). Should the wipe publish what it changes, as it now does for the theme?** `ClearAllData` clears the favourites and gives the user a new nickname. It publishes neither `FavoriteStatusChanged` nor `NicknameUpdated`, so the sidebar keeps the old favourites and the header the old nickname until something else changes them or the app restarts (F2 and F3 in `LOG.md`, 2026-10-14). The fix is two lines in `ClearAllData`, the domain use case, next to its `ThemeUpdated`. `FavoriteStatusChanged` takes a peer id, so the event would need a key for "all", or a separate event. That choice is the owner's. Not part of D30's branch.
 
 ## Answered
 
