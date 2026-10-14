@@ -38,6 +38,25 @@ class ArchitectureTest {
         }
     }
 
+    @Test
+    fun everyRepositoryInterfaceSitsInItsFeaturesRepositoryPackage() {
+        assertPlacedIn("Repository", "repository")
+    }
+
+    @Test
+    fun everyEventBusInterfaceSitsInItsFeaturesEventbusPackage() {
+        assertPlacedIn("EventBus", "eventbus")
+    }
+
+    private fun assertPlacedIn(suffix: String, subpackage: String) {
+        val interfaces = production.interfaces().filter { it.name.endsWith(suffix) }
+        assertTrue(interfaces.isNotEmpty())
+        interfaces.assertTrue { declaration ->
+            val name = declaration.packagee?.name.orEmpty()
+            name.endsWith(".$subpackage") && isFeaturePackage(name.removeSuffix(".$subpackage"))
+        }
+    }
+
     private fun isFeaturePackage(name: String): Boolean {
         val feature = name.removePrefix("com.bitchat.domain.")
         return feature != name && '.' !in feature && feature !in setOf("base", "di")
