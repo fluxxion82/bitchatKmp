@@ -10,14 +10,19 @@ import com.bitchat.local.prefs.LinuxEncryptionSettingsFactory
 import com.bitchat.local.prefs.LinuxFileSettings
 import com.bitchat.local.prefs.ensureDirectory
 import com.bitchat.local.service.GeocoderService
-import com.bitchat.local.service.LinuxLocationService
+import com.bitchat.local.service.IpLocationService
 import com.bitchat.local.service.LinuxSettingsService
 import com.bitchat.local.service.LocationService
 import com.bitchat.local.service.SettingsService
 import com.bitchat.local.service.impl.StubGeocoderService
+import com.bitchat.client.DirectHttpGet
 import com.russhwolf.settings.Settings
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.toKString
 import org.koin.dsl.module
+import platform.posix.getenv
 
+@OptIn(ExperimentalForeignApi::class)
 actual val localModule = module {
     single<Settings.Factory> {
         LinuxSettingsFactory()
@@ -41,7 +46,14 @@ actual val localModule = module {
 
     single<SettingsService> { LinuxSettingsService() }
 
-    single<LocationService> { LinuxLocationService() }
+    single<LocationService> {
+        IpLocationService(
+            settingsFactory = get(),
+            requestedTorIntent = get(),
+            environment = { name -> getenv(name)?.toKString() },
+            httpGet = get<DirectHttpGet>()::get,
+        )
+    }
 }
 
 /**

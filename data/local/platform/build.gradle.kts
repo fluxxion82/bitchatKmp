@@ -63,6 +63,10 @@ kotlin {
             }
         }
         val commonTest by getting {
+            dependencies {
+                implementation(libs.kotlin.test)
+                implementation(libs.kotlinx.coroutines.test)
+            }
         }
         val androidMain by getting {
             dependencies {
@@ -110,6 +114,7 @@ kotlin {
             val linuxMain by getting {
                 dependencies {
                     implementation(project(":data:local:statedir"))
+                    implementation(project(":data:remote:rest:client"))
                 }
             }
         }

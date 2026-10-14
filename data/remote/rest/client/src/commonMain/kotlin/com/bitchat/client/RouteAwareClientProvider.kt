@@ -167,6 +167,30 @@ class RouteAwareClientProvider(
         }
     }
 
+    /**
+     * For a request that only means something from this device's own address: null, and no client
+     * built, unless Tor is requested off. Never waits for a Tor route.
+     */
+    suspend fun <T> withDirectClient(block: suspend (HttpClient) -> T): T? {
+        val lease = routes.admit()
+        return routes.track(lease) {
+            // Tracked work is joined before a switch to Tor is published, so the answer read here
+            // holds until this returns.
+            if (requestedIntent != null && requestedIntent.current != TorMode.OFF) return@track null
+            val routed = RoutedHttpClient(
+                client = HttpClient(engineFactory(appInformation.debug)) { followRedirects = false },
+                routes = routes,
+                routeLease = lease,
+                provenance = RouteProvenance(routes, lease, usedTorProxy = false) { true },
+            )
+            try {
+                block(routed.client)
+            } finally {
+                routed.closeAndJoin()
+            }
+        }
+    }
+
     override suspend fun transition(
         waitForDirectRetirements: Boolean,
         publishPolicy: suspend () -> Unit,

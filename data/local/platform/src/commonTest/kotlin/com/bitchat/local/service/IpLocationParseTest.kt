@@ -2,15 +2,10 @@ package com.bitchat.local.service
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
-/**
- * The response bodies below are real, captured from each provider. They disagree about the shape
- * of a coordinate, which is the whole reason this parser exists.
- */
-class IpGeolocationTest {
-
+class IpLocationParseTest {
     @Test
     fun `reads ipwho_is numeric coordinates`() {
         val body = """
@@ -19,7 +14,7 @@ class IpGeolocationTest {
              "latitude":37.774926,"longitude":-122.4194208}
         """.trimIndent()
 
-        val point = assertNotNull(IpGeolocation.parse(body))
+        val point = assertNotNull(parseIpLocation(body))
         assertEquals(37.774926, point.lat)
         assertEquals(-122.4194208, point.lon)
     }
@@ -29,27 +24,23 @@ class IpGeolocationTest {
         val body = """{"ip":"2601:645:c68b::1","country_code":"US","city":"San Francisco",""" +
             """"zip_code":"94199","latitude":37.778008,"longitude":-122.431272,"metro_code":0}"""
 
-        val point = assertNotNull(IpGeolocation.parse(body))
+        val point = assertNotNull(parseIpLocation(body))
         assertEquals(37.778008, point.lat)
         assertEquals(-122.431272, point.lon)
     }
 
     @Test
     fun `reads geojs coordinates quoted as strings`() {
-        // geojs returns its numbers as JSON strings; a parser that assumed numbers read nothing.
         val body = """{"accuracy":5,"asn":7922,"city":"San Francisco","country_code":"US",""" +
             """"latitude":"37.7308","longitude":"-122.3838","organization":"AS7922 Comcast"}"""
 
-        val point = assertNotNull(IpGeolocation.parse(body))
+        val point = assertNotNull(parseIpLocation(body))
         assertEquals(37.7308, point.lat)
         assertEquals(-122.3838, point.lon)
     }
 
     @Test
     fun `reads ipwho_is when it pretty-prints the success flag`() {
-        // Exactly as the wire delivers it. ipwho.is puts a space after the colon, and a literal
-        // contains("\"success\":true") check therefore discarded every answer it gave -- the
-        // provider dropped out of the chain in complete silence.
         val body = """
             {
                 "ip": "2601:645:c68b::1",
@@ -61,7 +52,7 @@ class IpGeolocationTest {
             }
         """.trimIndent()
 
-        val point = assertNotNull(IpGeolocation.parse(body))
+        val point = assertNotNull(parseIpLocation(body))
         assertEquals(37.774926, point.lat)
     }
 
@@ -75,45 +66,77 @@ class IpGeolocationTest {
             }
         """.trimIndent()
 
-        assertNull(IpGeolocation.parse(body))
+        assertNull(parseIpLocation(body))
     }
 
     @Test
     fun `rejects a lookup the provider reports as failed`() {
-        // ipwho.is answers 200 with success:false rather than an error status.
         val body = """{"ip":"127.0.0.1","success":false,"message":"Reserved range",""" +
             """"latitude":0,"longitude":0}"""
 
-        assertNull(IpGeolocation.parse(body))
+        assertNull(parseIpLocation(body))
+    }
+
+    @Test
+    fun `rejects a reported failure whatever coordinates come with it`() {
+        assertNull(parseIpLocation("""{"success":false,"latitude":37.7749,"longitude":-122.4194}"""))
+        assertNotNull(parseIpLocation("""{"success":true,"latitude":37.7749,"longitude":-122.4194}"""))
     }
 
     @Test
     fun `rejects Null Island`() {
-        assertNull(IpGeolocation.parse("""{"latitude":0,"longitude":0}"""))
+        assertNull(parseIpLocation("""{"latitude":0,"longitude":0}"""))
     }
 
     @Test
     fun `rejects the United States centroid`() {
-        // 37.751/-97.822 is a field in Kansas that several databases return for any US address
-        // they cannot place. Dropping a user there is worse than reporting no fix.
-        assertNull(IpGeolocation.parse("""{"latitude":37.751,"longitude":-97.822}"""))
+        assertNull(parseIpLocation("""{"latitude":37.751,"longitude":-97.822}"""))
     }
 
     @Test
     fun `accepts a coordinate close to but not at the centroid`() {
-        val point = assertNotNull(IpGeolocation.parse("""{"latitude":37.80,"longitude":-97.90}"""))
+        val point = assertNotNull(parseIpLocation("""{"latitude":37.80,"longitude":-97.90}"""))
         assertEquals(37.80, point.lat)
     }
 
     @Test
     fun `rejects out of range coordinates`() {
-        assertNull(IpGeolocation.parse("""{"latitude":91.0,"longitude":10.0}"""))
-        assertNull(IpGeolocation.parse("""{"latitude":10.0,"longitude":181.0}"""))
+        assertNull(parseIpLocation("""{"latitude":91.0,"longitude":10.0}"""))
+        assertNull(parseIpLocation("""{"latitude":10.0,"longitude":181.0}"""))
     }
 
     @Test
     fun `returns nothing when the body carries no coordinates`() {
-        assertNull(IpGeolocation.parse("""{"city":"San Francisco","country":"United States"}"""))
-        assertNull(IpGeolocation.parse("not json at all"))
+        assertNull(parseIpLocation("""{"city":"San Francisco","country":"United States"}"""))
+        assertNull(parseIpLocation("not json at all"))
+    }
+
+    @Test
+    fun `rejects an answer cut off inside a number`() {
+        val whole = """{"latitude":37.7749,"longitude":-122.4194}"""
+        assertNotNull(parseIpLocation(whole))
+        assertNull(parseIpLocation(whole.dropLast(8)))
+    }
+
+    @Test
+    fun `rejects an answer that does not begin and end as one object`() {
+        assertNull(parseIpLocation("""[{"latitude":37.7749,"longitude":-122.4194}]"""))
+        assertNull(parseIpLocation("""{"latitude":37.7749,"longitude":-122.4194} trailing"""))
+        assertNull(parseIpLocation("""leading {"latitude":37.7749,"longitude":-122.4194}"""))
+        assertNotNull(parseIpLocation(" {\"latitude\":37.7749,\"longitude\":-122.4194}\n"))
+    }
+
+    @Test
+    fun `the longest answer cannot exhaust the stack`() {
+        val nested = """{"latitude":1.5,"longitude":2.5,"x":""" + "[".repeat(8000) + "0" + "]".repeat(8000) + "}"
+        assertEquals(1.5, parseIpLocation(nested)?.lat)
+
+        val blank = """{"latitude":""" + " ".repeat(16000) + """1.5,"longitude":2.5}"""
+        assertEquals(2.5, parseIpLocation(blank)?.lon)
+
+        val digits = """{"latitude":""" + "1".repeat(16000) + ""","longitude":2.5}"""
+        assertNull(parseIpLocation(digits))
+
+        assertNull(parseIpLocation("{" + "\"latitude\":".repeat(1400) + "}"))
     }
 }

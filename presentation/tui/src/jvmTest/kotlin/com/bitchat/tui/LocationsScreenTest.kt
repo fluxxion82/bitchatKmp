@@ -150,6 +150,20 @@ class LocationsScreenTest {
         )
     }
 
+    @Test fun channelsFromAnAddressOrAnOldFixSaySoAboveThem() = runTest {
+        suspend fun rows(state: LocationChannelsState, label: String?) = listOfNotNull(
+            " Locations",
+            pad("   #mesh", "0 people ", 60),
+            label?.let { "   $it" },
+            pad("   region #9q *", "0 people ", 60),
+            pad(" > city #9q8yy San Francisco", "1 person ", 60),
+        ).also { assertEquals(it, render(AnsiLevel.NONE, state, IntSize(60, it.size + 1)).take(it.size)) }
+
+        rows(nearby, null)
+        rows(nearby.copy(locationApproximate = true), "approximate location, from your network")
+        rows(nearby.copy(locationStale = true, locationApproximate = true), "last known location, may be out of date")
+    }
+
     @Test fun theNoticeIsSkippedAndTheDefaultPlaceChannelsJoin() = runTest {
         runMosaicTest {
             setContentAndSnapshot { Screen(inTheDefaultPlace, IntSize(90, 11)) }

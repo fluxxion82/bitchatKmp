@@ -211,6 +211,13 @@ private sealed interface PlaceRow {
     data object Grid : PlaceRow
 }
 
+/** Said above channels worked out from a fix that is old or only as good as a network address. */
+private fun fixQualityNote(state: LocationChannelsState): String? = when {
+    state.locationStale -> "last known location, may be out of date"
+    state.locationApproximate -> "approximate location, from your network"
+    else -> null
+}
+
 private fun placeRows(state: LocationChannelsState): List<PlaceRow> = buildList {
     add(PlaceRow.Mesh)
     val reason = state.locationUnavailableReason
@@ -221,7 +228,10 @@ private fun placeRows(state: LocationChannelsState): List<PlaceRow> = buildList 
             add(PlaceRow.Note(HINT_WITHOUT_LOCATION))
             state.availableChannels.forEach { add(PlaceRow.Nearby(it)) }
         }
-        state.availableChannels.isNotEmpty() -> state.availableChannels.forEach { add(PlaceRow.Nearby(it)) }
+        state.availableChannels.isNotEmpty() -> {
+            fixQualityNote(state)?.let { add(PlaceRow.Note(it)) }
+            state.availableChannels.forEach { add(PlaceRow.Nearby(it)) }
+        }
         !state.locationServicesEnabled -> {
             add(PlaceRow.Note("location services are off"))
             add(PlaceRow.Note(HINT_WITHOUT_LOCATION))

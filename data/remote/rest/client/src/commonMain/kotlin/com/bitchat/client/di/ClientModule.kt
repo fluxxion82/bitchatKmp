@@ -1,6 +1,7 @@
 package com.bitchat.client.di
 
 import com.bitchat.client.BaseApiClient
+import com.bitchat.client.DirectHttpGet
 import com.bitchat.client.NostrGeoRelayClient
 import com.bitchat.client.model.ClientType
 import com.bitchat.client.model.RetryConfig
@@ -20,6 +21,8 @@ val clientModule = module {
             torRouteSource = getOrNull<TorRouteSource>(),
         )
     } binds arrayOf(TorRouteLifecycle::class, WebSocketRouteProvider::class)
+
+    single { DirectHttpGet(routes = get()) }
 
     single {
         NostrGeoRelayClient(
