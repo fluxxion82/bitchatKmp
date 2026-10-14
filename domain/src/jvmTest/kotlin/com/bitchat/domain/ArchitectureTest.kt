@@ -2,7 +2,8 @@ package com.bitchat.domain
 
 import com.lemonappdev.konsist.api.Konsist
 import com.lemonappdev.konsist.api.declaration.KoClassDeclaration
-import com.lemonappdev.konsist.api.verify.assertTrue
+import com.lemonappdev.konsist.api.provider.KoLocationProvider
+import com.lemonappdev.konsist.api.provider.KoNameProvider
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
@@ -14,26 +15,23 @@ class ArchitectureTest {
 
     @Test
     fun aUseCaseIsNamedObserveExactlyWhenItReturnsAFlow() {
-        assertTrue(useCases.isNotEmpty())
-        useCases.assertTrue { useCase ->
+        useCases.assertEach { useCase ->
             useCase.useCaseResult()!!.startsWith("Flow<") == useCase.name.startsWith("Observe")
         }
     }
 
     @Test
     fun everyPublicClassInAFeaturePackageIsAUseCase() {
-        val featureClasses = production.classes(includeNested = false)
+        production.classes(includeNested = false)
             .filter { it.packagee?.name?.let(::isFeaturePackage) == true }
             .filterNot { it.hasInternalModifier || it.hasPrivateModifier }
             .filter { it.name !in notUseCases }
-        assertTrue(featureClasses.isNotEmpty())
-        featureClasses.assertTrue { it.useCaseResult() != null }
+            .assertEach { it.useCaseResult() != null }
     }
 
     @Test
     fun theDomainImportsNothingFromAnotherLayer() {
-        assertTrue(production.imports.isNotEmpty())
-        production.imports.assertTrue { import ->
+        production.imports.assertEach { import ->
             allowedImports.any { import.name.startsWith(it) }
         }
     }
@@ -49,12 +47,17 @@ class ArchitectureTest {
     }
 
     private fun assertPlacedIn(suffix: String, subpackage: String) {
-        val interfaces = production.interfaces().filter { it.name.endsWith(suffix) }
-        assertTrue(interfaces.isNotEmpty())
-        interfaces.assertTrue { declaration ->
+        production.interfaces().filter { it.name.endsWith(suffix) }.assertEach { declaration ->
             val name = declaration.packagee?.name.orEmpty()
             name.endsWith(".$subpackage") && isFeaturePackage(name.removeSuffix(".$subpackage"))
         }
+    }
+
+    // Konsist's own assertions skip whatever is annotated `@Suppress` with the calling function's name.
+    private fun <T> List<T>.assertEach(holds: (T) -> Boolean) where T : KoNameProvider, T : KoLocationProvider {
+        assertTrue(isNotEmpty(), "The rule selected nothing.")
+        val broken = filterNot(holds)
+        assertTrue(broken.isEmpty(), broken.joinToString("\n") { "${it.name} (${it.location})" })
     }
 
     private fun isFeaturePackage(name: String): Boolean {

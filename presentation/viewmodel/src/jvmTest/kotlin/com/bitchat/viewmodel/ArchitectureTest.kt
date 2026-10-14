@@ -1,7 +1,6 @@
 package com.bitchat.viewmodel
 
 import com.lemonappdev.konsist.api.Konsist
-import com.lemonappdev.konsist.api.verify.assertFalse
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
@@ -15,9 +14,11 @@ class ArchitectureTest {
     @Test
     fun noViewModelFunctionIsNamedLikeAConstructorParameter() {
         assertTrue(viewModels.isNotEmpty())
-        viewModels.assertFalse { viewModel ->
+        // Konsist's own assertions skip whatever is annotated `@Suppress` with the test's name.
+        val shadowing = viewModels.filter { viewModel ->
             val injected = viewModel.primaryConstructor?.parameters.orEmpty().map { it.name }.toSet()
             viewModel.functions(includeNested = false, includeLocal = false).any { it.name in injected }
         }
+        assertTrue(shadowing.isEmpty(), shadowing.joinToString { it.name })
     }
 }

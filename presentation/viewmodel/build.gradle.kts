@@ -83,3 +83,8 @@ kotlin {
         }
     }
 }
+
+// ArchitectureTest reads every source set from disk, also the ones the JVM does not compile.
+tasks.named<Test>("jvmTest") {
+    inputs.dir("src").withPropertyName("allSourceSets").withPathSensitivity(PathSensitivity.RELATIVE)
+}
