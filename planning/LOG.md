@@ -546,3 +546,59 @@ Findings, reported and not fixed:
 
 - Did: on the owner's word pushed `main` (`5bfbd70`) and deleted `claude/wipe-events-and-chat-state`. The owner answered Q14 (D35: the naming rule is for new use cases) and Q15 (D36).
 - Needs: cloud-claude to fetch `main` and start D36 as described under Asks in `STATUS.md`: the plan with its table here first, then the branch.
+
+## 2026-10-15, cloud-claude (D36 plan)
+
+- Read:
+  - `STATUS.md`, `reference/2026-10-15-local-review-d31-d32.md`, and D35 and D36 with their lines in `CONVENTIONS.md`.
+  - `main` at `5bfbd70`.
+- The rule I applied:
+  - Every in-memory bus is a `MutableSharedFlow(replay = 1)`, checked in all six `InMemory*EventBus`; the domain has no other bus implementation.
+  - An observer that reads in `onStart` and then subscribes therefore loses a matching event published during its first read only when some event on that bus does not match it. Such an event can take the single replay slot.
+  - If every event on its bus makes it read again, whatever sits in the slot when it subscribes brings that read. That observer has no window.
+- Plan: one branch, `claude/observers-subscribe-first`, from `5bfbd70`. One commit.
+
+| Observer | Reads | Subscribes to | Re-reads on | Window | Change |
+|---|---|---|---|---|---|
+| `app/ObserveAppTheme` | `AppRepository.getAppTheme()` | `AppEventBus` | `ThemeUpdated` (not `BackgroundModeChanged`) | yes | subscribe first |
+| `app/ObserveBackgroundMode` | `getBackgroundMode()` | `AppEventBus` | `BackgroundModeChanged` (not `ThemeUpdated`) | yes | subscribe first |
+| `chat/ObserveChannelMessages`, mesh | `getMeshMessages()` | `ChatEventBus` | `MeshMessagesUpdated` | yes | subscribe first |
+| same, private DM (also Meshtastic with a node) | `getPrivateChats()[peer]` | `ChatEventBus` | `PrivateChatsUpdated` | yes | subscribe first |
+| same, named channel | `getNamedChannelMessages(name)` | `ChatEventBus` | `NamedChannelMessagesUpdated(name)` | yes | subscribe first |
+| same, geohash | `getGeohashMessages(geohash)`, `combine`d with `observeMiningStatus()` (a `StateFlow`) | `ChatEventBus`, through a `Unit` trigger read downstream | `GeohashMessagesUpdated(geohash)` | see below | see below |
+| `chat/ObserveJoinedChannels` | `getJoinedChannelsList()` | `ChatEventBus` | `ChannelJoined`, `ChannelLeft` | yes | subscribe first |
+| `chat/ObserveJoinedNamedChannels` | `getAvailableChannels()` | `ChatEventBus` | `ChannelJoined`, `ChannelLeft`, `ChannelListUpdated` | yes | subscribe first |
+| `chat/ObserveLatestUnreadPrivatePeer` | `getLatestUnreadPrivatePeer()` | `ChatEventBus` | `LatestUnreadPrivatePeerChanged` | yes | subscribe first |
+| `chat/ObservePrivateChats` | `getPrivateChats()` | `ChatEventBus` | `PrivateChatsUpdated` | yes | subscribe first |
+| `chat/ObserveSelectedPrivatePeer` | `getSelectedPrivatePeer()` | `ChatEventBus` | `SelectedPrivatePeerChanged` | yes | subscribe first |
+| `chat/ObserveUnreadPrivatePeers` | `getUnreadPrivatePeers()` | `ChatEventBus` | `UnreadPrivatePeersUpdated` | yes | subscribe first |
+| `location/ObserveCurrentChannelBookmarkState` | `UserRepository.getUserState()`, then `isBookmarked(geohash)` | `LocationEventBus` | `ChannelChanged`, `BookmarksChanged` | yes | subscribe first |
+| `location/ObserveHasNotes` | `getUserState()`, then `hasNotes(geohash)` | `LocationEventBus` | `ChannelChanged`, `NotesChanged` | yes | subscribe first |
+| `location/ObserveLocationServicesEnabled` | `isLocationServicesEnabled()` | `LocationEventBus` | `LocationServicesChanged` | yes | subscribe first |
+| `location/ObserveNotes` | `getNotes(geohash)` | `LocationEventBus` | `NotesChanged` | yes | subscribe first |
+| `location/ObservePermissionState` | `getPermissionState()` | `LocationEventBus` | `PermissionStateChanged` | yes | subscribe first |
+| `user/ObserveUserNickname` | `getAppUser().nickname()` | `UserEventBus` | `NicknameUpdated`, `ProfileUpdated`, `LoginChanged` | yes | subscribe first |
+| `tor/ObserveTorStatus` | the Tor status and the stored mode | `TorEventBus` | both `TorEvent`s (`ModeChanged`, `StatusChanged`) | **no**: every event on its bus matches | left out |
+| `nostr/ObservePowSettings` | `getPowSettings()`, `combine`d with `observeMiningStatus()` and `distinctUntilChanged` | `NostrEventBus`, mapped on every event | the only `NostrEvent`, `PowSettingsUpdated` | **no**: every event matches, and the mining status is a `StateFlow` | left out; the shape is not "read, then re-read" either |
+| `chat/ObserveMeshChannelPeople` | three sources, merged | `ChatEventBus`, LoRa peer changes, the block list | its own rules: the first event from the bus, whatever it is, counts as a change of everything (KDoc: "closes the gap between the first read and the subscription"); a refresh that runs into a write is skipped; `distinctUntilChanged` | closed its own way | left out, as asked |
+
+**The geohash path of `ObserveChannelMessages`.**
+- Its producer sends a `Unit` trigger into its own buffer and subscribes in the same step. The read happens downstream, in `map`, once the consumer takes the trigger.
+- On one thread the subscription is in place before the read starts. Across threads only the few instructions between the `send` and the subscription are open.
+- I will write its during-the-first-read test like the others. If that test passes on today's shape, the path is left as it is and I report so. If it fails, the path gets the same change: subscribe, then send the trigger.
+
+**The shape** is `ObserveUserState`'s. An `UNDISPATCHED` launch collects the bus into a `Channel(BUFFERED)`; that also takes the replay value. Then the observer reads, then it handles the channel with the same `when` as today.
+- The triggers, the handling of repeats and of an event in the replay slot, and every value read stay exactly as they are; no `else` and no branch moves.
+- Where a file imports `Channel` from the domain (`ObserveChannelMessages`), the coroutine channel is imported under another name.
+
+**Tests.** For each observer changed, one during-the-first-read test in the shape of `ObserveUserStateTest`:
+- hold the first read;
+- publish a matching event, then an unrelated one;
+- release the read;
+- expect a second read.
+
+The seven that already have a test class get the test added there. The other eight get a new class, with the first value as well as this test: `ObserveBackgroundModeTest`, `ObserveChannelMessagesTest` (one case per path), `ObserveJoinedNamedChannelsTest`, `ObserveCurrentChannelBookmarkStateTest`, `ObserveHasNotesTest`, `ObserveLocationServicesEnabledTest`, `ObserveNotesTest`, `ObservePermissionStateTest`.
+
+**Before any production change, the tests run on today's shape,** and each during-the-first-read test must fail there. I report the result per observer.
+
+Not in this branch: any view model, any rename (D35), and the three left out.
