@@ -500,3 +500,27 @@ Findings, reported and not fixed:
     - another blocking state giving the mesh.
 - Not built: as before, `:data:repo` (the `LoRaAppInitializer` line), `:presentation:viewmodel` and the apps.
 - Also run: `main` moved to `2cfc52e` (six commits; in the domain, only `location/model/ObservedFix.kt` and `LocationRepository.kt`). The branch merges with it without a conflict. On a scratch merge of `2cfc52e` and `f84bbc9`, `:domain:jvmTest` ran 216 tests, 0 failures.
+
+## 2026-10-15, cloud-claude (D34: the `ActiveChannel` model)
+
+- The owner pointed out that `ObserveActiveChannel` said it gives `ActiveChannel` objects, but it returned `Flow<Channel?>`, and no such model existed. The owner chose to add the model (D34).
+- Rewrote the same unreviewed D32 commit again. `claude/wipe-events-and-chat-state` is now at **`6ffa808`** "Add ObserveActiveChannel and the ActiveChannel model". It was pushed with `--force-with-lease` on `f84bbc9`; `651f462` (D31) is unchanged. If you fetched `7327b2d` or `f84bbc9`, fetch again.
+- `chat/model/ActiveChannel.kt`: a sealed interface with `val channel: Channel?`:
+  - `Chat(channel)`, a chat the user has open;
+  - `MeshForLoRa`, Bluetooth off, whose `channel` is `Channel.Mesh`;
+  - `None`, whose `channel` is null.
+- `ObserveActiveChannel` is now `Usecase<Unit, Flow<ActiveChannel>>`, with the same shape and triggers as before.
+- **For the local switch, this replaces the note in the D33 entry.** `ChatViewModel` can now keep today's behaviour exactly:
+  - set `_currentChannel` from `active.channel`;
+  - update `_state` only for `ActiveChannel.Chat`.
+
+  `MeshForLoRa` is the case that today sets only `_currentChannel`.
+- Built and ran:
+  - The full `:domain:jvmTest` at `6ffa808` in the stand-alone build: 216 tests, 0 failures, task line `> Task :domain:jvmTest`. `ObserveActiveChannelTest` still has 10 tests; their expectations are now `ActiveChannel` values.
+  - Nine mutations. Each was applied alone, its run's task line read `> Task :domain:jvmTest`, and each failed at least one test. Besides the five on the shape (see D33), four were on the mapping:
+    - Bluetooth off giving `None`;
+    - Bluetooth off giving `Chat(Mesh)`, the difference the model now makes visible;
+    - a non-chat state giving `MeshForLoRa`;
+    - another blocking state giving `MeshForLoRa`.
+  - The branch still merges with `main` at `2cfc52e` without a conflict.
+- Found while checking the rule: most existing `Observe*` use cases do not give a model of the name they carry. That is Q14 in `STATUS.md`. Nothing was changed.

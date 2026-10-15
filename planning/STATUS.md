@@ -12,7 +12,7 @@ Updated 2026-10-15 by cloud-claude (D31 and D32 pushed).
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
 | `main` | `fd93095`. Since `6aefc15`: three commits of the owner's side (`c2866a4` a board's city from its public address, `7006a10` Curl transfers, `845c44c` a saved place as this device's location), then D30: `e5c13ce` (`ObserveUserState`, `ObserveFavorites`), `fd93095` (`MainViewModel` uses them) | Pushed 2026-10-14 | |
-| `claude/wipe-events-and-chat-state` | D31 (`651f462`): the wipe publishes `NicknameUpdated` and `FavoritesCleared`. D32 (`f84bbc9`): `ObserveActiveChannel` (D33). Two commits on `fd93095` | Pushed 2026-10-15 at `f84bbc9` | local agents: the `LoRaAppInitializer` line, build and review, then switch `ChatViewModel` |
+| `claude/wipe-events-and-chat-state` | D31 (`651f462`): the wipe publishes `NicknameUpdated` and `FavoritesCleared`. D32 (`6ffa808`): `ObserveActiveChannel` and the `ActiveChannel` model (D33, D34). Two commits on `fd93095` | Pushed 2026-10-15 at `6ffa808` | local agents: the `LoRaAppInitializer` line, build and review, then switch `ChatViewModel` |
 
 ## D30, as landed
 
@@ -37,12 +37,26 @@ Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **Local agents: on `claude/wipe-events-and-chat-state` (`f84bbc9`), add `UserEvent.FavoritesCleared -> Unit` to the exhaustive `when` in `data/repo/.../di/LoRaAppInitializer.kt:63`, which cloud-claude cannot build. Then build and review, and switch `ChatViewModel` to `ObserveActiveChannel`** as D32 and D33 say. The writers, G1 and G2 are in `LOG.md` (2026-10-15, plan); the use case as pushed, and what was built and run, are in the entry "D33" after it.
-2. **Owner:** G1, if the local switch shows `ChatViewModel` should also follow `StateChanged`.
+1. **Local agents: on `claude/wipe-events-and-chat-state` (`6ffa808`), add `UserEvent.FavoritesCleared -> Unit` to the exhaustive `when` in `data/repo/.../di/LoRaAppInitializer.kt:63`, which cloud-claude cannot build. Then build and review, and switch `ChatViewModel` to `ObserveActiveChannel`** as D32 to D34 say. The writers, G1 and G2 are in `LOG.md` (2026-10-15, plan); the use case as pushed, and what was built and run, are in the entries "D33" and "D34" after it.
+2. **Owner:** Q14; and G1, if the local switch shows `ChatViewModel` should also follow `StateChanged`.
 
 ## Open questions
 
-None.
+- **Q14 (D34). Does "verb + the domain model it gives" apply to the use cases already there?** Of the 24 `Observe*` use cases on `main`, only these give a model of the name they carry: `AppTheme`, `BackgroundMode`, `PermissionState`, `PowSettings`, `TorStatus`, `UserState`, and on the branch `ActiveChannel`. Some give a list of the model they name, which could count as fitting: `ObserveNotes` gives `List<Note>`. The rest give a primitive, a collection of ids, or a model of another name:
+  - `ObserveUserNickname`: `String`.
+  - `ObserveHasNotes`, `ObserveCurrentChannelBookmarkState`, `ObserveLocationServicesEnabled`: `Boolean`.
+  - `ObserveSelectedPrivatePeer`, `ObserveLatestUnreadPrivatePeer`: `String?`.
+  - `ObserveJoinedChannels`, `ObserveUnreadPrivatePeers`: `Set<String>`.
+  - `ObservePeerSessionStates`: `Map<String, String>`.
+  - `ObservePrivateChats`: `Map<String, List<BitchatMessage>>`.
+  - `ObserveFavorites`: `Map<String, FavoriteRelationship>`.
+  - `ObserveChannelMessages`: `List<BitchatMessage>`.
+  - `ObserveChannelParticipants`: `List<GeoPerson>`.
+  - `ObserveMeshChannelPeople`: `List<MeshChannelPerson>`.
+  - `ObserveJoinedNamedChannels`: `List<ChannelInfo>`.
+  - `ObserveRequestedTorMode`: `TorMode`.
+
+  Options: (a) the rule is for new use cases only; (b) a list of the model counts, and the rest get models or new names over time; (c) a Konsist rule that the result type, or its element type, is the name after the verb, with today's exceptions listed. The `Get*` use cases have not been checked. Nothing changes until the owner answers.
 
 ## Answered
 
