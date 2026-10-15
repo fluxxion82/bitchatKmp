@@ -5,13 +5,14 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-15 by local-claude (D31 to D34 pushed; D35 and D36 decided).
+Updated 2026-10-15 by cloud-claude (D36 pushed).
 
 ## In flight
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | `5bfbd70`. Since `fd93095`: six commits of the owner's side (TUI unread chips, BlueZ connects, relayed-link binding, advertisement registration, geohash presence, BlueZ retry), then this slice: `d7a1aa4` (the wipe publishes `NicknameUpdated` and `FavoritesCleared`), `eaac5ff` (`ObserveActiveChannel`, `ActiveChannel`), `5bfbd70` (`ChatViewModel` uses it; the view-model Konsist rule) | Pushed 2026-10-15 | cloud-claude: start D36 from here |
+| `main` | `5bfbd70`. Since `fd93095`: six commits of the owner's side (TUI unread chips, BlueZ connects, relayed-link binding, advertisement registration, geohash presence, BlueZ retry), then this slice: `d7a1aa4` (the wipe publishes `NicknameUpdated` and `FavoritesCleared`), `eaac5ff` (`ObserveActiveChannel`, `ActiveChannel`), `5bfbd70` (`ChatViewModel` uses it; the view-model Konsist rule) | Pushed 2026-10-15 | |
+| `claude/observers-subscribe-first` | D36: 15 older observers subscribe before their first read, 26 tests. One commit on `5bfbd70` | Pushed 2026-10-15 at `f5534c8` | local agents: build and review |
 
 ## D31 to D34, as landed
 
@@ -41,27 +42,7 @@ Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **cloud-claude: the next slice is decided (D36).** Fetch `main` at `5bfbd70`. Read `reference/2026-10-15-local-review-d31-d32.md` and the two new lines in `CONVENTIONS.md`: under Architecture (D35) and under Observers and events (the test rule). Put the plan in `LOG.md` first. One branch, inside `:domain`.
-
-   **What.** These `Observe*` use cases on `main` still use `onStart`:
-   - `app`: `ObserveAppTheme`, `ObserveBackgroundMode`
-   - `chat`: `ObserveChannelMessages`, `ObserveJoinedChannels`, `ObserveJoinedNamedChannels`, `ObserveLatestUnreadPrivatePeer`, `ObserveMeshChannelPeople`, `ObservePrivateChats`, `ObserveSelectedPrivatePeer`, `ObserveUnreadPrivatePeers`
-   - `location`: `ObserveCurrentChannelBookmarkState`, `ObserveHasNotes`, `ObserveLocationServicesEnabled`, `ObserveNotes`, `ObservePermissionState`
-   - `nostr`: `ObservePowSettings`
-   - `tor`: `ObserveTorStatus`
-   - `user`: `ObserveUserNickname`
-
-   Those that read in `onStart` and then subscribe to a bus have the window D30 closed: an event published during the first read is lost once another event takes the bus's single replay slot. Give them the shape of `ObserveUserState`: subscribe with an `UNDISPATCHED` launch into a `Channel(BUFFERED)`, then read, then handle the channel.
-
-   **First, in the plan:** a table with one row per observer. Give what it reads, what it subscribes to (a bus, a `StateFlow`, a repository flow, `combine`), whether it has that window, and what you will change. Leave out, and say why:
-   - an observer with no window (one that only follows a `StateFlow`, for example);
-   - one whose shape is not "read, then re-read on matching events". `ObserveMeshChannelPeople` has its own rules about the first event and about skipped refreshes; read its KDoc and tests before touching it.
-   
-   Keep each observer's triggers, repeats and replay behaviour exactly; this changes only when it subscribes.
-
-   **Tests:** for each observer changed, the during-the-first-read test in the shape of `ObserveUserStateTest`. It must fail on today's shape; say so per observer.
-
-   **Not in this branch:** any view model, and renaming any use case (D35).
+1. **Local agents: build and review `claude/observers-subscribe-first` (`f5534c8`).** Domain only; no view model or data change. The table of observers, and what was left out and why, are in `LOG.md` (2026-10-15, D36 plan); what was built and run is in the entry after it.
 
 ## Open questions
 

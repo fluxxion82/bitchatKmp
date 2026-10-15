@@ -602,3 +602,30 @@ The seven that already have a test class get the test added there. The other eig
 **Before any production change, the tests run on today's shape,** and each during-the-first-read test must fail there. I report the result per observer.
 
 Not in this branch: any view model, any rename (D35), and the three left out.
+
+## 2026-10-15, cloud-claude (D36 pushed)
+
+- Did: the plan above.
+  - Changed: the 15 observers marked "subscribe first", i.e. 17 paths with the three plain paths of `ObserveChannelMessages`.
+  - Left out: `ObserveTorStatus`, `ObservePowSettings`, `ObserveMeshChannelPeople`, and the geohash path of `ObserveChannelMessages`.
+- Pushed: `claude/observers-subscribe-first` at `f5534c8`, one commit on `5bfbd70`.
+  - 15 files under `commonMain`. Each path now has the shape of `ObserveUserState`: an `UNDISPATCHED` launch into a `Channel(BUFFERED)`, then the read, then the same `when` or `if` as before, over the channel. No branch was added, moved or dropped.
+  - Where the file imports the domain `Channel` (`ObserveChannelMessages`, `ObserveCurrentChannelBookmarkState`, `ObserveHasNotes`), the coroutine one is imported as `EventChannel`.
+  - `onStart` stays only in the geohash path.
+  - Tests: one during-the-first-read test added to each of the 7 existing classes, and 8 new classes with 19 tests (a first value and the during-the-first-read case; `ObserveChannelMessagesTest` has one case per path).
+- The during-the-first-read tests on today's shape (`5bfbd70` plus the tests only, before any production change):
+  - **17 failed**, one per changed path:
+    - `ObserveAppTheme`, `ObserveBackgroundMode`;
+    - `ObserveChannelMessages` mesh, private chat, named channel;
+    - `ObserveJoinedChannels`, `ObserveJoinedNamedChannels`, `ObserveLatestUnreadPrivatePeer`, `ObservePrivateChats`, `ObserveSelectedPrivatePeer`, `ObserveUnreadPrivatePeers`;
+    - `ObserveCurrentChannelBookmarkState`, `ObserveHasNotes`, `ObserveLocationServicesEnabled`, `ObserveNotes`, `ObservePermissionState`;
+    - `ObserveUserNickname`.
+  - Every other test passed. **The geohash test passed on today's shape**, as the plan expected, so that path is left as it is. Its producer subscribes in the same step as it sends the trigger, and the read runs downstream after that. Only a gap across threads remains, which this test cannot show. The test stays, as a guard.
+  - After the change, all 17 pass.
+- Texts and behaviour: no text changes. An event published during an observer's first read is no longer lost when another event takes the replay slot. Triggers, repeats and replay behaviour are unchanged. The existing replay and unrelated-event tests of `ObserveAppTheme`, `ObserveJoinedChannels` and `ObserveUserNickname` still pass; the other changed observers had no such tests.
+- Built and ran: the stand-alone `:domain` build, `:domain:jvmTest`, the full task each time, with no build cache; task line `> Task :domain:jvmTest`.
+  - On today's shape: 242 tests, 17 failures (the list above).
+  - At `f5534c8`: 242 tests, 0 failures, the Konsist rules included. That is `5bfbd70`'s 216 plus 26.
+  - The branch merges with `main` at `5bfbd70` (unchanged since).
+- Not built: anything above `:domain`. No view model changes. Each view model collects these use cases the same way, and now gets the same values.
+- Needs: a local build and review.
