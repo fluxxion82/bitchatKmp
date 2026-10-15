@@ -6,6 +6,7 @@ import com.bitchat.domain.chat.model.MeshChannelPerson
 import com.bitchat.domain.chat.model.MeshChannelTransport
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.location.model.GeoPerson
+import com.bitchat.viewvo.theme.LightPalette
 import com.jakewharton.mosaic.terminal.AnsiLevel
 import com.jakewharton.mosaic.terminal.KeyboardEvent
 import com.jakewharton.mosaic.terminal.Terminal
@@ -72,12 +73,46 @@ class PeersScreenTest {
         assertEquals("$esc[36m" + pad("    carol", "nostr ", 30) + reset, rows[2])
     }
 
-    @Test fun selectedRowIsReversedAndUnreadRowsAreBold() = runTest {
+    @Test fun selectedRowIsReversedAndUnreadRowsAreBoldInTheDmColour() = runTest {
         val rows = render(AnsiLevel.ANSI16) {
             PeersScreen(listOf(alice, bob), IntSize(30, 4), onOpenDm = {}, onToggleFavorite = {})
         }
         assertEquals(bar + pad("    alice", "routed ", 30) + reset, rows[1])
-        assertEquals("$esc[30;102;1m" + pad(" !* bob", "direct ", 30) + reset, rows[2])
+        // Bright orange (yellow on sixteen colours), and the `!` a chip in the header's DM colours:
+        // a second bar would look like a second selection.
+        assertEquals(
+            "$esc[93;1m $esc[30;103;22m!$esc[93;49;1m" + pad(" !* bob", "direct ", 30).drop(2) + reset,
+            rows[2],
+        )
+    }
+
+    @Test fun onTheLightConsoleAnUnreadRowIsTheNormalYellow() = runTest {
+        val rows = runMosaicTest(MosaicSnapshots) {
+            setContentAndSnapshot {
+                CompositionLocalProvider(
+                    LocalConsoleSafe provides true,
+                    LocalTuiTheme provides TuiTheme(LightPalette, isDark = false, consoleSafe = true),
+                ) { PeersScreen(listOf(alice, bob), IntSize(30, 4), onOpenDm = {}, onToggleFavorite = {}) }
+            }.draw().render(AnsiLevel.ANSI16, false).split("\n")
+        }
+        assertEquals(
+            "$esc[33;1m $esc[30;43;22m!$esc[33;49;1m" + pad(" !* bob", "direct ", 30).drop(2) + reset,
+            rows[2],
+        )
+    }
+
+    @Test fun anUnreadRowTooNarrowForItsMarkStillDraws() = runTest {
+        val rows = render(AnsiLevel.NONE) {
+            PeersScreen(listOf(alice, bob), IntSize(1, 3), onOpenDm = {}, onToggleFavorite = {})
+        }
+        assertEquals(listOf(" ", " ", " "), rows)
+    }
+
+    @Test fun theSelectedRowStaysTheBarWhenItIsUnread() = runTest {
+        val rows = render(AnsiLevel.ANSI16) {
+            PeersScreen(listOf(bob, alice), IntSize(30, 4), onOpenDm = {}, onToggleFavorite = {})
+        }
+        assertEquals(bar + pad(" !* bob", "direct ", 30) + reset, rows[1])
     }
 
     @Test fun arrowsMoveTheSelectionAndEnterOpensADm() = runTest {

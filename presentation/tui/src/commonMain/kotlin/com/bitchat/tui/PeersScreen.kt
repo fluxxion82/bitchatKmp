@@ -12,6 +12,9 @@ import com.bitchat.viewvo.theme.peerColorSeed
 import com.bitchat.domain.location.model.GeoPerson
 import com.jakewharton.mosaic.layout.size
 import com.jakewharton.mosaic.modifier.Modifier
+import com.jakewharton.mosaic.text.AnnotatedString
+import com.jakewharton.mosaic.text.SpanStyle
+import com.jakewharton.mosaic.text.buildAnnotatedString
 import com.jakewharton.mosaic.ui.Column
 import com.jakewharton.mosaic.ui.Text
 import com.jakewharton.mosaic.ui.TextStyle
@@ -165,7 +168,7 @@ fun geoPeerEntries(
 /**
  * The people list: a title row, then one full-width row per peer (`!` unread DM, `*` favourite,
  * the name, and the transport tag on the right). The selected row is in reverse video; other rows
- * with unread DMs are bold. The list scrolls to keep the selection visible.
+ * with unread DMs are bold in the DM colour ([unreadRow]). The list scrolls to keep the selection visible.
  *
  * Keys: `Up`/`Down` select, `Enter` passes the selected peer to [onOpenDm], `f` to
  * [onToggleFavorite]. `Esc` is left to the shell. The selection is a peer, not a row: it starts on
@@ -219,11 +222,19 @@ fun PeersScreen(
             val row = peerRow(peer, size.width, consoleSafe)
             when {
                 index == selected -> Bar(row, size.width)
-                peer.unread -> Bar(row, size.width, textStyle = TextStyle.Bold)
+                peer.unread -> Text(unreadRow(row, theme), color = theme.lora, textStyle = TextStyle.Bold)
                 // The colour the chat gives this peer, so a name is the same colour in both.
                 else -> Text(row, color = theme.peer(peerColorSeed(peer.id, peer.name)))
             }
         }
+    }
+}
+
+/** Bold in the orange of private chats, its `!` a chip like the header's: a second bar would look selected. */
+private fun unreadRow(row: String, theme: TuiTheme): AnnotatedString = buildAnnotatedString {
+    append(row)
+    if (row.getOrNull(1) == '!') {
+        addStyle(SpanStyle(color = theme.onLora, background = theme.lora, textStyle = TextStyle.Empty), 1, 2)
     }
 }
 

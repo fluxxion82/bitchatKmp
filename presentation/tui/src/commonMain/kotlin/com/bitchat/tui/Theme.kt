@@ -89,6 +89,12 @@ data class TuiTheme(
     /** LoRa and private chats, as in the Compose apps: the colour of one's own messages. */
     val lora: Color get() = own
 
+    /**
+     * Text on [lora]: the unread-DM chips. Black, which reads on the orange in both themes; not
+     * bold, which the Linux console draws as dark grey.
+     */
+    val onLora: Color = Color(0, 0, 0)
+
     /** What [channel] is named in: the same accent the Compose apps badge it with. */
     fun channel(channel: Channel?): Color = when (channel) {
         null, is Channel.NamedChannel -> accent

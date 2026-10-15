@@ -1,5 +1,9 @@
 package com.bitchat.tui
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import com.bitchat.viewvo.theme.DarkPalette
+import com.bitchat.viewvo.theme.LightPalette
 import com.jakewharton.mosaic.terminal.AnsiLevel
 import com.jakewharton.mosaic.testing.MosaicSnapshots
 import com.jakewharton.mosaic.testing.runMosaicTest
@@ -199,6 +203,65 @@ class HeaderTest {
             val ansi = mosaic.draw().render(AnsiLevel.ANSI16, false)
             // A [Bar]: the dark theme's black on bright green.
             assertTrue(ansi.startsWith("\u001B[30;102m"), ansi.replace("\u001B", "ESC"))
+            assertFalse(ansi.contains("103"), "no unread DMs, no chip: " + ansi.replace("\u001B", "ESC"))
         }
+    }
+
+    private val esc = "\u001B"
+
+    private suspend fun ansi(theme: TuiTheme, level: AnsiLevel, content: @Composable () -> Unit): String =
+        runMosaicTest(MosaicSnapshots) {
+            setContentAndSnapshot { CompositionLocalProvider(LocalTuiTheme provides theme) { content() } }
+                .draw().render(level, false)
+        }
+
+    @Test fun theUnreadDmCountIsAChipInTheDmColour() = runTest {
+        // Black on the orange of private chats, inside the black-on-green bar.
+        assertEquals(
+            "$esc[30;102m anon1234" + " ".repeat(17) + "$esc[103m2 DM$esc[102m, 3 peers $esc[0m",
+            ansi(TuiTheme(DarkPalette, isDark = true), AnsiLevel.ANSI16) { Header("anon1234", 3, 40, unreadDms = 2) },
+        )
+        assertEquals(
+            "$esc[38;2;255;255;255;48;2;0;128;0m anon1234" + " ".repeat(17) +
+                "$esc[38;2;0;0;0;48;2;255;149;0m2 DM$esc[38;2;255;255;255;48;2;0;128;0m, 3 peers $esc[0m",
+            ansi(TuiTheme(LightPalette, isDark = false), AnsiLevel.TRUECOLOR) { Header("anon1234", 3, 40, unreadDms = 2) },
+        )
+    }
+
+    @Test fun onTheConsoleTheChipIsStillBlackOnOrange() = runTest {
+        // The light theme's bar is white on green; its chip is the normal yellow, the console's brown.
+        assertEquals(
+            "$esc[97;42m anon1234" + " ".repeat(17) + "$esc[30;43m2 DM$esc[97;42m, 3 peers $esc[0m",
+            ansi(TuiTheme(LightPalette, isDark = false, consoleSafe = true), AnsiLevel.ANSI16) {
+                Header("anon1234", 3, 40, unreadDms = 2)
+            },
+        )
+        assertEquals(
+            "$esc[30;102m anon1234" + " ".repeat(17) + "$esc[103m2 DM$esc[102m, 3 peers $esc[0m",
+            ansi(TuiTheme(DarkPalette, isDark = true, consoleSafe = true), AnsiLevel.ANSI16) {
+                Header("anon1234", 3, 40, unreadDms = 2)
+            },
+        )
+    }
+
+    @Test fun theChipIsTheCountNotANicknameThatReadsLikeIt() = runTest {
+        assertEquals(
+            "$esc[30;102m 2 DM" + " ".repeat(21) + "$esc[103m2 DM$esc[102m, 3 peers $esc[0m",
+            ansi(TuiTheme(DarkPalette, isDark = true), AnsiLevel.ANSI16) { Header("2 DM", 3, 40, unreadDms = 2) },
+        )
+    }
+
+    @Test fun theChipStaysOnTheCountBesideProofOfWork() = runTest {
+        assertEquals(
+            "$esc[30;102m anon" + " ".repeat(14) + "pow16, $esc[103m2 DM$esc[102m, 3 peers $esc[0m",
+            ansi(TuiTheme(DarkPalette, isDark = true), AnsiLevel.ANSI16) { Header("anon", 3, 40, unreadDms = 2, powBits = 16) },
+        )
+    }
+
+    @Test fun aDroppedCountTakesItsChipWithIt() = runTest {
+        assertEquals(
+            "$esc[30;102m     3 peers $esc[0m",
+            ansi(TuiTheme(DarkPalette, isDark = true), AnsiLevel.ANSI16) { Header("anon1234", 3, 13, unreadDms = 2) },
+        )
     }
 }
