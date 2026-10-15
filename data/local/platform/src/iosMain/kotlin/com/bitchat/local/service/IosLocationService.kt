@@ -1,7 +1,9 @@
 package com.bitchat.local.service
 
 import com.bitchat.domain.location.model.GeoPoint
+import com.bitchat.domain.location.model.LocationFixInfo
 import com.bitchat.domain.location.model.LocationUnavailableException
+import com.bitchat.domain.location.model.ObservedFix
 import kotlinx.cinterop.CValue
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.useContents
@@ -12,6 +14,8 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import platform.CoreLocation.CLAuthorizationStatus
 import platform.CoreLocation.CLLocation
 import platform.CoreLocation.CLLocationCoordinate2D
@@ -24,13 +28,16 @@ import platform.CoreLocation.kCLAuthorizationStatusNotDetermined
 import platform.CoreLocation.kCLAuthorizationStatusRestricted
 import platform.CoreLocation.kCLLocationAccuracyHundredMeters
 import platform.Foundation.NSError
+import platform.Foundation.timeIntervalSinceNow
 import platform.darwin.NSObject
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_get_main_queue
 import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.resume
 
 @OptIn(ExperimentalForeignApi::class)
 class IosLocationService : LocationService {
+    private val presenceMutex = Mutex()
     // Made and used on the main queue only: CoreLocation calls the delegate on the thread that made it.
     private val manager by lazy {
         CLLocationManager().apply {
@@ -201,5 +208,69 @@ class IosLocationService : LocationService {
     override suspend fun requestLocationPermission() {
         // iOS handles permission requests via CLLocationManager - no-op here
         // The actual request happens in getCurrentLocation() via requestWhenInUseAuthorization()
+    }
+
+    override suspend fun presenceFix(): ObservedFix? = presenceMutex.withLock {
+        withContext(Dispatchers.Main) { readPresenceFix() }
+    }
+
+    private suspend fun readPresenceFix(): ObservedFix? {
+        val presenceManager = CLLocationManager().apply {
+            desiredAccuracy = kCLLocationAccuracyHundredMeters
+        }
+        val status = presenceManager.authorizationStatus
+        if (status != kCLAuthorizationStatusAuthorizedWhenInUse && status != kCLAuthorizationStatusAuthorizedAlways) {
+            return null
+        }
+        presenceManager.location?.let(::observedDeviceFix)?.let { return it }
+
+        return suspendCancellableCoroutine { continuation ->
+            var completed = false
+            var delegate: CLLocationManagerDelegateProtocol? = null
+
+            fun complete(value: ObservedFix?) {
+                if (completed) return
+                completed = true
+                presenceManager.stopUpdatingLocation()
+                presenceManager.delegate = null
+                delegate = null
+                continuation.resume(value)
+            }
+
+            delegate = object : CLLocationManagerDelegateProtocol, NSObject() {
+                override fun locationManager(manager: CLLocationManager, didUpdateLocations: List<*>) {
+                    (didUpdateLocations.lastOrNull() as? CLLocation)?.let(::observedDeviceFix)?.let(::complete)
+                        ?: complete(null)
+                }
+
+                override fun locationManager(manager: CLLocationManager, didFailWithError: NSError) {
+                    complete(null)
+                }
+            }
+            presenceManager.delegate = delegate
+            presenceManager.requestLocation()
+            continuation.invokeOnCancellation {
+                dispatch_async(dispatch_get_main_queue()) {
+                    if (!completed) {
+                        completed = true
+                        presenceManager.stopUpdatingLocation()
+                        presenceManager.delegate = null
+                        delegate = null
+                    }
+                }
+            }
+        }
+    }
+
+    private fun observedDeviceFix(location: CLLocation): ObservedFix? {
+        val ageMillis = (-location.timestamp.timeIntervalSinceNow * 1_000).toLong()
+        if (ageMillis !in 0..PRESENCE_MAX_AGE_MS) return null
+        val coordinate = location.coordinate
+        val (lat, lon) = coordinate.useContents { latitude to longitude }
+        return ObservedFix(GeoPoint(lat, lon), LocationFixInfo.Source.DEVICE, ageMillis)
+    }
+
+    private companion object {
+        const val PRESENCE_MAX_AGE_MS = 60 * 60 * 1000L
     }
 }

@@ -657,7 +657,6 @@ class ChatRepo(
 
                 val identity = nostrClient.deriveIdentity(geohash)
                 println("✅ ChatRepo: Identity derived, pubkey=${identity.publicKeyHex.take(16)}...")
-                var teleported = locationRepository.isTeleported()
 
                 // Generate temporary ID for mining tracking
                 val tempId = "mining-${Clock.System.now().toEpochMilliseconds()}"
@@ -692,6 +691,7 @@ class ChatRepo(
 
                 // ✨ STEP 2: NOW mine the event (this will trigger animation via tempId tracking)
                 println("🔨 ChatRepo: Creating ephemeral geohash event...")
+                var teleported = locationRepository.isTeleportedIn(geohash)
                 var event = nostrClient.createEphemeralGeohashEvent(
                     content = content,
                     geohash = geohash,
@@ -702,7 +702,7 @@ class ChatRepo(
                 )
                 // Mining takes seconds and the device may stop being where its channel is meanwhile.
                 // A tagged event is always safe to publish, an untagged one is not.
-                if (!teleported && locationRepository.isTeleported()) {
+                if (!teleported && locationRepository.isTeleportedIn(geohash)) {
                     teleported = true
                     event = nostrClient.createEphemeralGeohashEvent(
                         content = content,

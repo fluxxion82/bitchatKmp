@@ -2,6 +2,7 @@ package com.bitchat.local.service
 
 import com.bitchat.domain.location.model.GeoPoint
 import com.bitchat.domain.location.model.LocationFixInfo
+import com.bitchat.domain.location.model.ObservedFix
 import com.bitchat.domain.location.model.LocationUnavailableException
 import com.bitchat.domain.location.model.SavedPlace
 import com.bitchat.domain.tor.RequestedTorIntent
@@ -33,12 +34,14 @@ class IpLocationService internal constructor(private val source: IpLocationSourc
 
     override fun locationUpdates() = flow { emit(getCurrentLocation()) }
 
-    // A board keeps counting as unable to be where its channel is.
+    // Boards have no operating-system permission to report.
     override suspend fun hasLocationPermission() = false
 
     override suspend fun requestLocationPermission() = Unit
 
     override suspend fun lastFixInfo(): LocationFixInfo? = source.lastFixInfo()
+
+    override suspend fun presenceFix(): ObservedFix? = source.keptFix()
 
     override suspend fun clearCachedLocation() = source.clear()
 }

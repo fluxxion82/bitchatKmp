@@ -299,4 +299,17 @@ class JvmLocationServiceTest {
 
         assertEquals(false, admitAfterFlip, "admission must be revoked as soon as intent changes")
     }
+
+    @Test
+    fun `presence uses the fix this run looked up and never looks up itself`() = runTest {
+        val calls = AtomicInteger()
+        val service = service { calls.incrementAndGet(); GeoPoint(1.0, 2.0) }
+
+        assertNull(service.presenceFix())
+        assertEquals(0, calls.get())
+
+        service.getCurrentLocation()
+        assertEquals(LocationFixInfo.Source.IP_ADDRESS, service.presenceFix()?.source)
+        assertEquals(1, calls.get())
+    }
 }

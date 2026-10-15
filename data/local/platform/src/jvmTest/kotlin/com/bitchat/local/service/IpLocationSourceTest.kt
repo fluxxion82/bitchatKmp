@@ -178,4 +178,101 @@ class IpLocationSourceTest {
         assertNull(source.lastFixInfo())
         assertTrue(factory.hasNoLocationKeys())
     }
+
+    @Test
+    fun `a kept fix is only one this run observed`() = runTest {
+        val factory = Factory()
+        IpLocationSource(factory, Intent(), { GeoPoint(1.0, 2.0) }).fix()
+
+        val nextRun = IpLocationSource(factory, Intent(TorMode.ON), { null })
+        assertNull(nextRun.keptFix())
+        assertEquals(GeoPoint(1.0, 2.0), nextRun.fix())
+        assertNull(nextRun.keptFix())
+    }
+
+    @Test
+    fun `a kept fix never starts a lookup`() = runTest {
+        var calls = 0
+        val source = IpLocationSource(Factory(), Intent(), {
+            calls++
+            GeoPoint(1.0, 2.0)
+        })
+
+        assertNull(source.keptFix())
+        assertEquals(0, calls)
+    }
+
+    @Test
+    fun `a kept fix from a lookup is aged by the later of both clocks`() = runTest {
+        val monotonic = TestTimeSource()
+        var wall = 1_000_000L
+        val source = IpLocationSource(
+            Factory(), Intent(), { GeoPoint(1.0, 2.0) },
+            wallClock = { wall }, monotonic = monotonic,
+        )
+
+        source.fix()
+        monotonic += 10.minutes
+        wall += 10.minutes.inWholeMilliseconds
+        val kept = source.keptFix()
+        assertEquals(GeoPoint(1.0, 2.0), kept?.point)
+        assertEquals(LocationFixInfo.Source.IP_ADDRESS, kept?.source)
+        assertEquals(10.minutes.inWholeMilliseconds, kept?.ageMillis)
+
+        // A laptop that slept: the monotonic clock stood still, the wall clock did not.
+        wall += 60.minutes.inWholeMilliseconds
+        assertEquals(70.minutes.inWholeMilliseconds, source.keptFix()?.ageMillis)
+
+        monotonic += 80.minutes
+        assertEquals(90.minutes.inWholeMilliseconds, source.keptFix()?.ageMillis)
+    }
+
+    @Test
+    fun `a wall clock set back makes the kept fix's age unknown`() = runTest {
+        val monotonic = TestTimeSource()
+        var wall = 1_000_000L
+        val source = IpLocationSource(
+            Factory(), Intent(), { GeoPoint(1.0, 2.0) },
+            wallClock = { wall }, monotonic = monotonic,
+        )
+
+        source.fix()
+        monotonic += 1.minutes
+        wall -= 1
+        assertNull(source.keptFix())
+    }
+
+    @Test
+    fun `a device fix has no known measurement time and leaves nothing kept`() = runTest {
+        val source = IpLocationSource(Factory(), Intent(), { GeoPoint(1.0, 2.0) })
+
+        source.rememberDeviceFix { GeoPoint(3.0, 4.0) }
+        assertNull(source.keptFix())
+
+        source.fix()
+        assertEquals(GeoPoint(3.0, 4.0), source.fix())
+        assertNull(source.keptFix())
+    }
+
+    @Test
+    fun `a device fix after a lookup leaves nothing kept`() = runTest {
+        val time = TestTimeSource()
+        val source = IpLocationSource(Factory(), Intent(), { GeoPoint(1.0, 2.0) }, timeSource = time)
+
+        source.fix()
+        source.rememberDeviceFix { GeoPoint(3.0, 4.0) }
+
+        assertNull(source.keptFix())
+    }
+
+    @Test
+    fun `clear forgets the kept fix`() = runTest {
+        val source = IpLocationSource(Factory(), Intent(), { GeoPoint(1.0, 2.0) })
+        source.fix()
+        assertEquals(GeoPoint(1.0, 2.0), source.keptFix()?.point)
+
+        source.clear()
+
+        assertNull(source.keptFix())
+    }
 }

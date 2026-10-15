@@ -2,6 +2,7 @@ package com.bitchat.local.service
 
 import com.bitchat.domain.location.model.GeoPoint
 import com.bitchat.domain.location.model.LocationFixInfo
+import com.bitchat.domain.location.model.ObservedFix
 import com.bitchat.domain.location.model.LocationUnavailableException
 import com.bitchat.domain.tor.RequestedTorIntent
 import com.bitchat.domain.tor.model.TorMode
@@ -24,6 +25,7 @@ internal class IpLocationSource(
     private val lookupEnabled: () -> Boolean = { true },
     private val timeSource: TimeSource = TimeSource.Monotonic,
     private val wallClock: () -> Long = { Clock.System.now().toEpochMilliseconds() },
+    private val monotonic: TimeSource = TimeSource.Monotonic,
 ) {
     private val settings = settingsFactory.create(PREFS_NAME)
     private val lookupLock = Mutex()
@@ -40,6 +42,7 @@ internal class IpLocationSource(
     private var cachedAt: TimeMark? = null
     @Volatile
     private var lastAttemptAt: TimeMark? = null
+    private var observed: Observed? = null
 
     fun lookupAdmitted(): Boolean = requestedTorIntent.current == TorMode.OFF && lookupEnabled()
 
@@ -79,6 +82,11 @@ internal class IpLocationSource(
         fixSource = source
         observedAtMs = wallClock()
         cachedAt = timeSource.markNow()
+        observed = if (source == LocationFixInfo.Source.IP_ADDRESS) {
+            Observed(fix, source, monotonic.markNow(), observedAtMs)
+        } else {
+            null
+        }
         settings.putDouble(KEY_LAT, fix.lat)
         settings.putDouble(KEY_LON, fix.lon)
         settings.putLong(KEY_OBSERVED_AT, observedAtMs)
@@ -92,6 +100,14 @@ internal class IpLocationSource(
         return LocationFixInfo(source, (wallClock() - observedAtMs).coerceAtLeast(0))
     }
 
+    fun keptFix(): ObservedFix? = synchronized(stateLock) {
+        val value = observed ?: return null
+        val wallElapsed = wallClock() - value.wallMs
+        if (wallElapsed < 0) return null
+        val monotonicElapsed = value.mark.elapsedNow().inWholeMilliseconds
+        ObservedFix(value.point, value.source, maxOf(monotonicElapsed, wallElapsed))
+    }
+
     fun clear() {
         synchronized(stateLock) {
             generation.incrementAndGet()
@@ -100,6 +116,7 @@ internal class IpLocationSource(
             observedAtMs = 0
             cachedAt = null
             lastAttemptAt = null
+            observed = null
             settings.remove(KEY_LAT)
             settings.remove(KEY_LON)
             settings.remove(KEY_OBSERVED_AT)
@@ -139,4 +156,11 @@ internal class IpLocationSource(
         val FRESH_FOR = 15.minutes
         val RETRY_AFTER = 1.minutes
     }
+
+    private data class Observed(
+        val point: GeoPoint,
+        val source: LocationFixInfo.Source,
+        val mark: TimeMark,
+        val wallMs: Long,
+    )
 }

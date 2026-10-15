@@ -51,7 +51,8 @@ class ChatRepoGeohashTeleportTest {
         verify(exactly = 1) { run.relay.sendEventToGeohash(run.created.single(), geohash, any(), any()) }
         coVerify { run.tracker.updateParticipant(eq(geohash), eq(identity.publicKeyHex), eq("me"), any(), eq(true)) }
         coVerify(exactly = 0) { run.tracker.updateParticipant(any(), any(), any(), any(), eq(false)) }
-        coVerify(exactly = 1) { run.location.isTeleported() }
+        coVerify(exactly = 1) { run.location.isTeleportedIn(geohash) }
+        coVerify(exactly = 0) { run.location.isTeleported() }
     }
 
     @Test
@@ -80,12 +81,30 @@ class ChatRepoGeohashTeleportTest {
         coVerify(exactly = 0) { run.tracker.updateParticipant(any(), any(), any(), any(), eq(false)) }
     }
 
-    /** Sends one message while `isTeleported()` answers [answers] in turn, then checks what was done. */
-    private fun send(vararg answers: Boolean, check: (Run) -> Unit) = runTest {
+    @Test
+    fun theLocalEchoIsShownBeforeThePresenceIsAsked() {
+        var echoShownWhenAsked: Boolean? = null
+        send(false, false, onAsked = { repo ->
+            if (echoShownWhenAsked == null) {
+                echoShownWhenAsked = repo.getGeohashMessages(geohash).any { it.content == "hello" }
+            }
+        }) { run ->
+            coVerify(exactly = 2) { run.location.isTeleportedIn(geohash) }
+        }
+        assertEquals(true, echoShownWhenAsked)
+    }
+
+    /** Sends one message while `isTeleportedIn(geohash)` answers [answers] in turn, then checks what was done. */
+    private fun send(vararg answers: Boolean, onAsked: suspend (ChatRepo) -> Unit = {}, check: (Run) -> Unit) = runTest {
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val location = mockk<LocationRepository>(relaxed = true)
-        coEvery { location.isTeleported() } returnsMany answers.toList()
+        val remaining = answers.toMutableList()
+        var sending: ChatRepo? = null
+        coEvery { location.isTeleportedIn(any()) } coAnswers {
+            onAsked(requireNotNull(sending))
+            remaining.removeFirst()
+        }
         val tracker = mockk<NostrParticipantTracker>(relaxed = true)
         val relay = mockk<NostrRelay>(relaxed = true)
         every { relay.getRelaysForGeohash(any()) } returns listOf("wss://relay.example")
@@ -116,6 +135,7 @@ class ChatRepoGeohashTeleportTest {
                 },
             )
 
+            sending = repo
             repo.sendMessage("hello", Channel.Location(GeohashChannelLevel.CITY, geohash), "me", BitchatMessageType.Message)
 
             check(Run(client!!, relay, tracker, location, created))

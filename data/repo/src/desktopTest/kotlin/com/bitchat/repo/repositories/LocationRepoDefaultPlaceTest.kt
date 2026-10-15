@@ -141,40 +141,6 @@ class LocationRepoDefaultPlaceTest {
     }
 
     @Test
-    fun clearingDataForgetsTheDefault() = withRepo { repo, service, _ ->
-        coEvery { service.getCurrentLocation() } throws LocationUnavailableException(LocationUnavailableException.Reason.NO_SOURCE)
-        repo.getAvailableGeohashChannels()
-        assertTrue(repo.isTeleported())
-
-        repo.clearData()
-
-        assertFalse(repo.isTeleported())
-    }
-
-    @Test
-    fun withoutARealFixTheDeviceIsTeleportedWhateverRegistrationSays() = withRepo { repo, service, _ ->
-        coEvery { service.getCurrentLocation() } throws LocationUnavailableException(LocationUnavailableException.Reason.NO_SOURCE)
-        repo.getAvailableGeohashChannels()
-
-        repo.registerSelfAsParticipant("9q8yy", "nick", isTeleported = false)
-
-        assertTrue(repo.isTeleported())
-        coVerify { tracker.updateParticipant(eq("9q8yy"), any(), eq("nick"), any(), eq(true)) }
-    }
-
-    @Test
-    fun withoutPermissionTheDeviceIsTeleportedBeforeAnyChannelWasLoaded() = withRepo { repo, service, _ ->
-        coEvery { service.hasLocationPermission() } returns false
-
-        assertTrue(repo.isTeleported())
-        repo.registerSelfAsParticipant("9q8yy", "nick", isTeleported = false)
-
-        assertTrue(repo.isTeleported())
-        coVerify { tracker.updateParticipant(eq("9q8yy"), any(), eq("nick"), any(), eq(true)) }
-        coVerify(exactly = 0) { service.getCurrentLocation() }
-    }
-
-    @Test
     fun withAPermissionAndARealFixTheDeviceIsPresentedAsToldAtRegistration() = withRepo { repo, service, _ ->
         coEvery { service.getCurrentLocation() } returns GeoPoint(52.52, 13.405)
         repo.getAvailableGeohashChannels()
@@ -186,22 +152,6 @@ class LocationRepoDefaultPlaceTest {
         repo.registerSelfAsParticipant("9q8yy", "nick", isTeleported = true)
         assertTrue(repo.isTeleported())
         coVerify { tracker.updateParticipant(eq("9q8yy"), any(), eq("nick"), any(), eq(true)) }
-    }
-
-    @Test
-    fun aRealFixAfterTheDefaultPlaceLetsTheNextRegistrationBeNotTeleported() = withRepo { repo, service, _ ->
-        coEvery { service.getCurrentLocation() } throws LocationUnavailableException(LocationUnavailableException.Reason.LOOKUP_FAILED)
-        repo.getAvailableGeohashChannels()
-        repo.registerSelfAsParticipant("9q8yy", "nick", isTeleported = false)
-        coEvery { service.getCurrentLocation() } returns GeoPoint(52.52, 13.405)
-        repo.getAvailableGeohashChannels()
-        // What was registered while the device could not be there stays until the next registration.
-        assertTrue(repo.isTeleported())
-
-        repo.registerSelfAsParticipant("u33db", "nick", isTeleported = false)
-
-        assertFalse(repo.isTeleported())
-        coVerify { tracker.updateParticipant(eq("u33db"), any(), eq("nick"), any(), eq(false)) }
     }
 
     @Test
@@ -303,33 +253,6 @@ class LocationRepoDefaultPlaceTest {
             val repo = locationRepo(mockk(relaxed = true), geocoder, scope, dispatcher, preferences)
 
             assertFailsWith<CancellationException> { repo.getAvailableGeohashChannels() }
-        } finally {
-            scope.cancel()
-        }
-    }
-
-    @Test
-    fun `clearing the place leaves the device unable to be there until a real fix`() = runTest {
-        val dispatcher = UnconfinedTestDispatcher(testScheduler)
-        val scope = CoroutineScope(SupervisorJob() + dispatcher)
-        var storedPlace: String? = "9q8yy"
-        val service = mockk<LocationService>(relaxed = true)
-        val preferences = mockk<GeohashPreferences>(relaxed = true)
-        every { preferences.getSavedPlace() } answers { storedPlace }
-        every { preferences.clearSavedPlace() } answers { storedPlace = null }
-        coEvery { service.hasLocationPermission() } returns true
-        coEvery { service.getCurrentLocation() } returns GeoPoint(37.77, -122.42)
-        coEvery { service.lastFixInfo() } returns null
-        try {
-            val repo = locationRepo(service, mockk(relaxed = true), scope, dispatcher, preferences)
-            repo.getAvailableGeohashChannels()
-            assertFalse(repo.isTeleported())
-
-            repo.clearSavedPlace()
-            assertTrue(repo.isTeleported())
-
-            repo.getAvailableGeohashChannels()
-            assertFalse(repo.isTeleported())
         } finally {
             scope.cancel()
         }

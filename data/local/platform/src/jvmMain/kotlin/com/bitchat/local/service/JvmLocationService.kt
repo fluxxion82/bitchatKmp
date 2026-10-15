@@ -2,6 +2,7 @@ package com.bitchat.local.service
 
 import com.bitchat.domain.location.model.GeoPoint
 import com.bitchat.domain.location.model.LocationFixInfo
+import com.bitchat.domain.location.model.ObservedFix
 import com.bitchat.domain.location.model.LocationUnavailableException
 import com.bitchat.domain.tor.RequestedTorIntent
 import com.bitchat.local.bridge.NativeLocationBridge
@@ -51,6 +52,8 @@ class JvmLocationService(
     }
 
     override suspend fun lastFixInfo(): LocationFixInfo? = source.lastFixInfo()
+
+    override suspend fun presenceFix(): ObservedFix? = source.keptFix()
 
     override suspend fun clearCachedLocation() = source.clear()
 }

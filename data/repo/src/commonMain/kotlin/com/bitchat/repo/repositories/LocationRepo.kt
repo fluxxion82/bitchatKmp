@@ -29,6 +29,7 @@ import com.bitchat.nostr.model.NostrFilter
 import com.bitchat.nostr.participant.NostrParticipantTracker
 import com.bitchat.nostr.util.GeohashUtils
 import com.bitchat.repo.location.resolveBookmarkName
+import com.bitchat.repo.location.isPresent
 import com.bitchat.repo.mappers.toDomain
 import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.locks.SynchronizedObject
@@ -37,7 +38,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.concurrent.Volatile
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
@@ -56,6 +57,8 @@ class LocationRepo(
     private val locationEventBus: LocationEventBus,
 ) : LocationRepository {
     private var isTeleported: Boolean = false
+    private val explicitTeleports = LinkedHashSet<String>()
+    private val explicitTeleportLock = SynchronizedObject()
     private val locationNames = mutableMapOf<GeohashChannelLevel, String>()
     private val locationNamesLock = SynchronizedObject()
     private var lastFix: GeoPoint? = null
@@ -67,10 +70,6 @@ class LocationRepo(
     private inline fun ifCurrent(generation: Long, write: () -> Unit) = synchronized(placeLock) {
         if (generation == locationGeneration.value) write()
     }
-
-    /** Why the last call fell back to [DEFAULT_PLACE], or null while there is a real fix. */
-    @Volatile
-    private var defaultPlaceReason: LocationUnavailableException.Reason? = null
 
     /** The five-second poll's "no location fix" line, let through once per reason and ten minutes. */
     private val noFixLog = RepeatedLogLimiter(intervalMillis = 10 * 60_000L)
@@ -182,28 +181,28 @@ class LocationRepo(
     override suspend fun getSavedPlace(): SavedPlace? = withContext(coroutinesContextFacade.io) { savedPlace() }
 
     override suspend fun setSavedPlace(place: SavedPlace) = withContext(coroutinesContextFacade.io) {
-        geohashPreferences.saveSavedPlace(place.geohash)
-        forgetPlace()
+        synchronized(placeLock) {
+            geohashPreferences.saveSavedPlace(place.geohash)
+            forgetPlaceLocked()
+        }
     }
 
     override suspend fun clearSavedPlace() = withContext(coroutinesContextFacade.io) {
-        geohashPreferences.clearSavedPlace()
-        // The place was the only claim to be there.
-        forgetPlace(noFix = true)
+        synchronized(placeLock) {
+            geohashPreferences.clearSavedPlace()
+            forgetPlaceLocked()
+        }
     }
 
-    /**
-     * The names and fix of the place listed before belong to it, not to what comes next. With [noFix]
-     * nothing stands for a fix until a load finds one, so the device does not count as there.
-     */
-    private fun forgetPlace(noFix: Boolean = false) = synchronized(placeLock) {
+    private fun forgetPlace() = synchronized(placeLock) { forgetPlaceLocked() }
+
+    private fun forgetPlaceLocked() {
         locationGeneration.incrementAndGet()
         synchronized(locationNamesLock) {
             locationNames.clear()
             lastFix = null
             lastResolvedGeohash = null
         }
-        if (noFix) defaultPlaceReason = LocationUnavailableException.Reason.NO_SOURCE
     }
 
     override suspend fun getAvailableGeohashChannels(): NearbyChannels = withContext(coroutinesContextFacade.io) {
@@ -217,7 +216,6 @@ class LocationRepo(
                     val point = GeoPoint(fix.first, fix.second)
                     ifCurrent(generation) {
                         lastFix = point
-                        defaultPlaceReason = null
                     }
                     resolveLocationNamesForFix(point, generation)
                 }
@@ -235,20 +233,14 @@ class LocationRepo(
                     LocationFixInfo(LocationFixInfo.Source.MANUAL, ageMillis = 0)
                 )
             }
-            // This call's own outcome, in locals: defaultPlaceReason is shared with other calls.
+            // This call's own outcome stays local while the sheet uses its fallback place.
             val (fix, fixInfo) = try {
                 val real = locationService.getCurrentLocation()
-                ifCurrent(generation) {
-                    defaultPlaceReason = null
-                }
                 real to locationService.lastFixInfo()
             } catch (e: LocationUnavailableException) {
                 // The sheet polls every five seconds, so no stack trace and a rate-limited line.
                 noFixLog.next("no location fix: ${e.reason.message}; using the default place")
                     ?.let { logNostrDebug("LocationRepo", it) }
-                ifCurrent(generation) {
-                    defaultPlaceReason = e.reason
-                }
                 DEFAULT_PLACE to LocationFixInfo(
                     LocationFixInfo.Source.DEFAULT,
                     ageMillis = 0,
@@ -401,10 +393,17 @@ class LocationRepo(
         nickname: String,
         isTeleported: Boolean
     ) = withContext(coroutinesContextFacade.io) {
-        val teleported = isTeleported || cannotBeThere()
-        this@LocationRepo.isTeleported = teleported
+        val normalized = SavedPlace.of(geohash)?.geohash
+        synchronized(explicitTeleportLock) {
+            this@LocationRepo.isTeleported = isTeleported
+            if (isTeleported && normalized != null && explicitTeleports.add(normalized)) {
+                while (explicitTeleports.size > MAX_EXPLICIT_TELEPORTS) {
+                    explicitTeleports.remove(explicitTeleports.first())
+                }
+            }
+        }
         participantTracker.setCurrentGeohash(geohash)
-        addSelfAsParticipant(geohash, teleported, nickname)
+        addSelfAsParticipant(geohash, isTeleported, nickname)
         locationEventBus.update(com.bitchat.domain.location.model.LocationEvent.ParticipantsChanged)
     }
 
@@ -414,15 +413,40 @@ class LocationRepo(
     }
 
     override suspend fun isTeleported(): Boolean = withContext(coroutinesContextFacade.io) {
-        isTeleported || cannotBeThere()
+        synchronized(explicitTeleportLock) { isTeleported }
     }
 
-    /**
-     * The device may be shown as in a location channel only if nothing says otherwise. Asks no
-     * lookup and no permission: the default place in use, or no permission, means no real fix.
-     */
-    private suspend fun cannotBeThere(): Boolean =
-        savedPlace() == null && (defaultPlaceReason != null || !locationService.hasLocationPermission())
+    override suspend fun isTeleportedIn(geohash: String): Boolean = withContext(coroutinesContextFacade.io) {
+        val normalized = SavedPlace.of(geohash)?.geohash
+        if (normalized != null && synchronized(explicitTeleportLock) { normalized in explicitTeleports }) {
+            return@withContext true
+        }
+
+        val snapshot = synchronized(placeLock) {
+            PresenceSnapshot(
+                generation = locationGeneration.value,
+                servicesEnabled = geohashPreferences.getLocationServicesEnabled(),
+                savedPlace = savedPlace(),
+            )
+        }
+        if (!snapshot.servicesEnabled) return@withContext true
+        val present = snapshot.savedPlace?.let { isPresent(geohash, it, null) } ?: run {
+            val fix = try {
+                withTimeoutOrNull(PRESENCE_READ_LIMIT) { locationService.presenceFix() }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (_: Exception) {
+                return@withContext true
+            }
+            isPresent(geohash, null, fix)
+        }
+        if (!present) return@withContext true
+        // A change of place or of the services switch during this check withdraws its evidence.
+        if (synchronized(placeLock) { locationGeneration.value != snapshot.generation }) {
+            return@withContext true
+        }
+        normalized != null && synchronized(explicitTeleportLock) { normalized in explicitTeleports }
+    }
 
     private fun savedPlace(): SavedPlace? = geohashPreferences.getSavedPlace()?.let(SavedPlace::of)
 
@@ -476,9 +500,11 @@ class LocationRepo(
     }
 
     override suspend fun toggleLocationServices() = withContext(coroutinesContextFacade.io) {
-        val isEnabled = geohashPreferences.getLocationServicesEnabled()
-        geohashPreferences.saveLocationServicesEnabled(!isEnabled)
-        synchronized(placeLock) { locationGeneration.incrementAndGet() }
+        synchronized(placeLock) {
+            val isEnabled = geohashPreferences.getLocationServicesEnabled()
+            geohashPreferences.saveLocationServicesEnabled(!isEnabled)
+            locationGeneration.incrementAndGet()
+        }
         Unit
     }
 
@@ -576,12 +602,15 @@ class LocationRepo(
 
     override suspend fun clearData() = withContext(coroutinesContextFacade.io) {
         bookmarkPrefs.clearAllBookmarks()
-        geohashPreferences.clearSavedPlace()
-        geohashPreferences.saveLocationServicesEnabled(false)
-        // After the stored place is gone: a load that read it before can write nothing back.
-        forgetPlace()
-        isTeleported = false
-        defaultPlaceReason = null
+        synchronized(placeLock) {
+            geohashPreferences.clearSavedPlace()
+            geohashPreferences.saveLocationServicesEnabled(false)
+            forgetPlaceLocked()
+        }
+        synchronized(explicitTeleportLock) {
+            isTeleported = false
+            explicitTeleports.clear()
+        }
         synchronized(samplingLock) {
             samplingSubscriptions.clear()
             sampledGeohashes.clear()
@@ -594,5 +623,16 @@ class LocationRepo(
          * everything. Desktop persists them; other platforms default this to a no-op.
          */
         locationService.clearCachedLocation()
+    }
+
+    private data class PresenceSnapshot(
+        val generation: Long,
+        val servicesEnabled: Boolean,
+        val savedPlace: SavedPlace?,
+    )
+
+    private companion object {
+        const val MAX_EXPLICIT_TELEPORTS = 256
+        val PRESENCE_READ_LIMIT = 3.seconds
     }
 }

@@ -8,13 +8,19 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
+import android.os.CancellationSignal
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.bitchat.domain.location.model.GeoPoint
+import com.bitchat.domain.location.model.LocationFixInfo
+import com.bitchat.domain.location.model.ObservedFix
 import com.bitchat.domain.location.model.LocationUnavailableException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 class AndroidLocationService(
     private val context: Context,
@@ -200,7 +206,80 @@ class AndroidLocationService(
         // Android handles permission requests via system dialogs - no-op here
     }
 
+    @SuppressLint("MissingPermission")
+    override suspend fun presenceFix(): ObservedFix? {
+        if (!hasLocationPermission()) return null
+
+        getLastKnownPresenceLocation()?.let(::observedDeviceFix)?.let { return it }
+
+        val enabled = locationManager.getProviders(true)
+        val provider = listOf(
+            LocationManager.GPS_PROVIDER,
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.PASSIVE_PROVIDER,
+        ).firstOrNull { it in enabled } ?: return null
+        return requestPresenceLocation(provider)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun getLastKnownPresenceLocation(): Location? {
+        var newest: Location? = null
+        for (provider in locationManager.getProviders(true)) {
+            try {
+                locationManager.getLastKnownLocation(provider)?.let { location ->
+                    val latest = newest
+                    if (latest == null || location.elapsedRealtimeNanos > latest.elapsedRealtimeNanos) {
+                        newest = location
+                    }
+                }
+            } catch (_: SecurityException) {
+                return null
+            }
+        }
+        return newest
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun requestPresenceLocation(provider: String): ObservedFix? = suspendCancellableCoroutine { continuation ->
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val signal = CancellationSignal()
+                continuation.invokeOnCancellation { signal.cancel() }
+                locationManager.getCurrentLocation(provider, signal, context.mainExecutor) { location ->
+                    continuation.resume(location?.let(::observedDeviceFix))
+                }
+            } else {
+                val listener = object : LocationListener {
+                    override fun onLocationChanged(location: Location) {
+                        locationManager.removeUpdates(this)
+                        continuation.resume(observedDeviceFix(location))
+                    }
+
+                    @Deprecated("Deprecated in Java")
+                    override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) = Unit
+                    override fun onProviderEnabled(provider: String) = Unit
+                    override fun onProviderDisabled(provider: String) = Unit
+                }
+                continuation.invokeOnCancellation { locationManager.removeUpdates(listener) }
+                locationManager.requestSingleUpdate(provider, listener, null)
+            }
+        } catch (_: SecurityException) {
+            continuation.resume(null)
+        } catch (_: IllegalArgumentException) {
+            continuation.resume(null)
+        }
+    }
+
+    // Aged by the time since boot the fix carries: the OS can answer any request with a cached fix.
+    private fun observedDeviceFix(location: Location): ObservedFix? {
+        val ageMillis = (SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos) / NANOS_PER_MILLISECOND
+        if (ageMillis !in 0..PRESENCE_MAX_AGE_MS) return null
+        return ObservedFix(GeoPoint(location.latitude, location.longitude), LocationFixInfo.Source.DEVICE, ageMillis)
+    }
+
     companion object {
         private const val TAG = "AndroidLocationService"
+        private const val PRESENCE_MAX_AGE_MS = 60 * 60 * 1000L
+        private const val NANOS_PER_MILLISECOND = 1_000_000L
     }
 }

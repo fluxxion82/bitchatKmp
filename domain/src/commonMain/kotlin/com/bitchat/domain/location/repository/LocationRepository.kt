@@ -32,6 +32,7 @@ interface LocationRepository {
     suspend fun registerSelfAsParticipant(geohash: String, nickname: String, isTeleported: Boolean)
     suspend fun unregisterSelfFromCurrentGeohash()
     suspend fun isTeleported(): Boolean
+    suspend fun isTeleportedIn(geohash: String): Boolean
 
     suspend fun toggleLocationServices()
     suspend fun isLocationServicesEnabled(): Boolean

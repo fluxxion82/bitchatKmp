@@ -156,4 +156,19 @@ class IpLocationServiceTest {
         preferences.storedPlace = null
         assertFalse(preferences.placeSaved())
     }
+
+    @Test
+    fun `presence uses the fix this run looked up and never looks up itself`() = runTest {
+        var asked = 0
+        val service = service { _, _ -> asked++; answer }
+
+        kotlin.test.assertNull(service.presenceFix())
+        assertEquals(0, asked)
+
+        service.getCurrentLocation()
+        val kept = service.presenceFix()
+        assertEquals(LocationFixInfo.Source.IP_ADDRESS, kept?.source)
+        assertEquals(37.7749, kept?.point?.lat)
+        assertEquals(1, asked)
+    }
 }
