@@ -5,13 +5,14 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-14 by local-claude (D30 pushed; D31 and D32 decided).
+Updated 2026-10-15 by cloud-claude (D31 and D32 pushed).
 
 ## In flight
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | `fd93095`. Since `6aefc15`: three commits of the owner's side (`c2866a4` a board's city from its public address, `7006a10` Curl transfers, `845c44c` a saved place as this device's location), then D30: `e5c13ce` (`ObserveUserState`, `ObserveFavorites`), `fd93095` (`MainViewModel` uses them) | Pushed 2026-10-14 | cloud-claude: start D32 from here |
+| `main` | `fd93095`. Since `6aefc15`: three commits of the owner's side (`c2866a4` a board's city from its public address, `7006a10` Curl transfers, `845c44c` a saved place as this device's location), then D30: `e5c13ce` (`ObserveUserState`, `ObserveFavorites`), `fd93095` (`MainViewModel` uses them) | Pushed 2026-10-14 | |
+| `claude/wipe-events-and-chat-state` | D31 (`651f462`): the wipe publishes `NicknameUpdated` and `FavoritesCleared`. D32 (`7327b2d`): `ObserveUserStateOnChannelChange`. Two commits on `fd93095` | Pushed 2026-10-15 at `7327b2d` | local agents: the `LoRaAppInitializer` line, build and review, then switch `ChatViewModel` |
 
 ## D30, as landed
 
@@ -36,23 +37,8 @@ Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **cloud-claude: the next slice is decided (D31, D32).** Fetch `main` at `fd93095`. Read `reference/2026-10-14-local-review-d30.md` and the new line under Observers and events in `CONVENTIONS.md`. Put the plan in `LOG.md` first. One branch, two commits, in this order.
-
-   **1. The wipe publishes what it changes (D31).**
-   - Add `data object FavoritesCleared : UserEvent()`.
-   - In `ClearAllData`, right after `userRepository.clearData()` and inside `chatNotices.reset { }`, publish `UserEvent.NicknameUpdated` and `UserEvent.FavoritesCleared`. That is where `ThemeUpdated` follows `appRepository.clearData()`, and for the same reason.
-   - `ObserveFavorites` reads again on `FavoritesCleared` as well.
-   - Find every `when` over `UserEvent` in every layer. `LoRaAppInitializer` in `data:repo` matches it exhaustively and needs one line, `UserEvent.FavoritesCleared -> Unit`. You cannot build `data:repo`: name each such line in `LOG.md`, and a local agent builds it.
-   - Tests, in the shape of D27's theme tests in `ClearAllDataTest`. A real `ObserveUserNickname` and a real `ObserveFavorites` over a real `InMemoryUserEventBus` show the new nickname and the empty favourites after a wipe, also when a store cleared after the user store throws. Each test fails without its publish. Add a test in `ObserveFavoritesTest` for the new event.
-
-   **2. The domain half of `ChatViewModel` off `ChatEventBus` (D32).**
-   - `ChatViewModel` collects `ChatEventBus` itself. On start and on every `ChatEvent.ChannelChanged` it reads `GetUserState` and sets its current channel from the result.
-   - First, in the plan: every writer of what that read depends on (the saved user state and the active channel: `SaveUserStateAction`, `JoinChannel`, `ChatRepo`, and the rest) and whether each publishes `ChannelChanged`, as you did for D30.
-   - Then one use case that emits what `GetUserState` returns, on start and on every `ChannelChanged`. It takes `GetUserState` and `ChatEventBus`. Propose its name in the plan: an `Observe` name, after the model it gives.
-   - It subscribes before its first read, like `ObserveUserState`. It keeps every event: the comment in `ChatViewModel` explains why repeats matter. No `distinctUntilChanged`.
-   - Its line in `domainModule`. Tests in the shape of `ObserveUserStateTest`, including the event published during the first read.
-
-   **Not in this branch:** `ChatViewModel` itself and the Konsist rule for view models. Local agents do both afterwards.
+1. **Local agents: on `claude/wipe-events-and-chat-state` (`7327b2d`), add `UserEvent.FavoritesCleared -> Unit` to the exhaustive `when` in `data/repo/.../di/LoRaAppInitializer.kt:63`, which cloud-claude cannot build. Then build and review, and switch `ChatViewModel` to `ObserveUserStateOnChannelChange`** as D32 says. The writers, G1 and G2, and the name proposal are in `LOG.md` (2026-10-15, plan); what was built and run is in the entry after it.
+2. **Owner:** the use case's name (`ObserveUserStateOnChannelChange`, or `ObserveChatUserState`), and G1 if the local switch shows `ChatViewModel` should also follow `StateChanged`.
 
 ## Open questions
 

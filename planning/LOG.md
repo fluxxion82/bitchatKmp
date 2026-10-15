@@ -439,3 +439,36 @@ Findings, reported and not fixed:
 - Mutations: the branch dropped, a re-read on every event, `distinctUntilChanged` added, no read on start, and the read made before the subscription. That last one is the old shape, and the during-the-first-read test must catch it.
 
 **Not in this branch:** `ChatViewModel`, `LoRaAppInitializer` and the Konsist rule for view models.
+
+## 2026-10-15, cloud-claude (D31 and D32 pushed)
+
+- Did: the plan above, as written.
+- Pushed: `claude/wipe-events-and-chat-state` at `7327b2d`, two commits on `fd93095`:
+  - `651f462` (D31):
+    - `UserEvent.FavoritesCleared`.
+    - `ClearAllData` publishes `NicknameUpdated` and `FavoritesCleared` right after `userRepository.clearData()`, inside the barrier, with a one-line comment like the theme's.
+    - `ObserveFavorites` reads again on `FavoritesCleared`.
+    - Tests: four in `ClearAllDataTest` (nickname and favourites, after a wipe and after a wipe whose app store throws) and one in `ObserveFavoritesTest`. `wipe()` takes the user store and the user bus as parameters now; the other tests are unchanged.
+  - `7327b2d` (D32):
+    - `chat/ObserveUserStateOnChannelChange.kt`, in the subscribe-first shape of `ObserveUserState`. The comment on keeping repeats is moved from `ChatViewModel`.
+    - Its `single` in `domainModule`.
+    - `ObserveUserStateOnChannelChangeTest`, 8 tests.
+- **Not built, needs a local edit:** `data/repo/.../di/LoRaAppInitializer.kt:63` matches `UserEvent` exhaustively. Without `UserEvent.FavoritesCleared -> Unit`, `:data:repo` does not compile on this branch. Every other `when` over `UserEvent` has an `else` (table in the plan).
+- Texts: none changed. Behaviour: after a wipe, the header's nickname and the sidebar's favourites follow it (D31). Nothing uses the D32 use case until the local switch.
+- Built and ran:
+  - Every run used the stand-alone `:domain` build (`scratchpad/domain-build`). It includes the repository's own `domain/` with the Kotlin Multiplatform plugin and no Android plugin, and has no build cache.
+  - The full `:domain:jvmTest` (task line `> Task :domain:jvmTest`, 0 failures):
+    - at `651f462`: 206 tests;
+    - at `7327b2d`: 214 tests, the five Konsist rules included.
+    - That puts `fd93095` at 201, counted from the tests added.
+  - Mutations, ten in all. Each was applied alone, the class was run with `--tests`, the task line read `> Task :domain:jvmTest`, and the file was restored. Every one failed at least one test:
+    - `ClearAllData`: no `NicknameUpdated`; no `FavoritesCleared`; both moved after the app store; both moved after the barrier. The last two fail only the tests whose app store throws.
+    - `ObserveFavorites`: `FavoritesCleared` not matched.
+    - `ObserveUserStateOnChannelChange`:
+      - `ChannelChanged` not matched;
+      - a re-read on every event;
+      - `distinctUntilChanged` added;
+      - no read on start;
+      - the read made before the subscription. That is the old shape, and only the during-the-first-read test catches it.
+- Not built: `:data:repo` (see above), `:presentation:viewmodel` and every app.
+- Needs: the `LoRaAppInitializer` line, a local build and review, then the `ChatViewModel` switch and its Konsist rule. The owner's word on the name.
