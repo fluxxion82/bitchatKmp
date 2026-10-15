@@ -68,6 +68,10 @@ internal fun chatRepo(
     relay: NostrRelay? = null,
     // Whether this device may be shown as where its channel is; false, so nothing is marked teleported.
     locationRepository: LocationRepository = mockk<LocationRepository>(relaxed = true).also { coEvery { it.isTeleported() } returns false },
+    connectEventBus: ConnectionEventBus = mockk<ConnectionEventBus>(relaxed = true).also {
+        coEvery { it.getBluetoothConnectionEvent() } returns flowOf(BluetoothConnectionEvent.DISCONNECTED)
+    },
+    appRepository: AppRepository = mockk<AppRepository>(relaxed = true).also { coEvery { it.hasRequiredPermissions() } returns false },
 ): ChatRepo {
     val contextFacade = object : CoroutinesContextFacade {
         override val io: CoroutineContext = dispatcher
@@ -105,10 +109,6 @@ internal fun chatRepo(
             subscription.id
         }
     }
-    val connectEventBus = mockk<ConnectionEventBus>(relaxed = true).also {
-        coEvery { it.getBluetoothConnectionEvent() } returns flowOf(BluetoothConnectionEvent.DISCONNECTED)
-    }
-
     return ChatRepo(
         coroutineScopeFacade = scopeFacade,
         coroutinesContextFacade = contextFacade,
@@ -132,9 +132,7 @@ internal fun chatRepo(
         locationRepository = locationRepository,
         chatEventBus = chatEventBus,
         userRepository = userRepository,
-        appRepository = mockk<AppRepository>(relaxed = true).also {
-            coEvery { it.hasRequiredPermissions() } returns false
-        },
+        appRepository = appRepository,
         userEventBus = userEventBus,
         connectEventBus = connectEventBus,
         lora = lora,

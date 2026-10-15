@@ -258,7 +258,9 @@ class ChatRepo(
 
         coroutineScopeFacade.applicationScope.launch {
             combine(
+                // combine keeps the latest event; any other kind would leave later Bluetooth changes undecided.
                 userEventBus.events()
+                    .filter { it == UserEvent.StateChanged || it is UserEvent.LoginChanged }
                     .onStart { emit(UserEvent.StateChanged) },
                 connectEventBus.getBluetoothConnectionEvent()
                     .onStart { emit(connectEventBus.getBluetoothConnectionEvent().first()) }
