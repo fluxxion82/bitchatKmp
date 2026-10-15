@@ -499,3 +499,4 @@ Findings, reported and not fixed:
     - a non-chat state giving the mesh;
     - another blocking state giving the mesh.
 - Not built: as before, `:data:repo` (the `LoRaAppInitializer` line), `:presentation:viewmodel` and the apps.
+- Also run: `main` moved to `2cfc52e` (six commits; in the domain, only `location/model/ObservedFix.kt` and `LocationRepository.kt`). The branch merges with it without a conflict. On a scratch merge of `2cfc52e` and `f84bbc9`, `:domain:jvmTest` ran 216 tests, 0 failures.
