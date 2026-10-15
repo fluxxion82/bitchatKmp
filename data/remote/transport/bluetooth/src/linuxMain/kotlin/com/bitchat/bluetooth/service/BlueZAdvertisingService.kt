@@ -3,11 +3,16 @@ package com.bitchat.bluetooth.service
 import cnames.structs.DBusConnection
 import cnames.structs.DBusMessage
 import cnames.structs.DBusPendingCall
+import com.bitchat.bluetooth.manager.AdvertisementRegistration
 import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
 import dbus.*
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
 import kotlinx.cinterop.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import platform.posix.CLOCK_MONOTONIC
 import platform.posix.clock_gettime
 import platform.posix.getenv
@@ -43,35 +48,30 @@ class BlueZAdvertisingService(
         private const val DEFAULT_SERVICE_UUID = "F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C"
 
         /**
-         * How long we wait for RegisterAdvertisement, both as the libdbus timeout on the pending
-         * call and as our own deadline.
+         * How long start-up waits for BlueZ's answer to RegisterAdvertisement before it goes on.
          *
-         * Five seconds, not thirty: startServices() runs advertising, the GATT server, scanning and
-         * the announce one after another in a single launch, so anything spent here delays all of
-         * them. The reply now arrives in roughly the time RegisterApplication takes -- a couple of
-         * hundred milliseconds -- so this is a bound on failure, not a budget.
+         * startServices() runs advertising, the GATT server, scanning and the announce one after
+         * another, so anything spent here delays all of them. BlueZ usually answers in under a
+         * tenth of a second. When it does not, the request stands and the dispatch loop takes the
+         * answer whenever it comes: BlueZ answers only once the kernel has added the instance, and
+         * a connect pending in the kernel holds that back for about 21 s.
          */
-        private const val REGISTER_TIMEOUT_MS = 5_000L
+        private const val START_WAIT_MS = 5_000L
 
-        /** Poll interval while waiting for the pending call. 5 ms costs ~40 wakeups on success. */
+        /** Poll interval while start-up waits. 5 ms costs ~40 wakeups on success. */
         private const val REGISTER_POLL_INTERVAL_US = 5_000u
     }
 
-    /**
-     * How far the advertisement got with LEAdvertisingManager1.
-     *
-     * A single boolean cannot say what shutdown needs to know. RegisterAdvertisement is the one
-     * call where BlueZ calls back into us -- it reads LEAdvertisement1's properties over GetAll --
-     * before it replies, so a reply we never see tells us nothing about whether BlueZ went on to
-     * register the instance. It usually did. [UNKNOWN] is that case, and it has to be torn down
-     * exactly like [REGISTERED] or the instance stays registered for the life of the connection.
-     */
-    private enum class Registration { NONE, REGISTERED, UNKNOWN }
-
+    private val lifecycle = Mutex()
     private var dbusConnection: CPointer<DBusConnection>? = null
     private var isCurrentlyAdvertising = false
-    private var registration = Registration.NONE
-    private var usingLegacyDiscoverable = false
+
+    // The RegisterAdvertisement request BlueZ has not answered yet, and what its answers mean.
+    // Start-up, stop and the dispatch loop all use them, only under the lock.
+    private val registrationLock = SynchronizedObject()
+    private var pendingRegistration: CPointer<DBusPendingCall>? = null
+    private val registration = AdvertisementRegistration()
+
     private var currentServiceUuid: String = DEFAULT_SERVICE_UUID
     private var currentDeviceName: String = "bitchat"
     private var dispatchWorker: Worker? = null
@@ -83,7 +83,13 @@ class BlueZAdvertisingService(
     private var filterConnection: CPointer<DBusConnection>? = null
     private var objectPathConnection: CPointer<DBusConnection>? = null
 
-    override suspend fun startAdvertising(serviceUuid: String, deviceName: String) {
+    // One at a time: the mesh service launches start and stop as separate coroutines.
+    override suspend fun startAdvertising(serviceUuid: String, deviceName: String) =
+        lifecycle.withLock { start(serviceUuid, deviceName) }
+
+    override suspend fun stopAdvertising() = lifecycle.withLock { stop() }
+
+    private fun start(serviceUuid: String, deviceName: String) {
         if (isCurrentlyAdvertising) {
             logDebug(TAG, "Already advertising")
             return
@@ -115,26 +121,33 @@ class BlueZAdvertisingService(
             logError(TAG, "Failed to initialize D-Bus connection")
             return
         }
+        val connection = dbusConnection ?: return
 
         // Start the dispatch loop first and leave it running: it owns the socket, so it is what
         // writes RegisterAdvertisement out, answers the GetAll BlueZ makes before replying, and
-        // completes the pending call. registerAdvertisement() only waits.
-        startDbusDispatchLoop()
+        // takes the answer.
+        if (!startDbusDispatchLoop()) {
+            logError(TAG, "Failed to register advertisement: its object could not be exported")
+            return
+        }
 
-        if (!registerAdvertisement()) {
-            logError(TAG, "Failed to register advertisement")
-            // Give back anything the attempt may have taken -- BlueZ can have registered the
-            // instance even when we never saw the reply.
-            unregisterAdvertisement()
+        val sent = synchronized(registrationLock) {
+            val call = sendRegisterAdvertisement(connection) ?: return@synchronized false
+            pendingRegistration = call
+            registration.asked(monotonicMillis())
+            true
+        }
+        if (!sent) {
+            logError(TAG, "Failed to register advertisement: RegisterAdvertisement could not be sent")
             stopDbusDispatchLoop()
             return
         }
 
         isCurrentlyAdvertising = true
-        logInfo(TAG, "Advertising started")
+        awaitRegistration()
     }
 
-    override suspend fun stopAdvertising() {
+    private fun stop() {
         if (!isCurrentlyAdvertising) {
             return
         }
@@ -149,7 +162,7 @@ class BlueZAdvertisingService(
         logInfo(TAG, "Advertising stopped")
     }
 
-    override fun isAdvertising(): Boolean = isCurrentlyAdvertising
+    override fun isAdvertising(): Boolean = synchronized(registrationLock) { registration.isRegistered }
 
     private fun initDbusConnection(): Boolean {
         if (dbusConnection != null) {
@@ -189,150 +202,110 @@ class BlueZAdvertisingService(
         }
     }
 
-    private fun registerAdvertisement(): Boolean {
-        val connection = dbusConnection ?: return false
+    /**
+     * Send RegisterAdvertisement and return the pending call, or null when it could not be sent.
+     *
+     * Non-blocking: bluetoothd reads our object's properties over GetAll before it answers, and
+     * only the dispatch worker can write that answer out. No timeout of libdbus's own either: the
+     * answer is BlueZ's to give, however long the kernel keeps it waiting.
+     */
+    private fun sendRegisterAdvertisement(connection: CPointer<DBusConnection>): CPointer<DBusPendingCall>? = memScoped {
+        val message = dbus_message_new_method_call(
+            BLUEZ_SERVICE,
+            ADAPTER_PATH,
+            LE_ADVERTISING_MANAGER_IFACE,
+            "RegisterAdvertisement"
+        ) ?: return@memScoped null
 
-        logDebug(TAG, "Registering BLE advertisement...")
+        // Arguments: object path (D-Bus wants a pointer to the string pointer), empty options dict.
+        val iter = alloc<DBusMessageIter>()
+        dbus_message_iter_init_append(message, iter.ptr)
+        val advPath = alloc<CPointerVar<ByteVar>>()
+        advPath.value = ADVERTISEMENT_PATH.cstr.ptr
+        dbus_message_iter_append_basic(iter.ptr, DBUS_TYPE_OBJECT_PATH.toInt(), advPath.ptr)
+        val dictIter = alloc<DBusMessageIter>()
+        dbus_message_iter_open_container(iter.ptr, DBUS_TYPE_ARRAY.toInt(), "{sv}", dictIter.ptr)
+        dbus_message_iter_close_container(iter.ptr, dictIter.ptr)
 
-        return memScoped {
-            logDebug(TAG, "Creating RegisterAdvertisement method call...")
-            // First, we need to create the advertisement object on D-Bus
-            // This requires implementing the LEAdvertisement1 interface
-            // For simplicity, we'll use the RegisterAdvertisement method directly
+        logDebug(TAG, "Sending RegisterAdvertisement...")
+        val pendingCallPtr = alloc<CPointerVar<DBusPendingCall>>()
+        pendingCallPtr.value = null
+        val sent = dbus_connection_send_with_reply(connection, message, pendingCallPtr.ptr, DBUS_TIMEOUT_INFINITE)
+        dbus_message_unref(message)
 
-            val message = dbus_message_new_method_call(
-                BLUEZ_SERVICE,
-                ADAPTER_PATH,
-                LE_ADVERTISING_MANAGER_IFACE,
-                "RegisterAdvertisement"
-            )
+        // send_with_reply returns TRUE with a null pending call when the connection is already
+        // disconnected, so neither check alone is enough.
+        if (sent == 0u) null else pendingCallPtr.value
+    }
 
-            if (message == null) {
-                logError(TAG, "Failed to create RegisterAdvertisement message")
-                return@memScoped false
-            }
-            logDebug(TAG, "Method call created, building arguments...")
-
-            // Arguments: object_path, options dict
-            logDebug(TAG, "Allocating DBusMessageIter...")
-            val iter = alloc<DBusMessageIter>()
-            logDebug(TAG, "Calling dbus_message_iter_init_append...")
-            dbus_message_iter_init_append(message, iter.ptr)
-            logDebug(TAG, "Iterator initialized")
-
-            // Advertisement path - D-Bus expects pointer TO the string pointer (char**)
-            logDebug(TAG, "Getting advertisement path cstr...")
-            val advPathStr = ADVERTISEMENT_PATH.cstr.ptr
-            val advPath = alloc<CPointerVar<ByteVar>>()
-            advPath.value = advPathStr
-            logDebug(TAG, "Calling dbus_message_iter_append_basic for path...")
-            dbus_message_iter_append_basic(iter.ptr, DBUS_TYPE_OBJECT_PATH.toInt(), advPath.ptr)
-            logDebug(TAG, "Path appended")
-
-            // Options dict (empty for now)
-            logDebug(TAG, "Opening dict container...")
-            val dictIter = alloc<DBusMessageIter>()
-            dbus_message_iter_open_container(iter.ptr, DBUS_TYPE_ARRAY.toInt(), "{sv}", dictIter.ptr)
-            logDebug(TAG, "Closing dict container...")
-            dbus_message_iter_close_container(iter.ptr, dictIter.ptr)
-
-            logDebug(TAG, "Arguments built, sending RegisterAdvertisement (non-blocking)...")
-
-            // Non-blocking send. The old code used send_with_reply_and_block, which sits in poll()
-            // holding the connection's I/O path for the whole timeout. RegisterAdvertisement cannot
-            // complete under that: bluetoothd does Properties.GetAll on our advertisement object and
-            // waits for the answer before replying, and the dispatch worker could queue that answer
-            // but not write it. Every start therefore took the full 5 s, reported NO_REPLY, and fell
-            // back to plain discoverability -- while BlueZ, once the reply finally went out, had
-            // registered the advertisement anyway.
-            val pendingCallPtr = alloc<CPointerVar<DBusPendingCall>>()
-            pendingCallPtr.value = null
-            val sent = dbus_connection_send_with_reply(
-                connection,
-                message,
-                pendingCallPtr.ptr,
-                REGISTER_TIMEOUT_MS.toInt()
-            )
-
-            dbus_message_unref(message)
-
-            // send_with_reply returns TRUE with a null pending call when the connection is already
-            // disconnected, so neither check alone is enough.
-            val pendingCall = if (sent == 0u) null else pendingCallPtr.value
-            if (pendingCall == null) {
-                logError(TAG, "Failed to send RegisterAdvertisement (connection unusable)")
-                return@memScoped tryLegacyAdvertising()
-            }
-
-            try {
-                // Wait, do not dispatch. The dispatch worker started before us owns the socket and
-                // will complete this call; dispatching from here would re-enter the connection on a
-                // thread that is not the one holding the dispatch token.
-                val startMs = monotonicMillis()
-                var elapsedMs = 0L
-                var completed = false
-                while (true) {
-                    if (dbus_pending_call_get_completed(pendingCall) != 0u) {
-                        completed = true
-                    }
-                    val nowMs = monotonicMillis()
-                    // A negative reading means CLOCK_MONOTONIC is unavailable; treat it as expiry
-                    // rather than spinning forever.
-                    elapsedMs = if (startMs < 0 || nowMs < 0) REGISTER_TIMEOUT_MS else nowMs - startMs
-                    if (completed || elapsedMs >= REGISTER_TIMEOUT_MS) break
-                    usleep(REGISTER_POLL_INTERVAL_US)
-                }
-
-                if (!completed) {
-                    // Cancel before unref, or libdbus keeps the reply slot alive on the connection.
-                    dbus_pending_call_cancel(pendingCall)
-                    logError(
+    /** Wait up to [START_WAIT_MS] for the dispatch loop to take BlueZ's answer, then go on without it. */
+    private fun awaitRegistration() {
+        val startMs = monotonicMillis()
+        while (synchronized(registrationLock) { registration.isAsking }) {
+            val nowMs = monotonicMillis()
+            // A negative reading means CLOCK_MONOTONIC is unavailable: stop waiting rather than spin.
+            if (startMs < 0 || nowMs < 0 || nowMs - startMs >= START_WAIT_MS) {
+                if (synchronized(registrationLock) { registration.stopWaiting() }) {
+                    logInfo(
                         TAG,
-                        "RegisterAdvertisement got no reply in ${elapsedMs} ms; " +
-                            "BlueZ may have registered the advertisement anyway"
+                        "RegisterAdvertisement has no answer after $START_WAIT_MS ms; " +
+                            "going on, and taking the answer when BlueZ gives it"
                     )
-                    registration = Registration.UNKNOWN
-                    return@memScoped tryLegacyAdvertising()
                 }
-
-                val reply = dbus_pending_call_steal_reply(pendingCall)
-                if (reply == null) {
-                    logError(TAG, "RegisterAdvertisement completed without a reply message")
-                    registration = Registration.UNKNOWN
-                    return@memScoped tryLegacyAdvertising()
-                }
-
-                try {
-                    if (dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
-                        val errorName = dbus_message_get_error_name(reply)?.toKString() ?: "unknown"
-                        if (errorName.contains("AlreadyExists")) {
-                            logDebug(TAG, "Advertisement already registered")
-                            registration = Registration.REGISTERED
-                            return@memScoped true
-                        }
-                        if (errorName == "org.freedesktop.DBus.Error.NoReply") {
-                            // libdbus expired the call itself. Same ambiguity as our own deadline.
-                            logError(
-                                TAG,
-                                "RegisterAdvertisement timed out after ${elapsedMs} ms; " +
-                                    "BlueZ may have registered the advertisement anyway"
-                            )
-                            registration = Registration.UNKNOWN
-                            return@memScoped tryLegacyAdvertising()
-                        }
-                        logError(TAG, "RegisterAdvertisement failed: $errorName")
-                        return@memScoped tryLegacyAdvertising()
-                    }
-
-                    registration = Registration.REGISTERED
-                    logInfo(TAG, "Advertisement registered in ${elapsedMs} ms")
-                    true
-                } finally {
-                    dbus_message_unref(reply)
-                }
-            } finally {
-                dbus_pending_call_unref(pendingCall)
+                return
             }
+            usleep(REGISTER_POLL_INTERVAL_US)
+        }
+    }
+
+    /**
+     * Take BlueZ's answer to RegisterAdvertisement if it has come. The dispatch loop calls this
+     * after every pass, so an answer is taken however late it is and whichever thread read it.
+     */
+    internal fun takeRegistrationAnswer(connection: CPointer<DBusConnection>): Unit = synchronized(registrationLock) {
+        val call = pendingRegistration ?: return@synchronized
+        if (dbus_pending_call_get_completed(call) == 0u) return@synchronized
+        pendingRegistration = null
+        val errorName = try {
+            answerOf(call)
+        } finally {
+            dbus_pending_call_unref(call)
+        }
+
+        when (val next = registration.answered(errorName, monotonicMillis())) {
+            is AdvertisementRegistration.Next.Registered -> logInfo(
+                TAG,
+                if (next.late) "Advertisement registered late, ${next.afterMs} ms after it was asked for"
+                else "Advertisement registered in ${next.afterMs} ms"
+            )
+
+            AdvertisementRegistration.Next.AskAgain -> {
+                logInfo(TAG, "RegisterAdvertisement ended without an answer ($errorName); asking again")
+                pendingRegistration = sendRegisterAdvertisement(connection)
+                if (pendingRegistration == null) {
+                    registration.couldNotAskAgain()
+                    logError(TAG, "Failed to register advertisement: RegisterAdvertisement could not be sent again")
+                }
+            }
+
+            is AdvertisementRegistration.Next.GaveUp ->
+                logError(TAG, "Failed to register advertisement: ${next.reason}")
+
+            AdvertisementRegistration.Next.Ignore -> Unit
+        }
+    }
+
+    /** The error name of a completed call's answer, null for a method return; no answer at all is NoReply. */
+    private fun answerOf(call: CPointer<DBusPendingCall>): String? {
+        val reply = dbus_pending_call_steal_reply(call) ?: return "org.freedesktop.DBus.Error.NoReply"
+        return try {
+            if (dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+                dbus_message_get_error_name(reply)?.toKString() ?: "unknown error"
+            } else {
+                null
+            }
+        } finally {
+            dbus_message_unref(reply)
         }
     }
 
@@ -351,14 +324,15 @@ class BlueZAdvertisingService(
 
     /**
      * Start background loop to dispatch D-Bus messages so BlueZ can reach our advertisement object.
+     * False when the object could not be exported.
      */
-    private fun startDbusDispatchLoop() {
-        val connection = dbusConnection ?: return
+    private fun startDbusDispatchLoop(): Boolean {
+        val connection = dbusConnection ?: return false
         // expose instance to static filter
         advertisingServiceInstance = this
         ensureAdvVTableInitialized()
 
-        if (!dispatchRunning.compareAndSet(0, 1)) return
+        if (!dispatchRunning.compareAndSet(0, 1)) return true
 
         // Explicitly register the advertisement object path so BlueZ knows it exists
         val registered = dbus_connection_register_object_path(
@@ -371,7 +345,7 @@ class BlueZAdvertisingService(
             logError(TAG, "Failed to register advertisement object path")
             dispatchRunning.value = 0
             advertisingServiceInstance = null
-            return
+            return false
         }
         objectPathConnection = connection
 
@@ -387,23 +361,26 @@ class BlueZAdvertisingService(
             objectPathConnection = null
             dispatchRunning.value = 0
             advertisingServiceInstance = null
-            return
+            return false
         }
         filterConnection = connection
 
         dispatchWorker = Worker.start(name = "DBusAdvDispatch")
         dispatchWorker?.execute(
             TransferMode.SAFE,
-            { Pair(connection, dispatchRunning) }
+            { Triple(connection, dispatchRunning, this) }
         ) { ctx ->
-            val (conn, flag) = ctx
+            val (conn, flag, service) = ctx
             println("[BLUEZ_ADV] D-Bus dispatch loop started")
             platform.posix.fflush(platform.posix.stdout)
             while (flag.value == 1) {
                 dbus_connection_read_write(conn, 100) // 100 ms
+                // After every message, not once the queue is empty: with the GATT server's
+                // dispatcher reading too, the queue need never be empty.
                 while (dbus_connection_dispatch(conn) == DBusDispatchStatus.DBUS_DISPATCH_DATA_REMAINS) {
-                    // keep draining
+                    service.takeRegistrationAnswer(conn)
                 }
+                service.takeRegistrationAnswer(conn)
             }
             println("[BLUEZ_ADV] D-Bus dispatch loop stopped")
             platform.posix.fflush(platform.posix.stdout)
@@ -411,6 +388,7 @@ class BlueZAdvertisingService(
 
         // small delay to let loop spin up
         usleep(50_000u)
+        return true
     }
 
     private fun stopDbusDispatchLoop() {
@@ -563,233 +541,48 @@ class BlueZAdvertisingService(
     }
 
     /**
-     * Fallback advertising method using adapter Discoverable property.
-     * This is a simpler approach that makes the device discoverable without
-     * full LEAdvertisement1 implementation.
-     */
-    private fun tryLegacyAdvertising(): Boolean {
-        val connection = dbusConnection ?: return false
-
-        logDebug(TAG, "Trying legacy advertising (setting Discoverable)...")
-
-        return memScoped {
-            // Set Discoverable = true on the adapter
-            val message = dbus_message_new_method_call(
-                BLUEZ_SERVICE,
-                ADAPTER_PATH,
-                "org.freedesktop.DBus.Properties",
-                "Set"
-            )
-
-            if (message == null) {
-                logError(TAG, "Failed to create Set message")
-                return@memScoped false
-            }
-
-            val iter = alloc<DBusMessageIter>()
-            dbus_message_iter_init_append(message, iter.ptr)
-
-            // Interface name - D-Bus expects char**
-            val ifaceNameStr = "org.bluez.Adapter1".cstr.ptr
-            val ifaceName = alloc<CPointerVar<ByteVar>>()
-            ifaceName.value = ifaceNameStr
-            dbus_message_iter_append_basic(iter.ptr, DBUS_TYPE_STRING.toInt(), ifaceName.ptr)
-
-            // Property name - D-Bus expects char**
-            val propNameStr = "Discoverable".cstr.ptr
-            val propName = alloc<CPointerVar<ByteVar>>()
-            propName.value = propNameStr
-            dbus_message_iter_append_basic(iter.ptr, DBUS_TYPE_STRING.toInt(), propName.ptr)
-
-            // Value (variant containing boolean true)
-            val variantIter = alloc<DBusMessageIter>()
-            dbus_message_iter_open_container(iter.ptr, DBUS_TYPE_VARIANT.toInt(), "b", variantIter.ptr)
-
-            val trueVal = 1
-            val truePtr = alloc<IntVar>()
-            truePtr.value = trueVal
-            dbus_message_iter_append_basic(variantIter.ptr, DBUS_TYPE_BOOLEAN.toInt(), truePtr.ptr)
-
-            dbus_message_iter_close_container(iter.ptr, variantIter.ptr)
-
-            // Send
-            val error = alloc<DBusError>()
-            dbus_error_init(error.ptr)
-
-            val reply = dbus_connection_send_with_reply_and_block(
-                connection,
-                message,
-                5000,
-                error.ptr
-            )
-
-            dbus_message_unref(message)
-
-            if (dbus_error_is_set(error.ptr) != 0u) {
-                val errorMsg = error.message?.toKString() ?: "Unknown error"
-                logError(TAG, "Failed to set Discoverable: $errorMsg")
-                dbus_error_free(error.ptr)
-                return@memScoped false
-            }
-
-            if (reply != null) {
-                dbus_message_unref(reply)
-            }
-
-            // Also set Alias (device name)
-            setAdapterAlias(currentDeviceName)
-
-            // Record it: this is adapter-wide state we now own and have to put back. The old flag
-            // was never set here, so unregisterAdvertisement() returned early and the adapter
-            // stayed discoverable after every stop.
-            usingLegacyDiscoverable = true
-            logInfo(TAG, "Legacy advertising enabled (Discoverable=true)")
-            true
-        }
-    }
-
-    private fun setAdapterAlias(name: String) {
-        val connection = dbusConnection ?: return
-
-        memScoped {
-            val message = dbus_message_new_method_call(
-                BLUEZ_SERVICE,
-                ADAPTER_PATH,
-                "org.freedesktop.DBus.Properties",
-                "Set"
-            )
-
-            if (message == null) return@memScoped
-
-            val iter = alloc<DBusMessageIter>()
-            dbus_message_iter_init_append(message, iter.ptr)
-
-            val ifaceNameStr = "org.bluez.Adapter1".cstr.ptr
-            val ifaceName = alloc<CPointerVar<ByteVar>>()
-            ifaceName.value = ifaceNameStr
-            dbus_message_iter_append_basic(iter.ptr, DBUS_TYPE_STRING.toInt(), ifaceName.ptr)
-
-            val propNameStr = "Alias".cstr.ptr
-            val propName = alloc<CPointerVar<ByteVar>>()
-            propName.value = propNameStr
-            dbus_message_iter_append_basic(iter.ptr, DBUS_TYPE_STRING.toInt(), propName.ptr)
-
-            val variantIter = alloc<DBusMessageIter>()
-            dbus_message_iter_open_container(iter.ptr, DBUS_TYPE_VARIANT.toInt(), "s", variantIter.ptr)
-
-            val namePtrStr = name.cstr.ptr
-            val namePtr = alloc<CPointerVar<ByteVar>>()
-            namePtr.value = namePtrStr
-            dbus_message_iter_append_basic(variantIter.ptr, DBUS_TYPE_STRING.toInt(), namePtr.ptr)
-
-            dbus_message_iter_close_container(iter.ptr, variantIter.ptr)
-
-            dbus_connection_send(connection, message, null)
-            dbus_connection_flush(connection)
-            dbus_message_unref(message)
-
-            logDebug(TAG, "Set adapter alias to: $name")
-        }
-    }
-
-    /**
-     * Undo whatever the start path actually took, each half independently.
-     *
-     * [Registration.UNKNOWN] is unregistered like [Registration.REGISTERED]: we send
-     * UnregisterAdvertisement fire-and-forget, so BlueZ answering DoesNotExist for one we never got
-     * costs nothing, while skipping it would leak the instance for the life of the connection.
-     * Discoverable is only put back if the legacy fallback is what set it -- it is adapter-wide
-     * state and not ours to clear otherwise.
+     * Give back what start-up asked BlueZ for: cancel a request it has not answered and, whenever
+     * anything was asked for, send UnregisterAdvertisement fire-and-forget. BlueZ answering
+     * DoesNotExist for one it never held costs nothing; skipping it would leave the instance
+     * registered for the life of the connection.
      */
     private fun unregisterAdvertisement() {
-        val connection = dbusConnection
-        if (connection == null) {
-            registration = Registration.NONE
-            usingLegacyDiscoverable = false
-            return
-        }
-
-        if (registration != Registration.NONE) {
-            val wasUnknown = registration == Registration.UNKNOWN
-            registration = Registration.NONE
-            logDebug(
-                TAG,
-                if (wasUnknown) "Unregistering advertisement (registration outcome was unknown)..."
-                else "Unregistering advertisement..."
-            )
-
-            memScoped {
-                val message = dbus_message_new_method_call(
-                    BLUEZ_SERVICE,
-                    ADAPTER_PATH,
-                    LE_ADVERTISING_MANAGER_IFACE,
-                    "UnregisterAdvertisement"
-                )
-
-                if (message != null) {
-                    val iter = alloc<DBusMessageIter>()
-                    dbus_message_iter_init_append(message, iter.ptr)
-
-                    val advPathStr = ADVERTISEMENT_PATH.cstr.ptr
-                    val advPath = alloc<CPointerVar<ByteVar>>()
-                    advPath.value = advPathStr
-                    dbus_message_iter_append_basic(iter.ptr, DBUS_TYPE_OBJECT_PATH.toInt(), advPath.ptr)
-
-                    dbus_connection_send(connection, message, null)
-                    dbus_connection_flush(connection)
-                    dbus_message_unref(message)
-                }
+        val unregister = synchronized(registrationLock) {
+            pendingRegistration?.let { call ->
+                pendingRegistration = null
+                // Cancel before unref, or libdbus keeps the reply slot alive on the connection.
+                dbus_pending_call_cancel(call)
+                dbus_pending_call_unref(call)
             }
-            logDebug(TAG, "Advertisement unregistered")
+            registration.stop()
         }
+        val connection = dbusConnection
+        if (!unregister || connection == null) return
 
-        if (usingLegacyDiscoverable) {
-            usingLegacyDiscoverable = false
-            disableDiscoverable()
-            logDebug(TAG, "Legacy discoverability disabled")
-        }
-    }
-
-    private fun disableDiscoverable() {
-        val connection = dbusConnection ?: return
-
+        logDebug(TAG, "Unregistering advertisement...")
         memScoped {
             val message = dbus_message_new_method_call(
                 BLUEZ_SERVICE,
                 ADAPTER_PATH,
-                "org.freedesktop.DBus.Properties",
-                "Set"
+                LE_ADVERTISING_MANAGER_IFACE,
+                "UnregisterAdvertisement"
             )
 
-            if (message == null) return@memScoped
+            if (message != null) {
+                val iter = alloc<DBusMessageIter>()
+                dbus_message_iter_init_append(message, iter.ptr)
 
-            val iter = alloc<DBusMessageIter>()
-            dbus_message_iter_init_append(message, iter.ptr)
+                val advPathStr = ADVERTISEMENT_PATH.cstr.ptr
+                val advPath = alloc<CPointerVar<ByteVar>>()
+                advPath.value = advPathStr
+                dbus_message_iter_append_basic(iter.ptr, DBUS_TYPE_OBJECT_PATH.toInt(), advPath.ptr)
 
-            val ifaceNameStr = "org.bluez.Adapter1".cstr.ptr
-            val ifaceName = alloc<CPointerVar<ByteVar>>()
-            ifaceName.value = ifaceNameStr
-            dbus_message_iter_append_basic(iter.ptr, DBUS_TYPE_STRING.toInt(), ifaceName.ptr)
-
-            val propNameStr = "Discoverable".cstr.ptr
-            val propName = alloc<CPointerVar<ByteVar>>()
-            propName.value = propNameStr
-            dbus_message_iter_append_basic(iter.ptr, DBUS_TYPE_STRING.toInt(), propName.ptr)
-
-            val variantIter = alloc<DBusMessageIter>()
-            dbus_message_iter_open_container(iter.ptr, DBUS_TYPE_VARIANT.toInt(), "b", variantIter.ptr)
-
-            val falseVal = 0
-            val falsePtr = alloc<IntVar>()
-            falsePtr.value = falseVal
-            dbus_message_iter_append_basic(variantIter.ptr, DBUS_TYPE_BOOLEAN.toInt(), falsePtr.ptr)
-
-            dbus_message_iter_close_container(iter.ptr, variantIter.ptr)
-
-            dbus_connection_send(connection, message, null)
-            dbus_connection_flush(connection)
-            dbus_message_unref(message)
+                dbus_connection_send(connection, message, null)
+                dbus_connection_flush(connection)
+                dbus_message_unref(message)
+            }
         }
+        logDebug(TAG, "Advertisement unregistered")
     }
 }
 
