@@ -37,6 +37,9 @@ class ClearAllData(
         chatNotices.reset {
             chatRepository.clearData()
             userRepository.clearData()
+            // The user store has a new nickname and no favourites.
+            userEventBus.update(UserEvent.NicknameUpdated)
+            userEventBus.update(UserEvent.FavoritesCleared)
             appRepository.clearData()
             // The app store has put the theme back to the system's.
             appEventBus.update(AppEvent.ThemeUpdated)

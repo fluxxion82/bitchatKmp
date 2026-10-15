@@ -57,6 +57,21 @@ class ObserveFavoritesTest {
     }
 
     @Test
+    fun `FavoritesCleared reads the favourites again`() = runTest {
+        coEvery { userRepository.getAllFavorites() } returnsMany listOf(favorites("aa"), emptyMap())
+
+        useCase(Unit).test {
+            assertEquals(favorites("aa"), awaitItem())
+
+            userEventBus.update(UserEvent.FavoritesCleared)
+            assertEquals(emptyMap(), awaitItem())
+
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 2) { userRepository.getAllFavorites() }
+    }
+
+    @Test
     fun `an unrelated event after the start does not read the favourites again`() = runTest {
         coEvery { userRepository.getAllFavorites() } returns favorites("aa")
 

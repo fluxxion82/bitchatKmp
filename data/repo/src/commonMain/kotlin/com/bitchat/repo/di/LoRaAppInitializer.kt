@@ -65,7 +65,8 @@ class LoRaAppInitializer(
                     UserEvent.NicknameUpdated,
                     UserEvent.ProfileUpdated,
                     is UserEvent.LoginChanged -> syncLocalIdentity()
-                    is UserEvent.FavoriteStatusChanged -> Unit
+                    is UserEvent.FavoriteStatusChanged,
+                    UserEvent.FavoritesCleared -> Unit
                 }
             }
         }

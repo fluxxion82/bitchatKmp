@@ -6,4 +6,5 @@ sealed class UserEvent {
     data object StateChanged : UserEvent()
     data object NicknameUpdated : UserEvent()
     data class FavoriteStatusChanged(val peerID: String) : UserEvent()
+    data object FavoritesCleared : UserEvent()
 }

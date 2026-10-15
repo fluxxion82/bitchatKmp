@@ -24,7 +24,9 @@ class ObserveFavorites(
         send(userRepository.getAllFavorites())
         for (event in events) {
             when (event) {
-                is UserEvent.FavoriteStatusChanged -> send(userRepository.getAllFavorites())
+                is UserEvent.FavoriteStatusChanged,
+                UserEvent.FavoritesCleared -> send(userRepository.getAllFavorites())
+
                 else -> Unit
             }
         }
