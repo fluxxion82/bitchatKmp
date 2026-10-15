@@ -5,14 +5,13 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-14 by local-claude (D30 landed locally).
+Updated 2026-10-14 by local-claude (D30 pushed; D31 and D32 decided).
 
 ## In flight
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | Locally `fd93095`; `origin/main` is `845c44c`. Since `6aefc15`: three commits of the owner's side (`c2866a4` a board's city from its public address, `7006a10` Curl transfers, `845c44c` a saved place as this device's location), then D30: `e5c13ce` (`ObserveUserState`, `ObserveFavorites`), `fd93095` (`MainViewModel` uses them) | Landed locally 2026-10-14, not pushed | the owner: the push, Q12, Q13 |
-| `claude/observe-user-state` | In `main` as `e5c13ce`, with a fix | To be deleted after the push | the owner |
+| `main` | `fd93095`. Since `6aefc15`: three commits of the owner's side (`c2866a4` a board's city from its public address, `7006a10` Curl transfers, `845c44c` a saved place as this device's location), then D30: `e5c13ce` (`ObserveUserState`, `ObserveFavorites`), `fd93095` (`MainViewModel` uses them) | Pushed 2026-10-14 | cloud-claude: start D32 from here |
 
 ## D30, as landed
 
@@ -37,12 +36,27 @@ Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **cloud-claude: nothing to build until the owner answers Q12 and Q13.** Read `reference/2026-10-14-local-review-d30.md` and the new line under Observers and events in `CONVENTIONS.md`.
+1. **cloud-claude: the next slice is decided (D31, D32).** Fetch `main` at `fd93095`. Read `reference/2026-10-14-local-review-d30.md` and the new line under Observers and events in `CONVENTIONS.md`. Put the plan in `LOG.md` first. One branch, two commits, in this order.
+
+   **1. The wipe publishes what it changes (D31).**
+   - Add `data object FavoritesCleared : UserEvent()`.
+   - In `ClearAllData`, right after `userRepository.clearData()` and inside `chatNotices.reset { }`, publish `UserEvent.NicknameUpdated` and `UserEvent.FavoritesCleared`. That is where `ThemeUpdated` follows `appRepository.clearData()`, and for the same reason.
+   - `ObserveFavorites` reads again on `FavoritesCleared` as well.
+   - Find every `when` over `UserEvent` in every layer. `LoRaAppInitializer` in `data:repo` matches it exhaustively and needs one line, `UserEvent.FavoritesCleared -> Unit`. You cannot build `data:repo`: name each such line in `LOG.md`, and a local agent builds it.
+   - Tests, in the shape of D27's theme tests in `ClearAllDataTest`. A real `ObserveUserNickname` and a real `ObserveFavorites` over a real `InMemoryUserEventBus` show the new nickname and the empty favourites after a wipe, also when a store cleared after the user store throws. Each test fails without its publish. Add a test in `ObserveFavoritesTest` for the new event.
+
+   **2. The domain half of `ChatViewModel` off `ChatEventBus` (D32).**
+   - `ChatViewModel` collects `ChatEventBus` itself. On start and on every `ChatEvent.ChannelChanged` it reads `GetUserState` and sets its current channel from the result.
+   - First, in the plan: every writer of what that read depends on (the saved user state and the active channel: `SaveUserStateAction`, `JoinChannel`, `ChatRepo`, and the rest) and whether each publishes `ChannelChanged`, as you did for D30.
+   - Then one use case that emits what `GetUserState` returns, on start and on every `ChannelChanged`. It takes `GetUserState` and `ChatEventBus`. Propose its name in the plan: an `Observe` name, after the model it gives.
+   - It subscribes before its first read, like `ObserveUserState`. It keeps every event: the comment in `ChatViewModel` explains why repeats matter. No `distinctUntilChanged`.
+   - Its line in `domainModule`. Tests in the shape of `ObserveUserStateTest`, including the event published during the first read.
+
+   **Not in this branch:** `ChatViewModel` itself and the Konsist rule for view models. Local agents do both afterwards.
 
 ## Open questions
 
-- **Q12. Should the wipe publish what it changes?** Recommended: yes. `NicknameUpdated` right after `userRepository.clearData()`, inside the barrier, and a new `UserEvent.FavoritesCleared` that `ObserveFavorites` reads again on. `LoRaAppInitializer` matches `UserEvent` exhaustively, so the new event needs a line in `data:repo`. The review's section 5 has the reasons.
-- **Q13. The next cloud slice.** Recommended: Q12's fix, and the domain half of taking `ChatViewModel` off `ChatEventBus`. Local agents then switch the view model and add the Konsist rule that no view model imports a bus or a repository. The other candidates are in the review's section 5.
+None.
 
 ## Answered
 
@@ -55,7 +69,9 @@ Not run: any app on a phone or a board.
 - **Q8.** Domain tests for the error contract, then the narrow observer fixes (D27). Done, on `main`.
 - **Q9.** The two placement rules inside `:domain` now; the other three candidates wait (D28, the owner, 2026-10-13).
 - **Q10.** Next: those two rules, then the file names that differ from their class (D29, the owner, 2026-10-13). Done, on `main`.
-- **Q11.** Next: `ObserveUserState` and `ObserveFavorites` in the domain (D30, the owner, 2026-10-13).
+- **Q11.** Next: `ObserveUserState` and `ObserveFavorites` in the domain (D30, the owner, 2026-10-13). Done, on `main`.
+- **Q12.** The wipe publishes `NicknameUpdated` and a new `FavoritesCleared` (D31, the owner, 2026-10-14).
+- **Q13.** Next: D31, then the domain half of taking `ChatViewModel` off `ChatEventBus` (D32, the owner, 2026-10-14).
 
 ## Next
 

@@ -50,3 +50,5 @@ The owner's decisions, newest last. Agents propose; only the owner decides. Each
 - **D28. Two more Konsist rules now** (Q9): repository interfaces under `domain/<feature>/repository`, event-bus interfaces under `domain/<feature>/eventbus`. The other three candidates wait.
 - **D29. The next cloud slice is those two rules, then the file names that differ from their class** (Q10), both inside `:domain`.
 - **D30. The next cloud slice is `ObserveUserState` and `ObserveFavorites` in the domain, with tests** (Q11, the owner, 2026-10-13). Local agents then switch `MainViewModel` off its own collection of `UserEventBus`.
+- **D31. The wipe publishes what it changes in the user store** (Q12, the owner, 2026-10-14): `NicknameUpdated`, and a new `UserEvent.FavoritesCleared` that `ObserveFavorites` reads again on, both right after `userRepository.clearData()` inside the wipe's barrier.
+- **D32. The next cloud slice is D31, then the domain half of taking `ChatViewModel` off `ChatEventBus`** (Q13, the owner, 2026-10-14). Local agents then switch `ChatViewModel` and add the Konsist rule that no view model imports an `eventbus` or a `repository` package.

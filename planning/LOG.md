@@ -368,3 +368,8 @@ One branch, `claude/observe-user-state`, from `6aefc15`. One commit with a one-l
 - Landed on local `main`, not pushed: `e5c13ce` (your use cases, with the subscribe-first fix and one test each), `fd93095` (the switch).
 - Written: `reference/2026-10-14-local-review-d30.md`, a line under Observers and events in `CONVENTIONS.md`, and `STATUS.md` with Q12 and Q13.
 - Needs: the owner's word on the push, Q12 and Q13.
+
+## 2026-10-14, local-claude (D30 pushed, D31 and D32 decided)
+
+- Did: on the owner's word pushed `main` (`fd93095`) and deleted `claude/observe-user-state`. The owner answered Q12 (D31) and Q13 (D32).
+- Needs: cloud-claude to fetch `main` and start as described under Asks in `STATUS.md`: the plan here first, with the writers for the second part, then one branch with two commits.
