@@ -524,3 +524,20 @@ Findings, reported and not fixed:
     - another blocking state giving `MeshForLoRa`.
   - The branch still merges with `main` at `2cfc52e` without a conflict.
 - Found while checking the rule: most existing `Observe*` use cases do not give a model of the name they carry. That is Q14 in `STATUS.md`. Nothing was changed.
+
+## 2026-10-15, local-claude (D31 to D34 reviewed and landed locally)
+
+- Read: the branch at `6ffa808`, the four entries of 2026-10-15 above, `STATUS.md`, D31 to D34.
+- Did the local half before the review this time:
+  - the `LoRaAppInitializer` line;
+  - `ChatViewModel` on `ObserveActiveChannel`;
+  - the view-model Konsist rule.
+- Built: on `main` at `2cfc52e`, every target. Both your commits built and passed once the line was in; neither needed a production change. Your mapping matches the old collector for every state (Codex checked each).
+- Changed: the wipe tests' mocked user store now changes only when the wipe clears it. Before, a publish moved ahead of `userRepository.clearData()` still passed. Rule added under Observers and events.
+- Found, older than the slice:
+  - `ChatRepo` stops following Bluetooth after an unrelated user event. Filed as its own task.
+  - The wipe can wait up to about 20 s for LoRa's first start. Recorded.
+- Correction to G1: the blocking states are not stored; `LocalUserPreferences` clears the saved state for them. G1's point stands.
+- Landed on local `main`, not pushed: `d7a1aa4` (D31, with the line and the test change), `eaac5ff` (D34, unchanged), `5bfbd70` (the switch and the rule).
+- Written: `reference/2026-10-15-local-review-d31-d32.md`, a line in `CONVENTIONS.md`, `STATUS.md` with Q14 (recommendation (a)) and Q15.
+- Needs: the owner's word on the push, Q14 and Q15.

@@ -5,23 +5,28 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-15 by cloud-claude (D31 and D32 pushed).
+Updated 2026-10-15 by local-claude (D31 to D34 landed locally).
 
 ## In flight
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | `fd93095`. Since `6aefc15`: three commits of the owner's side (`c2866a4` a board's city from its public address, `7006a10` Curl transfers, `845c44c` a saved place as this device's location), then D30: `e5c13ce` (`ObserveUserState`, `ObserveFavorites`), `fd93095` (`MainViewModel` uses them) | Pushed 2026-10-14 | |
-| `claude/wipe-events-and-chat-state` | D31 (`651f462`): the wipe publishes `NicknameUpdated` and `FavoritesCleared`. D32 (`6ffa808`): `ObserveActiveChannel` and the `ActiveChannel` model (D33, D34). Two commits on `fd93095` | Pushed 2026-10-15 at `6ffa808` | local agents: the `LoRaAppInitializer` line, build and review, then switch `ChatViewModel` |
+| `main` | Locally `5bfbd70`; `origin/main` is `2cfc52e`. Since `fd93095`: six commits of the owner's side (TUI unread chips, BlueZ connects, relayed-link binding, advertisement registration, geohash presence, BlueZ retry), then this slice: `d7a1aa4` (the wipe publishes `NicknameUpdated` and `FavoritesCleared`), `eaac5ff` (`ObserveActiveChannel`, `ActiveChannel`), `5bfbd70` (`ChatViewModel` uses it; the view-model Konsist rule) | Landed locally 2026-10-15, not pushed | the owner: the push, Q14, Q15 |
+| `claude/wipe-events-and-chat-state` | In `main` as `d7a1aa4` and `eaac5ff` | To be deleted after the push | the owner |
 
-## D30, as landed
+## D31 to D34, as landed
 
-The branch built and passed as pushed. The review is in `reference/2026-10-14-local-review-d30.md`.
+Both commits built and passed once the `LoRaAppInitializer` line was in; neither needed a production change. The review is in `reference/2026-10-15-local-review-d31-d32.md`.
 
-- **Both use cases subscribe to the bus before their first read.** Read first, a matching event published during that read was lost once an unrelated event took the replay slot. One new test in each class shows it. This is now a line under Observers and events in `CONVENTIONS.md`.
-- **`MainViewModel` collects them** and no longer imports `UserEventBus`. Each state is shown in its own coroutine, because `navigation` is a rendezvous channel.
-- **`toggleFavorite` no longer refreshes the favourites itself.** That read could show an older map after the observer had shown a newer one. `GetAllFavorites` had no caller left and is deleted.
-- **Not taken:** making the observers survive a failed read. On Android and iOS such an exception ends the app before and after. Elsewhere every other observer in the view model already stops at its first one. It goes into the D5 proposal.
+- **`d7a1aa4`** is your D31 commit, plus the `LoRaAppInitializer` line, plus tighter wipe tests: the mocked user store changes only when the wipe clears it, so a publish made before the write fails them. That is a new line under Observers and events in `CONVENTIONS.md`.
+- **`eaac5ff`** is your D34 commit, unchanged.
+- **`5bfbd70`**:
+  - `ChatViewModel` collects `ObserveActiveChannel`. It updates the header only for `ActiveChannel.Chat` and follows `active.channel` always, which is the old behaviour for every state.
+  - The view-model `ArchitectureTest` fails if a production file names a `com.bitchat.domain.<feature>.eventbus` or `.repository` package.
+- **Side effect:** `LoRaAppInitializer` re-syncs the radio identity on `NicknameUpdated`, so after a wipe the LoRa heartbeat carries the new nickname.
+- **Older than the slice:**
+  - `ChatRepo` stops following Bluetooth after an unrelated user event. Filed as its own task.
+  - The wipe can wait up to about 20 s for LoRa's first start. Recorded, not changed.
 
 ## What was built and run
 
@@ -29,34 +34,20 @@ By local-claude on macOS arm64, on the tree that landed:
 
 - `scripts/verify.sh full`: OK. That is `quick`, `desktop` (with `packageDmg`), `android`, `ios`, `embedded` and `tui` (debug and release links for linuxArm64), `desktop-tui`.
 - `scripts/tui-smoke.py`: the desktop terminal UI starts from the real Koin graph and shows its four screens.
-- Module tests, all green, among them `:domain:jvmTest`, `:presentation:viewmodel:jvmTest` (with the new `MainViewModelUserStateTest`) and `:apps:desktop:test` (the desktop Koin check).
-- Five changes each turned a test red (review, section 2).
-- `e5c13ce` was not built on its own; the tree with both commits was.
+- Module tests, all green: `:domain:jvmTest` (216), `:presentation:viewmodel:jvmTest`, `:data:repo:desktopTest` (381), `:apps:desktop:test` (the desktop Koin check).
+- Eight changes each turned a test red (review, sections 1 and 2).
+- The three commits were not built one by one; the tree with all three was.
 
 Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **Local agents: on `claude/wipe-events-and-chat-state` (`6ffa808`), add `UserEvent.FavoritesCleared -> Unit` to the exhaustive `when` in `data/repo/.../di/LoRaAppInitializer.kt:63`, which cloud-claude cannot build. Then build and review, and switch `ChatViewModel` to `ObserveActiveChannel`** as D32 to D34 say. The writers, G1 and G2 are in `LOG.md` (2026-10-15, plan); the use case as pushed, and what was built and run, are in the entries "D33" and "D34" after it.
-2. **Owner:** Q14; and G1, if the local switch shows `ChatViewModel` should also follow `StateChanged`.
+1. **cloud-claude: nothing to build until the owner answers Q14 and Q15.** Read `reference/2026-10-15-local-review-d31-d32.md` and the new line under Observers and events in `CONVENTIONS.md`.
 
 ## Open questions
 
-- **Q14 (D34). Does "verb + the domain model it gives" apply to the use cases already there?** Of the 24 `Observe*` use cases on `main`, only these give a model of the name they carry: `AppTheme`, `BackgroundMode`, `PermissionState`, `PowSettings`, `TorStatus`, `UserState`, and on the branch `ActiveChannel`. Some give a list of the model they name, which could count as fitting: `ObserveNotes` gives `List<Note>`. The rest give a primitive, a collection of ids, or a model of another name:
-  - `ObserveUserNickname`: `String`.
-  - `ObserveHasNotes`, `ObserveCurrentChannelBookmarkState`, `ObserveLocationServicesEnabled`: `Boolean`.
-  - `ObserveSelectedPrivatePeer`, `ObserveLatestUnreadPrivatePeer`: `String?`.
-  - `ObserveJoinedChannels`, `ObserveUnreadPrivatePeers`: `Set<String>`.
-  - `ObservePeerSessionStates`: `Map<String, String>`.
-  - `ObservePrivateChats`: `Map<String, List<BitchatMessage>>`.
-  - `ObserveFavorites`: `Map<String, FavoriteRelationship>`.
-  - `ObserveChannelMessages`: `List<BitchatMessage>`.
-  - `ObserveChannelParticipants`: `List<GeoPerson>`.
-  - `ObserveMeshChannelPeople`: `List<MeshChannelPerson>`.
-  - `ObserveJoinedNamedChannels`: `List<ChannelInfo>`.
-  - `ObserveRequestedTorMode`: `TorMode`.
-
-  Options: (a) the rule is for new use cases only; (b) a list of the model counts, and the rest get models or new names over time; (c) a Konsist rule that the result type, or its element type, is the name after the verb, with today's exceptions listed. The `Get*` use cases have not been checked. Nothing changes until the owner answers.
+- **Q14. Does "verb + the model it gives" apply to the use cases already there?** The options are as cloud-claude listed them. Recommended: (a), new use cases only, written in `CONVENTIONS.md`; an existing one changes when a slice touches it for another reason. The reasons are in the review's section 5.
+- **Q15. The next cloud slice.** Recommended: the older observers subscribe before their first read (domain only). The other candidates are in the review's section 5.
 
 ## Answered
 
@@ -76,7 +67,8 @@ Not run: any app on a phone or a board.
 ## Next
 
 - **D5 is partly done.** Channel and LoRa commands return typed failures. Exceptions still pass through: discovery, verification, the password write and the join in `JoinChannel`'s existing-channel path, and all three LoRa commands (tests pin that those propagate). Turning any into an `Outcome` changes a tested contract: write the mapping and the texts first.
-- **One view model still imports a bus:** `ChatViewModel` (`ChatEventBus`). `MainViewModel` no longer does (D30).
+- **No view model imports a bus or a repository** since D32; the Konsist rule in `presentation/viewmodel` holds it.
+- **`ChatRepo` stops following Bluetooth after an unrelated user event** (review of D31 and D32, row 2): filed for the owner as its own task.
 - **The older observers read before they subscribe:** `ObserveUserNickname`, `ObserveJoinedChannels`, `ObserveAppTheme` and the others (see Observers and events in `CONVENTIONS.md`).
 - **File names:** `app/model/AppState.kt` holds `UserState` and `ActiveState`; rename it when those move to `user/model`. The rest is in the review's section 6.
 - **Unlocked collections** in `ChatRepo`, `LocalChannelPreferences`, `NostrClient` and the Apple Bluetooth services: local work, design first.
