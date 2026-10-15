@@ -373,3 +373,69 @@ One branch, `claude/observe-user-state`, from `6aefc15`. One commit with a one-l
 
 - Did: on the owner's word pushed `main` (`fd93095`) and deleted `claude/observe-user-state`. The owner answered Q12 (D31) and Q13 (D32).
 - Needs: cloud-claude to fetch `main` and start as described under Asks in `STATUS.md`: the plan here first, with the writers for the second part, then one branch with two commits.
+
+## 2026-10-15, cloud-claude (D31 and D32 plan)
+
+- Read:
+  - `STATUS.md`, `reference/2026-10-14-local-review-d30.md` and the new line under Observers and events.
+  - D31 and D32, and `main` at `fd93095`.
+- Taken on board:
+  - Subscribe before the first read: copy the `UNDISPATCHED` launch into a `Channel(BUFFERED)` from `ObserveUserState`.
+  - `GetAllFavorites` is gone.
+  - In my D30 table the location row mixed two settings.
+  - Not every navigation runs `SaveUserStateAction`.
+- Plan: one branch, `claude/wipe-events-and-chat-state`, from `fd93095`, two commits in this order.
+
+**Commit 1, D31.**
+- `UserEvent.FavoritesCleared` (a `data object`).
+- `ClearAllData` publishes `UserEvent.NicknameUpdated`, then `UserEvent.FavoritesCleared`, right after `userRepository.clearData()`, inside `chatNotices.reset { }`.
+- `ObserveFavorites` reads again on `FavoritesCleared` as well as on `FavoriteStatusChanged`.
+- Every `when` over `UserEvent`, in every layer, `fd93095`. Tests and Swift have none.
+
+| Where | Kind | Change |
+|---|---|---|
+| `data/repo/.../di/LoRaAppInitializer.kt:63` | exhaustive, no `else` | **`UserEvent.FavoritesCleared -> Unit`**, next to `is UserEvent.FavoriteStatusChanged -> Unit`. A local agent builds it |
+| `data/repo/.../repositories/ChatRepo.kt:266` | `else -> null` | none |
+| `domain/.../user/ObserveFavorites.kt` | `else -> Unit` | the new branch |
+| `domain/.../user/ObserveUserNickname.kt` | `else -> Unit` | none; it already reads again on `NicknameUpdated` |
+| `domain/.../user/ObserveUserState.kt` | `else -> Unit` | none |
+
+- Tests:
+  - `ClearAllDataTest`, in the shape of the theme tests. A real `ObserveUserNickname` and a real `ObserveFavorites` run over a real `InMemoryUserEventBus` and show the new nickname and the empty favourites after a wipe. A second pair does the same when the app store, cleared right after the user store, throws.
+  - `ObserveFavoritesTest`: `FavoritesCleared` reads the favourites again.
+  - Each wipe test is checked to fail without its publish, and with the publish moved after the app store.
+
+**Commit 2, D32. The writers first.** `ChatViewModel` reads `GetUserState` on start and on every `ChatEvent.ChannelChanged`. What it uses is `Active(Chat(channel))`, `BluetoothDisabled` (it then observes the mesh for LoRa), or anything else (no channel).
+
+| What changes | Writer | Publishes `ChannelChanged` |
+|---|---|---|
+| The saved state, a chat (`UserStateAction.Chat`, `MeshDM`, `NostrDM`) | `SaveUserStateAction`: `chatRepository.setSelectedChannel` publishes once **before** the save (`ChatRepo.kt:1988`), and the action publishes again after it | yes, twice. This is the repeat the comment in `ChatViewModel` is about |
+| The saved state, `GrantPermissions` and `HandledOptimizations` | `SaveUserStateAction`, after the save, when the new state is a chat | yes when it is `Active(Chat(Mesh))`, no when it is `BatteryOptimization` |
+| The saved state, `Locations`, `Settings`, `LocationNotes` | `SaveUserStateAction` | no. The state is not a chat, so `ChatViewModel` keeps its last channel; that is today's behaviour |
+| The saved state, a blocking state | `SaveUserStateAction`'s blocking path: `setUserState(blocking)`, `StateChanged` only | **no** (G1) |
+| The saved state when none is saved | `HeadlessUserStateInitializer` (`data:repo`): `Active(Chat(Mesh))`, `LoginChanged` only | **no** (G2) |
+| A named channel already joined | `JoinChannel`: no write of the state | yes, a repeat read. The caller then saves through `SaveUserStateAction` |
+| The wipe | `UserRepo.clearData()` keeps the saved state; `StateChanged` only | no, and nothing it reads changed |
+| Permissions, Bluetooth, location services and battery in the system | the platform | **no** (D30's F1) |
+| `ChatRepo.setSelectedChannel` | called only by `SaveUserStateAction` | yes |
+
+Findings, reported and not fixed:
+- **G1.** When `SaveUserStateAction` saves a blocking state, no `ChannelChanged` follows. `ChatViewModel` does not move to "Bluetooth disabled: observe the mesh for LoRa" until the next `ChannelChanged`. The local switch should check whether `ChatViewModel` also needs `StateChanged`. That would be the owner's call.
+- **G2.** The headless initializer publishes no `ChannelChanged`. It has no visible effect today: with no saved state, `GetUserState` already returns `Active(Chat(Mesh))`, the same as what the initializer saves.
+
+**The use case.**
+- Proposed name: **`ObserveUserStateOnChannelChange`**. It gives `UserState`, and the plain name `ObserveUserState` is taken by the observer that follows `UserEvent`s, so the qualifier names its trigger. A shorter alternative is `ObserveChatUserState`; the owner may prefer it.
+- `chat/ObserveUserStateOnChannelChange : Usecase<Unit, Flow<UserState>>`. It takes `GetUserState` and `ChatEventBus`.
+- It subscribes first, in the shape of `ObserveUserState`, then emits `getUserState()` on start and on every `ChannelChanged`. Nothing on any other event. No `distinctUntilChanged`.
+- Its `single` line in `domainModule`, next to `ObserveJoinedChannels`.
+- `ObserveUserStateOnChannelChangeTest`, in the shape of `ObserveUserStateTest` with a real `GetUserState`:
+  - the start;
+  - a blocking input coming through;
+  - `ChannelChanged` reads again;
+  - an unrelated `ChatEvent` after the start gives no read, and none when it sits in the replay slot at the start;
+  - two `ChannelChanged` give two emissions of the same state;
+  - today, a `ChannelChanged` in the replay slot reads a second time at the start;
+  - a `ChannelChanged` published during the first read is read after it.
+- Mutations: the branch dropped, a re-read on every event, `distinctUntilChanged` added, no read on start, and the read made before the subscription. That last one is the old shape, and the during-the-first-read test must catch it.
+
+**Not in this branch:** `ChatViewModel`, `LoRaAppInitializer` and the Konsist rule for view models.
