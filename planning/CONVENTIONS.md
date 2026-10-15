@@ -12,6 +12,7 @@ The project's working rules, for agents that cannot see the owner's local instru
 - Dependencies point inward: `apps:* → presentation:* → domain` and `apps:* → data:* → domain`. `domain` depends on no project module.
 - Repository interfaces live in `domain/<feature>/repository`, implementations in `data:repo`. Event buses are feature-scoped interfaces in `domain/<feature>/eventbus` with in-memory implementations registered in `domainModule` (D4).
 - Use cases are small verb-named classes on the one `Usecase<TParam, TResult>` interface. `Observe<Thing>` returns a `Flow`, `Get<Thing>` returns one value (D1, D2).
+- A new use case is named verb + the domain model it gives: `ObserveActiveChannel` gives `Flow<ActiveChannel>`. If no model fits, add one or pick another name. Existing use cases change only when a slice touches them for another reason (D34, D35).
 - Viewmodels take use cases and `presentation:viewvo` state, never repositories. A viewmodel must not have a function named like one of its injected use cases: `observeTorStatus()` then calls the function, not the use case. This broke the first slice.
 - `apps/` holds only apps. What a platform's two apps share lives in their parent module (`:apps:desktop`, `:apps:embedded`), which stays free of any UI toolkit.
 - Koin modules per layer; the apps are the composition roots. `DesktopModulesTest.desktopGraphVerifies` runs Koin `verify()` over the desktop graph: a definition whose constructor takes something Koin does not provide needs an `injectedParameters` entry there.

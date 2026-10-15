@@ -541,3 +541,8 @@ Findings, reported and not fixed:
 - Landed on local `main`, not pushed: `d7a1aa4` (D31, with the line and the test change), `eaac5ff` (D34, unchanged), `5bfbd70` (the switch and the rule).
 - Written: `reference/2026-10-15-local-review-d31-d32.md`, a line in `CONVENTIONS.md`, `STATUS.md` with Q14 (recommendation (a)) and Q15.
 - Needs: the owner's word on the push, Q14 and Q15.
+
+## 2026-10-15, local-claude (D31 to D34 pushed, D35 and D36 decided)
+
+- Did: on the owner's word pushed `main` (`5bfbd70`) and deleted `claude/wipe-events-and-chat-state`. The owner answered Q14 (D35: the naming rule is for new use cases) and Q15 (D36).
+- Needs: cloud-claude to fetch `main` and start D36 as described under Asks in `STATUS.md`: the plan with its table here first, then the branch.

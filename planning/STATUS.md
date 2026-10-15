@@ -5,14 +5,13 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-15 by local-claude (D31 to D34 landed locally).
+Updated 2026-10-15 by local-claude (D31 to D34 pushed; D35 and D36 decided).
 
 ## In flight
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | Locally `5bfbd70`; `origin/main` is `2cfc52e`. Since `fd93095`: six commits of the owner's side (TUI unread chips, BlueZ connects, relayed-link binding, advertisement registration, geohash presence, BlueZ retry), then this slice: `d7a1aa4` (the wipe publishes `NicknameUpdated` and `FavoritesCleared`), `eaac5ff` (`ObserveActiveChannel`, `ActiveChannel`), `5bfbd70` (`ChatViewModel` uses it; the view-model Konsist rule) | Landed locally 2026-10-15, not pushed | the owner: the push, Q14, Q15 |
-| `claude/wipe-events-and-chat-state` | In `main` as `d7a1aa4` and `eaac5ff` | To be deleted after the push | the owner |
+| `main` | `5bfbd70`. Since `fd93095`: six commits of the owner's side (TUI unread chips, BlueZ connects, relayed-link binding, advertisement registration, geohash presence, BlueZ retry), then this slice: `d7a1aa4` (the wipe publishes `NicknameUpdated` and `FavoritesCleared`), `eaac5ff` (`ObserveActiveChannel`, `ActiveChannel`), `5bfbd70` (`ChatViewModel` uses it; the view-model Konsist rule) | Pushed 2026-10-15 | cloud-claude: start D36 from here |
 
 ## D31 to D34, as landed
 
@@ -42,12 +41,31 @@ Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **cloud-claude: nothing to build until the owner answers Q14 and Q15.** Read `reference/2026-10-15-local-review-d31-d32.md` and the new line under Observers and events in `CONVENTIONS.md`.
+1. **cloud-claude: the next slice is decided (D36).** Fetch `main` at `5bfbd70`. Read `reference/2026-10-15-local-review-d31-d32.md` and the two new lines in `CONVENTIONS.md`: under Architecture (D35) and under Observers and events (the test rule). Put the plan in `LOG.md` first. One branch, inside `:domain`.
+
+   **What.** These `Observe*` use cases on `main` still use `onStart`:
+   - `app`: `ObserveAppTheme`, `ObserveBackgroundMode`
+   - `chat`: `ObserveChannelMessages`, `ObserveJoinedChannels`, `ObserveJoinedNamedChannels`, `ObserveLatestUnreadPrivatePeer`, `ObserveMeshChannelPeople`, `ObservePrivateChats`, `ObserveSelectedPrivatePeer`, `ObserveUnreadPrivatePeers`
+   - `location`: `ObserveCurrentChannelBookmarkState`, `ObserveHasNotes`, `ObserveLocationServicesEnabled`, `ObserveNotes`, `ObservePermissionState`
+   - `nostr`: `ObservePowSettings`
+   - `tor`: `ObserveTorStatus`
+   - `user`: `ObserveUserNickname`
+
+   Those that read in `onStart` and then subscribe to a bus have the window D30 closed: an event published during the first read is lost once another event takes the bus's single replay slot. Give them the shape of `ObserveUserState`: subscribe with an `UNDISPATCHED` launch into a `Channel(BUFFERED)`, then read, then handle the channel.
+
+   **First, in the plan:** a table with one row per observer. Give what it reads, what it subscribes to (a bus, a `StateFlow`, a repository flow, `combine`), whether it has that window, and what you will change. Leave out, and say why:
+   - an observer with no window (one that only follows a `StateFlow`, for example);
+   - one whose shape is not "read, then re-read on matching events". `ObserveMeshChannelPeople` has its own rules about the first event and about skipped refreshes; read its KDoc and tests before touching it.
+   
+   Keep each observer's triggers, repeats and replay behaviour exactly; this changes only when it subscribes.
+
+   **Tests:** for each observer changed, the during-the-first-read test in the shape of `ObserveUserStateTest`. It must fail on today's shape; say so per observer.
+
+   **Not in this branch:** any view model, and renaming any use case (D35).
 
 ## Open questions
 
-- **Q14. Does "verb + the model it gives" apply to the use cases already there?** The options are as cloud-claude listed them. Recommended: (a), new use cases only, written in `CONVENTIONS.md`; an existing one changes when a slice touches it for another reason. The reasons are in the review's section 5.
-- **Q15. The next cloud slice.** Recommended: the older observers subscribe before their first read (domain only). The other candidates are in the review's section 5.
+None.
 
 ## Answered
 
@@ -62,14 +80,16 @@ Not run: any app on a phone or a board.
 - **Q10.** Next: those two rules, then the file names that differ from their class (D29, the owner, 2026-10-13). Done, on `main`.
 - **Q11.** Next: `ObserveUserState` and `ObserveFavorites` in the domain (D30, the owner, 2026-10-13). Done, on `main`.
 - **Q12.** The wipe publishes `NicknameUpdated` and a new `FavoritesCleared` (D31, the owner, 2026-10-14).
-- **Q13.** Next: D31, then the domain half of taking `ChatViewModel` off `ChatEventBus` (D32, the owner, 2026-10-14).
+- **Q13.** Next: D31, then the domain half of taking `ChatViewModel` off `ChatEventBus` (D32, the owner, 2026-10-14). Done, on `main`.
+- **Q14.** The naming rule is for new use cases (D35, the owner, 2026-10-15).
+- **Q15.** Next: the older observers subscribe before their first read (D36, the owner, 2026-10-15).
 
 ## Next
 
 - **D5 is partly done.** Channel and LoRa commands return typed failures. Exceptions still pass through: discovery, verification, the password write and the join in `JoinChannel`'s existing-channel path, and all three LoRa commands (tests pin that those propagate). Turning any into an `Outcome` changes a tested contract: write the mapping and the texts first.
 - **No view model imports a bus or a repository** since D32; the Konsist rule in `presentation/viewmodel` holds it.
 - **`ChatRepo` stops following Bluetooth after an unrelated user event** (review of D31 and D32, row 2): filed for the owner as its own task.
-- **The older observers read before they subscribe:** `ObserveUserNickname`, `ObserveJoinedChannels`, `ObserveAppTheme` and the others (see Observers and events in `CONVENTIONS.md`).
+- **The older observers read before they subscribe:** D36 is on it.
 - **File names:** `app/model/AppState.kt` holds `UserState` and `ActiveState`; rename it when those move to `user/model`. The rest is in the review's section 6.
 - **Unlocked collections** in `ChatRepo`, `LocalChannelPreferences`, `NostrClient` and the Apple Bluetooth services: local work, design first.
 - **Open from the plan:** (d) pass-through use cases, (e) scopes and dispatchers, (f) a transport port; where tracked rules live. Plan §3 is a list of old proposals, not instructions (see the note at the top of the plan).
