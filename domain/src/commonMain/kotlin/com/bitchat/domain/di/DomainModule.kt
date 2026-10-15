@@ -21,6 +21,7 @@ import com.bitchat.domain.chat.GetAvailableNamedChannels
 import com.bitchat.domain.chat.GetChannelKeyCommitment
 import com.bitchat.domain.chat.GetChannelMembers
 import com.bitchat.domain.chat.GetGeohashParticipants
+import com.bitchat.domain.chat.ObserveActiveChannel
 import com.bitchat.domain.chat.ObserveJoinedChannels
 import com.bitchat.domain.chat.ObserveJoinedNamedChannels
 import com.bitchat.domain.chat.FindMeshPeerByName
@@ -180,6 +181,7 @@ val domainModule = module {
     single<TorEventBus> { InMemoryTorEventBus(contextFacade = get()) }
 
     single { ObserveJoinedChannels(chatRepository = get(), chatEventBus = get()) }
+    single { ObserveActiveChannel(getUserState = get(), chatEventBus = get()) }
     single { JoinChannel(chatRepository = get(), chatEventBus = get()) }
     single { SetChannelPassword(chatRepository = get(), chatEventBus = get()) }
 
