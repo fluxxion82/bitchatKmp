@@ -4,6 +4,7 @@ import com.bitchat.bluetooth.facade.CryptoSigningFacade
 import com.bitchat.bluetooth.facade.NoiseEncryptionFacade
 import com.bitchat.bluetooth.manager.HandshakeSupervisor
 import com.bitchat.bluetooth.manager.HandshakeRefreshPolicy
+import com.bitchat.bluetooth.manager.MADE_HERE_TTL
 import com.bitchat.bluetooth.protocol.BinaryProtocol
 import com.bitchat.bluetooth.protocol.BitchatPacket
 import com.bitchat.bluetooth.protocol.IdentityAnnouncement
@@ -96,7 +97,8 @@ class BluetoothMeshServiceLoRaIngressTest {
             fixture.service.myPeerID, bluetoothRemote.crypto.getNoisePrivateKey(), bluetoothRemote.crypto.getNoisePublicKey()
         )
         fixture.service.onPacketReceived(
-            exactPacket(bluetoothRemote.id, fixture.service.myPeerID, payload = bluetoothOpening), "bluetooth-address"
+            exactPacket(bluetoothRemote.id, fixture.service.myPeerID, payload = bluetoothOpening, ttl = MADE_HERE_TTL),
+            "bluetooth-address"
         )
         eventually("a Bluetooth opening to use its own admission link") {
             fixture.service.hasNoiseCandidate(bluetoothRemote.id)
@@ -307,11 +309,12 @@ class BluetoothMeshServiceRadioLinkTest {
         eventually("the user's opening to be recorded") { pair.a.service.handshakeSupervisorSize() == 1 }
         withContext(Dispatchers.Default) { delay(HandshakeRefreshPolicy.HANDSHAKE_RESTART_GRACE_MS + 300) }
 
-        // Any packet under b's id from an address a has not seen b on, readable or not: no key is
-        // needed for it, and it makes a start the handshake again.
+        // Any packet under b's id, as b itself would send it, from an address a has not seen b on,
+        // readable or not: no key is needed for it, and it makes a start the handshake again.
         val forged = BitchatPacket(
             type = MessageType.NOISE_ENCRYPTED.value, senderID = pair.b.id.hexToBytes(),
-            recipientID = "0f0e0d0c0b0a0908".hexToBytes(), timestamp = 7u, payload = ByteArray(40) { it.toByte() }, ttl = 1u,
+            recipientID = "0f0e0d0c0b0a0908".hexToBytes(), timestamp = 7u, payload = ByteArray(40) { it.toByte() },
+            ttl = MADE_HERE_TTL,
         )
         pair.a.service.onPacketReceived(requireNotNull(BinaryProtocol.encode(forged)), "an-address-never-seen")
 
@@ -751,12 +754,13 @@ class BluetoothMeshServiceRadioLinkTest {
         eventually("the user's opening to be recorded") { pair.a.service.handshakeAttemptsFor(pair.b.id) == 1 }
         withContext(Dispatchers.Default) { delay(HandshakeRefreshPolicy.HANDSHAKE_RESTART_GRACE_MS + 300) }
 
-        // Any packet under b's id from an address a has not seen b on makes a start the handshake
-        // again; this time the radio has no time on air for it.
+        // Any packet under b's id, as b itself would send it, from an address a has not seen b on
+        // makes a start the handshake again; this time the radio has no time on air for it.
         pair.radio.answer = { RadioSendResult.NO_TIME_ON_AIR }
         val forged = BitchatPacket(
             type = MessageType.NOISE_ENCRYPTED.value, senderID = pair.b.id.hexToBytes(),
-            recipientID = "0f0e0d0c0b0a0908".hexToBytes(), timestamp = 7u, payload = ByteArray(40) { it.toByte() }, ttl = 1u,
+            recipientID = "0f0e0d0c0b0a0908".hexToBytes(), timestamp = 7u, payload = ByteArray(40) { it.toByte() },
+            ttl = MADE_HERE_TTL,
         )
         pair.a.service.onPacketReceived(requireNotNull(BinaryProtocol.encode(forged)), "an-address-never-seen")
         eventually("the restart to be refused and put aside") {
@@ -2125,7 +2129,7 @@ private class FallbackServiceFixture(
 
     suspend fun announce(address: String = "remote-address") {
         val payload = requireNotNull(IdentityAnnouncement("remote", remoteCrypto.getNoisePublicKey(), remoteCrypto.getSigningPublicKey()).encode())
-        deliver(MessageType.ANNOUNCE, payload, SpecialRecipients.BROADCAST, address)
+        deliver(MessageType.ANNOUNCE, payload, SpecialRecipients.BROADCAST, address, ttl = MADE_HERE_TTL)
         eventually("active remote peer") { service.getPeerInfo(remoteID) != null }
     }
 
@@ -2134,10 +2138,11 @@ private class FallbackServiceFixture(
         payload: ByteArray,
         recipient: ByteArray = service.myPeerID.hexToBytes(),
         address: String = "remote-address",
-        sender: String = remoteID
+        sender: String = remoteID,
+        ttl: UByte = 1u
     ) {
         val packet = BitchatPacket(type = type.value, senderID = sender.hexToBytes(), recipientID = recipient,
-            timestamp = timestamp++, payload = payload, ttl = 1u)
+            timestamp = timestamp++, payload = payload, ttl = ttl)
         service.onPacketReceived(requireNotNull(BinaryProtocol.encode(packet)), address)
     }
 }

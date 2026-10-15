@@ -2,6 +2,7 @@ package com.bitchat.bluetooth.manager
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -53,6 +54,17 @@ class PeerLinkDirectoryTest {
 
         assertTrue(binding.isNewLink)
         assertEquals(listOf(first), binding.superseded)
+    }
+
+    @Test
+    fun anAddressQuietForExactlyTheWindowIsStillLive() {
+        val directory = PeerLinkDirectory()
+        directory.bind(phone, first, now = 0L)
+
+        val binding = directory.bind(phone, second, now = PeerLinkDirectory.LIVE_LINK_WINDOW_MS)
+
+        assertTrue(binding.superseded.isEmpty())
+        assertEquals(30_000L, PeerLinkDirectory.LIVE_LINK_WINDOW_MS)
     }
 
     @Test
@@ -161,5 +173,63 @@ class PeerLinkDirectoryTest {
         assertTrue(directory.snapshot().isEmpty())
         assertNull(directory.peerFor(first))
         assertNull(directory.peerFor(third))
+    }
+
+    @Test
+    fun onlyAPacketWithTheHopCountItsMakerGaveItCanBind() {
+        // This app makes its packets with 3, the upstream clients with 7; a relay takes one off.
+        val straight = (0..255).filter { mayBindItsMaker(it.toUByte()) }
+
+        assertEquals(listOf(3, 7), straight)
+        assertEquals(3, MADE_HERE_TTL.toInt())
+        assertEquals(7, MADE_UPSTREAM_TTL.toInt())
+    }
+
+    @Test
+    fun trafficOnABoundAddressKeepsItLive() {
+        val directory = PeerLinkDirectory()
+        directory.bind(phone, first, now = 0L)
+
+        // `first` carries a packet the phone only passed on, 20 s later.
+        directory.heard(first, now = 20_000L)
+
+        // Live until 30 s after that, and no longer.
+        assertTrue(directory.bind(phone, second, now = 50_000L).superseded.isEmpty())
+        assertEquals(listOf(first), directory.bind(phone, third, now = 50_001L).superseded)
+    }
+
+    @Test
+    fun trafficOnAnAddressNobodyIsBoundToBindsNothing() {
+        val directory = PeerLinkDirectory()
+
+        directory.heard(first, now = 0L)
+
+        assertNull(directory.peerFor(first))
+        assertTrue(directory.snapshot().isEmpty())
+    }
+
+    @Test
+    fun aPacketOfThePeersOwnOnALinkItHasKeepsThatLinkLive() {
+        val directory = PeerLinkDirectory()
+        directory.bind(phone, first, now = 0L)
+        directory.bind(phone, first, now = 20_000L)
+
+        val binding = directory.bind(phone, second, now = 40_000L)
+
+        assertTrue(binding.superseded.isEmpty())
+    }
+
+    @Test
+    fun aBindingThatIsNotNewSupersedesNothing() {
+        // This app announces every 30 s, so a phone's second live link can be a moment past the
+        // window when the copy on the first is handled. Only a new binding judges the others.
+        val directory = PeerLinkDirectory()
+        directory.bind(phone, first, now = 0L)
+        directory.bind(phone, second, now = 0L)
+
+        val binding = directory.bind(phone, first, now = PeerLinkDirectory.LIVE_LINK_WINDOW_MS + 1)
+
+        assertFalse(binding.isNewLink)
+        assertTrue(binding.superseded.isEmpty())
     }
 }

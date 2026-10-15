@@ -1,5 +1,19 @@
 package com.bitchat.bluetooth.manager
 
+/** The hop count this app gives a packet it makes for the Bluetooth mesh. */
+const val MADE_HERE_TTL: UByte = 3u
+
+/** The hop count the upstream clients give a packet they make. */
+const val MADE_UPSTREAM_TTL: UByte = 7u
+
+/**
+ * Whether a packet that arrived with [ttl] may bind its link to the device that made it: its hop count
+ * is one a maker gives its packets, which a relay takes down. Not a proof: an upstream packet reaches 3
+ * after four relays, or fewer where an upstream relay lowers the count by more than one; and a
+ * neighbour's own packet with another count (an upstream sync request has 0) binds nothing.
+ */
+fun mayBindItsMaker(ttl: UByte): Boolean = ttl == MADE_HERE_TTL || ttl == MADE_UPSTREAM_TTL
+
 /**
  * Which BLE addresses currently stand for which peer.
  *
@@ -20,16 +34,18 @@ package com.bitchat.bluetooth.manager
  */
 class PeerLinkDirectory {
 
+    private class Link(val peerID: String, var lastSeen: Long)
+
     private val peerToDevices = mutableMapOf<String, MutableSet<String>>()
-    private val deviceToPeer = mutableMapOf<String, String>()
-    private val lastSeen = mutableMapOf<String, Long>()
+    private val links = mutableMapOf<String, Link>()
 
     companion object {
         /**
          * How recently an address must have carried a packet to count as a live link.
          *
-         * Rotation and relaying look identical from the peer ID alone, so liveness is what separates
-         * them: a rotated-away address goes silent immediately, while a relay keeps delivering.
+         * Rotation and a second live link look alike from the peer ID alone, so liveness is what
+         * separates them: a rotated-away address goes silent immediately, a live link keeps carrying
+         * packets.
          */
         const val LIVE_LINK_WINDOW_MS = 30_000L
     }
@@ -50,14 +66,14 @@ class PeerLinkDirectory {
      * An address already bound to a different peer is re-pointed: BlueZ hands out an address to one
      * device at a time, so the previous owner has moved on.
      *
-     * Only addresses that have gone quiet are reported as superseded. A packet names the peer that
-     * ORIGINATED it, not the neighbour that handed it over, so a relayed packet makes its originator
-     * look as though it moved onto the relay's address. It has not, and both links are live --
-     * releasing on that basis tore down the peer's real link, which the mesh then rebuilt and tore
-     * down again.
+     * Bind only from a packet that [mayBindItsMaker]: a packet names the peer that MADE it, so a
+     * relayed one would make its maker look as though it moved onto the relay's link, and its real
+     * link would be released. Only addresses that have gone quiet are reported as superseded: a phone
+     * can hold two live links to this device at once, the one it connected in from and the one this
+     * device dialled.
      */
     fun bind(peerID: String, address: String, now: Long): Binding {
-        val previousOwner = deviceToPeer[address]
+        val previousOwner = links[address]?.peerID
         val isNewLink = previousOwner != peerID
 
         if (previousOwner != null && previousOwner != peerID) {
@@ -67,12 +83,11 @@ class PeerLinkDirectory {
             }
         }
 
-        deviceToPeer[address] = peerID
-        lastSeen[address] = now
+        links[address] = Link(peerID, now)
         val devices = peerToDevices.getOrPut(peerID) { mutableSetOf() }
         val superseded = if (isNewLink) {
             // An address with no recorded sighting has never carried a packet, so it counts as quiet.
-            devices.filter { it != address && now - (lastSeen[it] ?: (now - LIVE_LINK_WINDOW_MS - 1)) > LIVE_LINK_WINDOW_MS }
+            devices.filter { it != address && now - (links[it]?.lastSeen ?: (now - LIVE_LINK_WINDOW_MS - 1)) > LIVE_LINK_WINDOW_MS }
         } else {
             emptyList()
         }
@@ -82,28 +97,34 @@ class PeerLinkDirectory {
     }
 
     /**
+     * A packet [bind] is not told about arrived on [address] at [now]. The link carries traffic, so
+     * it is live, whoever is bound to it.
+     */
+    fun heard(address: String, now: Long) {
+        links[address]?.lastSeen = now
+    }
+
+    /**
      * Forget [address]. Called when its link goes down; the peer stays known through whatever other
      * address it is now using.
      */
     fun release(address: String) {
-        lastSeen.remove(address)
-        val peerID = deviceToPeer.remove(address) ?: return
+        val peerID = links.remove(address)?.peerID ?: return
         val devices = peerToDevices[peerID] ?: return
         devices.remove(address)
         if (devices.isEmpty()) peerToDevices.remove(peerID)
     }
 
-    fun peerFor(address: String): String? = deviceToPeer[address]
+    fun peerFor(address: String): String? = links[address]?.peerID
 
     fun addressesFor(peerID: String): Set<String> = peerToDevices[peerID]?.toSet() ?: emptySet()
 
     fun addressFor(peerID: String): String? = peerToDevices[peerID]?.firstOrNull()
 
-    fun snapshot(): Map<String, String> = deviceToPeer.toMap()
+    fun snapshot(): Map<String, String> = links.mapValues { it.value.peerID }
 
     fun clear() {
         peerToDevices.clear()
-        deviceToPeer.clear()
-        lastSeen.clear()
+        links.clear()
     }
 }

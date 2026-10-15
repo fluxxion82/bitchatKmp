@@ -14,6 +14,8 @@ import com.bitchat.bluetooth.manager.FragmentManager
 import com.bitchat.bluetooth.manager.HandshakeSupervisor
 import com.bitchat.bluetooth.manager.OwedHandshakes
 import com.bitchat.bluetooth.manager.PeerLinkDirectory
+import com.bitchat.bluetooth.manager.MADE_HERE_TTL
+import com.bitchat.bluetooth.manager.mayBindItsMaker
 import com.bitchat.bluetooth.manager.PeerManager
 import com.bitchat.bluetooth.manager.PeerManagerDelegate
 import com.bitchat.bluetooth.manager.SecurityManager
@@ -104,6 +106,8 @@ class BluetoothMeshService(
     // What the wait for the radio is measured with: a clock that only goes forward, whatever is done
     // to the device's time of day (a board without a battery clock has its own set after it starts).
     private val radioWaitClock: TimeSource = TimeSource.Monotonic,
+    // When a link last carried a packet. A parameter so a test can move it.
+    private val linkClock: Clock = Clock.System,
 ) : ConnectionEstablishedCallback {
     val myPeerID: String = cryptoSigning.getIdentityFingerprint()
 
@@ -321,10 +325,16 @@ class BluetoothMeshService(
                     return@launch
                 }
 
-                val binding = recordPeerDeviceMapping(peerID, deviceAddress)
-                if (binding.isNewLink) {
-                    releaseSupersededLinks(peerID, binding.superseded)
-                    onPeerLinkRefreshed(peerID)
+                // A packet another device passed on names its maker, not the device at the other end
+                // of this link: it says only that the link is live.
+                if (mayBindItsMaker(packet.ttl)) {
+                    val binding = recordPeerDeviceMapping(peerID, deviceAddress)
+                    if (binding.isNewLink) {
+                        releaseSupersededLinks(peerID, binding.superseded)
+                        onPeerLinkRefreshed(peerID)
+                    }
+                } else {
+                    devicePeerLock.withLock { peerLinks.heard(deviceAddress, linkClock.now().toEpochMilliseconds()) }
                 }
 
                 val messageType = MessageType.fromValue(packet.type)?.name ?: "UNKNOWN"
@@ -848,7 +858,7 @@ class BluetoothMeshService(
                 recipientID = BitchatPacket.hexStringToByteArray(send.recipientPeerID),
                 timestamp = nextEncryptedPacketTime(),
                 payload = encryptedPayload,
-                ttl = 3u
+                ttl = MADE_HERE_TTL
             )
 
             if (byRadio) {
@@ -1107,7 +1117,7 @@ class BluetoothMeshService(
 
             val packet = BitchatPacket(
                 type = MessageType.ANNOUNCE.value,
-                ttl = 3u,
+                ttl = MADE_HERE_TTL,
                 senderID = myPeerID,
                 payload = payload
             )
@@ -1206,9 +1216,13 @@ class BluetoothMeshService(
         peerID: String,
         deviceAddress: String
     ): PeerLinkDirectory.Binding {
+        // Released in the same step it is judged quiet: a packet on it a moment later would make it live.
         val binding = devicePeerLock.withLock {
-            peerLinks.bind(peerID, deviceAddress, Clock.System.now().toEpochMilliseconds())
-                .also { peerLinkSnapshot = peerLinks.snapshot() }
+            peerLinks.bind(peerID, deviceAddress, linkClock.now().toEpochMilliseconds())
+                .also { binding ->
+                    binding.superseded.forEach(peerLinks::release)
+                    peerLinkSnapshot = peerLinks.snapshot()
+                }
         }
         if (binding.isNewLink) {
             logDebug(
@@ -1235,13 +1249,7 @@ class BluetoothMeshService(
             "Peer ${peerID.take(8)} moved address; releasing ${superseded.size} superseded " +
                 "link(s): ${superseded.joinToString { it.take(8) }}"
         )
-        superseded.forEach { address ->
-            devicePeerLock.withLock {
-                peerLinks.release(address)
-                peerLinkSnapshot = peerLinks.snapshot()
-            }
-            connectionService.disconnectDeviceByAddress(address)
-        }
+        superseded.forEach { address -> connectionService.disconnectDeviceByAddress(address) }
     }
 
     fun getPeerNicknames(): Map<String, String> {
@@ -1348,7 +1356,7 @@ class BluetoothMeshService(
                     recipientID = BitchatPacket.hexStringToByteArray(peerID),
                     timestamp = (Clock.System.now().toEpochMilliseconds()).toULong(),
                     payload = handshakeData,
-                    ttl = 3u
+                    ttl = MADE_HERE_TTL
                 )
 
                 if (goesByRadio(peerID, arrivedOn = null)) {
@@ -1459,7 +1467,7 @@ class BluetoothMeshService(
                     recipientID = BitchatPacket.hexStringToByteArray(peerID),
                     timestamp = (Clock.System.now().toEpochMilliseconds()).toULong(),
                     payload = handshakeData,
-                    ttl = 3u
+                    ttl = MADE_HERE_TTL
                 )
 
                 broadcastPacket(packet)
@@ -1583,7 +1591,7 @@ class BluetoothMeshService(
                     timestamp = (Clock.System.now().toEpochMilliseconds()).toULong(),
                     payload = payload,
                     signature = null,
-                    ttl = 3u
+                    ttl = MADE_HERE_TTL
                 )
 
                 broadcastPacket(packet)
@@ -1650,7 +1658,7 @@ class BluetoothMeshService(
                     timestamp = nextEncryptedPacketTime(),
                     payload = encryptedPayload,
                     signature = null,
-                    ttl = 3u
+                    ttl = MADE_HERE_TTL
                 )
 
                 broadcastPacket(packet)
@@ -1686,7 +1694,7 @@ class BluetoothMeshService(
                 timestamp = Clock.System.now().toEpochMilliseconds().toULong(),
                 payload = content.encodeToByteArray(),
                 signature = null,
-                ttl = 3u
+                ttl = MADE_HERE_TTL
             )
 
             broadcastPacket(packet)
