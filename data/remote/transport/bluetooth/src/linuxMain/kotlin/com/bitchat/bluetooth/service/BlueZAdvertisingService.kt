@@ -72,6 +72,10 @@ class BlueZAdvertisingService(
     private var pendingRegistration: CPointer<DBusPendingCall>? = null
     private val registration = AdvertisementRegistration()
 
+    // Counts the dispatch workers stopped so far. A worker that outlives its stop (stop waits 200 ms,
+    // it does not join) must not take or send for the registration of the next one.
+    private var workerGeneration = 0
+
     private var currentServiceUuid: String = DEFAULT_SERVICE_UUID
     private var currentDeviceName: String = "bitchat"
     private var dispatchWorker: Worker? = null
@@ -248,7 +252,7 @@ class BlueZAdvertisingService(
                 if (synchronized(registrationLock) { registration.stopWaiting() }) {
                     logInfo(
                         TAG,
-                        "RegisterAdvertisement has no answer after $START_WAIT_MS ms; " +
+                        "RegisterAdvertisement is not registered after $START_WAIT_MS ms; " +
                             "going on, and taking the answer when BlueZ gives it"
                     )
                 }
@@ -262,15 +266,19 @@ class BlueZAdvertisingService(
      * Take BlueZ's answer to RegisterAdvertisement if it has come. The dispatch loop calls this
      * after every pass, so an answer is taken however late it is and whichever thread read it.
      */
-    internal fun takeRegistrationAnswer(connection: CPointer<DBusConnection>): Unit = synchronized(registrationLock) {
+    internal fun takeRegistrationAnswer(connection: CPointer<DBusConnection>, generation: Int): Unit = synchronized(registrationLock) {
+        if (generation != workerGeneration) return@synchronized
         val call = pendingRegistration ?: return@synchronized
         if (dbus_pending_call_get_completed(call) == 0u) return@synchronized
         pendingRegistration = null
-        val errorName = try {
+        val answer = try {
             answerOf(call)
         } finally {
             dbus_pending_call_unref(call)
         }
+        val errorName = answer.errorName
+        // BlueZ's message says which of its refusals this is; the name alone (Failed) does not.
+        val refusal = answer.message?.let { "$errorName: $it" } ?: errorName
 
         when (val next = registration.answered(errorName, monotonicMillis())) {
             is AdvertisementRegistration.Next.Registered -> logInfo(
@@ -288,24 +296,51 @@ class BlueZAdvertisingService(
                 }
             }
 
+            is AdvertisementRegistration.Next.RetryAfter ->
+                logInfo(TAG, "RegisterAdvertisement was refused ($refusal); asking again in ${next.delayMs} ms")
+
             is AdvertisementRegistration.Next.GaveUp ->
-                logError(TAG, "Failed to register advertisement: ${next.reason}")
+                logError(TAG, "Failed to register advertisement: ${next.reason}" + (answer.message?.let { " ($it)" } ?: ""))
 
             AdvertisementRegistration.Next.Ignore -> Unit
         }
     }
 
-    /** The error name of a completed call's answer, null for a method return; no answer at all is NoReply. */
-    private fun answerOf(call: CPointer<DBusPendingCall>): String? {
-        val reply = dbus_pending_call_steal_reply(call) ?: return "org.freedesktop.DBus.Error.NoReply"
+    /** Make the request again once the delay [AdvertisementRegistration.Next.RetryAfter] asked for is over. */
+    internal fun sendDueRegistrationRetry(connection: CPointer<DBusConnection>, generation: Int): Unit = synchronized(registrationLock) {
+        if (generation != workerGeneration || !registration.isWaitingToRetry) return@synchronized
+        if (!registration.retryDue(monotonicMillis())) return@synchronized
+        logInfo(TAG, "Asking BlueZ to register the advertisement again")
+        pendingRegistration = sendRegisterAdvertisement(connection)
+        if (pendingRegistration == null) {
+            registration.couldNotAskAgain()
+            logError(TAG, "Failed to register advertisement: RegisterAdvertisement could not be sent again")
+        }
+    }
+
+    /** What a completed call was answered with: [errorName] is null for a method return, and no answer at all is NoReply. */
+    private class Answer(val errorName: String?, val message: String?)
+
+    private fun answerOf(call: CPointer<DBusPendingCall>): Answer {
+        val reply = dbus_pending_call_steal_reply(call) ?: return Answer("org.freedesktop.DBus.Error.NoReply", null)
         return try {
             if (dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
-                dbus_message_get_error_name(reply)?.toKString() ?: "unknown error"
+                Answer(dbus_message_get_error_name(reply)?.toKString() ?: "unknown error", errorMessageOf(reply))
             } else {
-                null
+                Answer(null, null)
             }
         } finally {
             dbus_message_unref(reply)
+        }
+    }
+
+    /** The text an error reply carries as its first argument, if it carries one. */
+    private fun errorMessageOf(reply: CPointer<DBusMessage>): String? = memScoped {
+        val text = alloc<CPointerVar<ByteVar>>()
+        if (dbus_message_get_args(reply, null, DBUS_TYPE_STRING.toInt(), text.ptr, DBUS_TYPE_INVALID) == 0u) {
+            null
+        } else {
+            text.value?.toKString()
         }
     }
 
@@ -365,12 +400,14 @@ class BlueZAdvertisingService(
         }
         filterConnection = connection
 
+        val generation = synchronized(registrationLock) { workerGeneration }
         dispatchWorker = Worker.start(name = "DBusAdvDispatch")
         dispatchWorker?.execute(
             TransferMode.SAFE,
-            { Triple(connection, dispatchRunning, this) }
+            { Pair(Triple(connection, dispatchRunning, this), generation) }
         ) { ctx ->
-            val (conn, flag, service) = ctx
+            val (conn, flag, service) = ctx.first
+            val mine = ctx.second
             println("[BLUEZ_ADV] D-Bus dispatch loop started")
             platform.posix.fflush(platform.posix.stdout)
             while (flag.value == 1) {
@@ -378,9 +415,11 @@ class BlueZAdvertisingService(
                 // After every message, not once the queue is empty: with the GATT server's
                 // dispatcher reading too, the queue need never be empty.
                 while (dbus_connection_dispatch(conn) == DBusDispatchStatus.DBUS_DISPATCH_DATA_REMAINS) {
-                    service.takeRegistrationAnswer(conn)
+                    service.takeRegistrationAnswer(conn, mine)
+                    service.sendDueRegistrationRetry(conn, mine)
                 }
-                service.takeRegistrationAnswer(conn)
+                service.takeRegistrationAnswer(conn, mine)
+                service.sendDueRegistrationRetry(conn, mine)
             }
             println("[BLUEZ_ADV] D-Bus dispatch loop stopped")
             platform.posix.fflush(platform.posix.stdout)
@@ -393,6 +432,7 @@ class BlueZAdvertisingService(
 
     private fun stopDbusDispatchLoop() {
         if (dispatchRunning.compareAndSet(1, 0)) {
+            synchronized(registrationLock) { workerGeneration++ }
             usleep(200_000u) // allow worker to exit
             dispatchWorker = null
         }
