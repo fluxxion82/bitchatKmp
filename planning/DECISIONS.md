@@ -52,3 +52,7 @@ The owner's decisions, newest last. Agents propose; only the owner decides. Each
 - **D30. The next cloud slice is `ObserveUserState` and `ObserveFavorites` in the domain, with tests** (Q11, the owner, 2026-10-13). Local agents then switch `MainViewModel` off its own collection of `UserEventBus`.
 - **D31. The wipe publishes what it changes in the user store** (Q12, the owner, 2026-10-14): `NicknameUpdated`, and a new `UserEvent.FavoritesCleared` that `ObserveFavorites` reads again on, both right after `userRepository.clearData()` inside the wipe's barrier.
 - **D32. The next cloud slice is D31, then the domain half of taking `ChatViewModel` off `ChatEventBus`** (Q13, the owner, 2026-10-14). Local agents then switch `ChatViewModel` and add the Konsist rule that no view model imports an `eventbus` or a `repository` package.
+
+## 2026-10-15, from the owner's chat with cloud-claude
+
+- **D33. D32's use case is `ObserveActiveChannel : Flow<Channel?>`,** not `ObserveUserStateOnChannelChange`. Why: that name broke the naming rule (D1): an `Observe` use case is named for the model it gives. The owner weighed two other options, merging into `ObserveUserState` and an `ObserveUserState` with a parameter, and chose a separate use case. The merge would have given `MainViewModel` a chat navigation on every `ChannelChanged`, and `ChatViewModel` a cleared channel on Settings. It emits the channel the chat follows: a saved chat's channel, `Channel.Mesh` when Bluetooth is off (LoRa), otherwise null. It reads on start and on every `ChannelChanged`, as before.

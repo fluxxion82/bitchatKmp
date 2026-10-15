@@ -472,3 +472,30 @@ Findings, reported and not fixed:
       - the read made before the subscription. That is the old shape, and only the during-the-first-read test catches it.
 - Not built: `:data:repo` (see above), `:presentation:viewmodel` and every app.
 - Needs: the `LoRaAppInitializer` line, a local build and review, then the `ChatViewModel` switch and its Konsist rule. The owner's word on the name.
+
+## 2026-10-15, cloud-claude (D33: `ObserveActiveChannel` replaces the D32 commit)
+
+- The owner turned down the name `ObserveUserStateOnChannelChange`: it breaks D1. Of three options the owner chose a separate use case named for the model it gives (D33). The other two were merging into `ObserveUserState` and an `ObserveUserState` with a parameter.
+- Rewrote my own unreviewed branch so it stays at two commits:
+  - `claude/wipe-events-and-chat-state` is now at **`f84bbc9`**. `651f462` (D31) is unchanged.
+  - The D32 commit `7327b2d` is replaced by `f84bbc9` "Add ObserveActiveChannel". Pushed with `--force-with-lease` on `7327b2d`.
+  - If you fetched `7327b2d`, fetch again.
+- `chat/ObserveActiveChannel : Usecase<Unit, Flow<Channel?>>`:
+  - It takes `GetUserState` and `ChatEventBus`.
+  - It has the same subscribe-first shape and the same triggers (start, every `ChannelChanged`, repeats kept) as the commit it replaces.
+  - It emits the channel `ChatViewModel` follows today: a saved chat's channel; `Channel.Mesh` for `BluetoothDisabled` (LoRa); null for any other state. That mapping moves from `ChatViewModel` into the domain.
+  - Its `single` is in `domainModule`. `ObserveActiveChannelTest` has 10 tests: the 8 from before, plus a non-chat state giving null and another blocking state giving null.
+- **For the local switch:** today, for `BluetoothDisabled`, `ChatViewModel` sets only `_currentChannel` to the mesh and leaves `_state` (`selectedLocationChannel`, `currentGeohash`, `currentChannel`) as it was. With `ObserveActiveChannel` it receives the mesh like any chat channel. Whether `_state` may follow is your call in the switch. Nothing else differs from today's collector, apart from subscribing first.
+- G1 and G2 stand as written in the plan.
+- Built and ran:
+  - The stand-alone `:domain` build. The full `:domain:jvmTest` at `f84bbc9` ran 216 tests (`651f462`'s 206 plus 10), 0 failures, with the Konsist rules. The task line read `> Task :domain:jvmTest`, and no results were left over from the removed test class.
+  - Mutations, eight in all. Each was applied alone, `ObserveActiveChannelTest` was run with `--tests`, and the file was restored. Each run left fresh failures, so the task ran. Every one failed at least one test:
+    - `ChannelChanged` not matched;
+    - a re-read on every event;
+    - `distinctUntilChanged` added;
+    - no read on start;
+    - the read before the subscription, which only the during-the-first-read test catches;
+    - Bluetooth off giving no channel;
+    - a non-chat state giving the mesh;
+    - another blocking state giving the mesh.
+- Not built: as before, `:data:repo` (the `LoRaAppInitializer` line), `:presentation:viewmodel` and the apps.

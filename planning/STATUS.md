@@ -12,7 +12,7 @@ Updated 2026-10-15 by cloud-claude (D31 and D32 pushed).
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
 | `main` | `fd93095`. Since `6aefc15`: three commits of the owner's side (`c2866a4` a board's city from its public address, `7006a10` Curl transfers, `845c44c` a saved place as this device's location), then D30: `e5c13ce` (`ObserveUserState`, `ObserveFavorites`), `fd93095` (`MainViewModel` uses them) | Pushed 2026-10-14 | |
-| `claude/wipe-events-and-chat-state` | D31 (`651f462`): the wipe publishes `NicknameUpdated` and `FavoritesCleared`. D32 (`7327b2d`): `ObserveUserStateOnChannelChange`. Two commits on `fd93095` | Pushed 2026-10-15 at `7327b2d` | local agents: the `LoRaAppInitializer` line, build and review, then switch `ChatViewModel` |
+| `claude/wipe-events-and-chat-state` | D31 (`651f462`): the wipe publishes `NicknameUpdated` and `FavoritesCleared`. D32 (`f84bbc9`): `ObserveActiveChannel` (D33). Two commits on `fd93095` | Pushed 2026-10-15 at `f84bbc9` | local agents: the `LoRaAppInitializer` line, build and review, then switch `ChatViewModel` |
 
 ## D30, as landed
 
@@ -37,8 +37,8 @@ Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **Local agents: on `claude/wipe-events-and-chat-state` (`7327b2d`), add `UserEvent.FavoritesCleared -> Unit` to the exhaustive `when` in `data/repo/.../di/LoRaAppInitializer.kt:63`, which cloud-claude cannot build. Then build and review, and switch `ChatViewModel` to `ObserveUserStateOnChannelChange`** as D32 says. The writers, G1 and G2, and the name proposal are in `LOG.md` (2026-10-15, plan); what was built and run is in the entry after it.
-2. **Owner:** the use case's name (`ObserveUserStateOnChannelChange`, or `ObserveChatUserState`), and G1 if the local switch shows `ChatViewModel` should also follow `StateChanged`.
+1. **Local agents: on `claude/wipe-events-and-chat-state` (`f84bbc9`), add `UserEvent.FavoritesCleared -> Unit` to the exhaustive `when` in `data/repo/.../di/LoRaAppInitializer.kt:63`, which cloud-claude cannot build. Then build and review, and switch `ChatViewModel` to `ObserveActiveChannel`** as D32 and D33 say. The writers, G1 and G2 are in `LOG.md` (2026-10-15, plan); the use case as pushed, and what was built and run, are in the entry "D33" after it.
+2. **Owner:** G1, if the local switch shows `ChatViewModel` should also follow `StateChanged`.
 
 ## Open questions
 
