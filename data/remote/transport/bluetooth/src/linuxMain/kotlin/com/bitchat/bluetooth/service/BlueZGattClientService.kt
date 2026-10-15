@@ -1,14 +1,17 @@
 package com.bitchat.bluetooth.service
 
+import com.bitchat.bluetooth.manager.ConnectCall
 import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logError
 import com.bitchat.bluetooth.protocol.logInfo
 import com.bitchat.bluetooth.protocol.ChunkReassembler
 import gattlib.*
+import glib.g_quark_try_string
 import kotlinx.cinterop.*
 import kotlinx.coroutines.delay
 import kotlin.concurrent.AtomicInt
 import kotlin.concurrent.AtomicReference
+import kotlin.time.TimeSource
 import platform.posix.free
 import platform.posix.size_t
 
@@ -141,16 +144,23 @@ class BlueZGattClientService(
         UNKNOWN_DEVICE
     }
 
+    data class ConnectAttempt(
+        val outcome: ConnectOutcome,
+        val call: ConnectCall,
+        val dialStarted: TimeSource.Monotonic.ValueTimeMark
+    )
+
     /**
      * Connect to a BLE peripheral.
      *
      * @param deviceAddress MAC address of the device
      * @return what gattlib made of the request
      */
-    suspend fun connect(deviceAddress: String): ConnectOutcome {
+    suspend fun connect(deviceAddress: String): ConnectAttempt {
+        val started = TimeSource.Monotonic.markNow()
         if (connections.value.containsKey(deviceAddress)) {
             logDebug(TAG, "Already connected to $deviceAddress")
-            return ConnectOutcome.STARTED
+            return ConnectAttempt(ConnectOutcome.STARTED, ConnectCall.OTHER, started)
         }
 
         logInfo(TAG, "Connecting to $deviceAddress...")
@@ -158,14 +168,14 @@ class BlueZGattClientService(
         val adapter = manager.getAdapter() ?: run {
             if (!manager.openAdapter()) {
                 logError(TAG, "Failed to open adapter")
-                return ConnectOutcome.REFUSED
+                return ConnectAttempt(ConnectOutcome.REFUSED, ConnectCall.OTHER, started)
             }
             manager.getAdapter()
         }
 
         if (adapter == null) {
             logError(TAG, "Adapter is null")
-            return ConnectOutcome.REFUSED
+            return ConnectAttempt(ConnectOutcome.REFUSED, ConnectCall.OTHER, started)
         }
 
         // Try connecting with random address support (Android devices use random BLE addresses)
@@ -173,6 +183,7 @@ class BlueZGattClientService(
         val connectionOptions = (GATTLIB_CONNECTION_OPTIONS_LEGACY_BDADDR_LE_PUBLIC or
                 GATTLIB_CONNECTION_OPTIONS_LEGACY_BDADDR_LE_RANDOM).toULong()
 
+        val dialStarted = TimeSource.Monotonic.markNow()
         val result = gattlib_connect(
             adapter,
             deviceAddress,
@@ -180,10 +191,15 @@ class BlueZGattClientService(
             staticCFunction(::connectionCallback),
             selfRef.asCPointer()
         )
+        val call = ConnectCall.of(
+            result,
+            g_quark_try_string("g-io-error-quark"),
+            g_quark_try_string("g-dbus-error-quark")
+        )
 
         if (result == GATTLIB_BUSY) {
             logDebug(TAG, "gattlib still owns an attempt to $deviceAddress")
-            return ConnectOutcome.BUSY
+            return ConnectAttempt(ConnectOutcome.BUSY, call, dialStarted)
         }
 
         // GATTLIB_INVALID_PARAMETER is gattlib finding no record for the address ("Cannot find
@@ -191,16 +207,16 @@ class BlueZGattClientService(
         // still had. Either way the device is gone, which is not a failed attempt at reaching it.
         if (result == GATTLIB_INVALID_PARAMETER || result == GATTLIB_NOT_FOUND) {
             logInfo(TAG, "BlueZ has no device $deviceAddress (gattlib error $result)")
-            return ConnectOutcome.UNKNOWN_DEVICE
+            return ConnectAttempt(ConnectOutcome.UNKNOWN_DEVICE, call, dialStarted)
         }
 
         if (result != GATTLIB_SUCCESS) {
             logError(TAG, "Failed to initiate connection to $deviceAddress: ${describeError(result)}")
-            return ConnectOutcome.REFUSED
+            return ConnectAttempt(ConnectOutcome.REFUSED, call, dialStarted)
         }
 
         logDebug(TAG, "Connection initiated to $deviceAddress")
-        return ConnectOutcome.STARTED
+        return ConnectAttempt(ConnectOutcome.STARTED, call, dialStarted)
     }
 
     override suspend fun writeCharacteristic(deviceAddress: String, data: ByteArray): Boolean {

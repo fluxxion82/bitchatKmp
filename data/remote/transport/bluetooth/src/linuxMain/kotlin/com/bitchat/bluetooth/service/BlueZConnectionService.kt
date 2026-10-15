@@ -1,10 +1,13 @@
 package com.bitchat.bluetooth.service
 
 import com.bitchat.bluetooth.manager.CentralLinkPolicy
+import com.bitchat.bluetooth.manager.ConnectCall
+import com.bitchat.bluetooth.manager.ConnectCallLedger
 import com.bitchat.bluetooth.manager.DialBudget
 import com.bitchat.bluetooth.manager.HeardAdvertisers
 import com.bitchat.bluetooth.manager.OrphanedLinks
 import com.bitchat.bluetooth.manager.bitchatLinks
+import com.bitchat.bluetooth.manager.connectCallsText
 import com.bitchat.bluetooth.manager.dialTimeLeftText
 import com.bitchat.bluetooth.protocol.logDebug
 import com.bitchat.bluetooth.protocol.logError
@@ -64,11 +67,16 @@ class BlueZConnectionService(
 
         // The link status line is written once in this many reconciliation passes: once a minute.
         private const val STATUS_EVERY_PASSES = 12
+
+        // Not 75: both units refuse to restart on it. _exit, not exit: atexit handlers must not run
+        // while gattlib's and GLib's threads do; logError has flushed stdout.
+        private const val BUS_REFUSED_EXIT_STATUS = 69
     }
 
     // Server connections (they connected to us)
     private val serverConnections = mutableSetOf<String>()
     private val connectionMutex = Mutex()
+    private val connectCalls = ConnectCallLedger()
 
     // Permission to open an outbound link, and the deadline gattlib does not enforce on one.
     private val linkPolicy = CentralLinkPolicy(
@@ -339,12 +347,16 @@ class BlueZConnectionService(
      * UNKNOWN_DEVICE takes the address out of the dial candidates: BlueZ dropped the device, so
      * every further dial would be refused the same way. Its next signal strength report, which
      * says BlueZ has it again, puts it back.
+     *
+     * A Connect gattlib timed out on is released if nothing here uses its address. Whether the bus
+     * refuses this app for good is asked by the reconciliation loop alone, see [exitIfBluezAnswers].
      */
     private suspend fun handleConnectOutcome(
         deviceAddress: String,
-        outcome: BlueZGattClientService.ConnectOutcome
+        attempt: BlueZGattClientService.ConnectAttempt
     ) {
-        when (outcome) {
+        connectionMutex.withLock { connectCalls.onDial(attempt.call, monotonicMs()) }
+        when (attempt.outcome) {
             BlueZGattClientService.ConnectOutcome.STARTED -> Unit
 
             BlueZGattClientService.ConnectOutcome.BUSY -> {
@@ -362,6 +374,54 @@ class BlueZConnectionService(
                 logInfo(TAG, "BlueZ no longer has ${deviceAddress.take(8)}; not offering it again " +
                         "until BlueZ hears it advertise again")
             }
+        }
+        if (attempt.call == ConnectCall.TIMED_OUT) releaseIfUnused(deviceAddress, attempt.dialStarted)
+    }
+
+    private suspend fun releaseIfUnused(
+        address: String,
+        dialStarted: TimeSource.Monotonic.ValueTimeMark
+    ) {
+        val unused = connectionMutex.withLock {
+            !linkPolicy.isPending(address) &&
+                !gattClient.holdsConnection(address) &&
+                !gattServer.isClientConnected(address)
+        }
+        if (unused) {
+            BlueZDeviceBus.release(address, dialStarted)
+        } else {
+            logInfo(TAG, "${address.take(8)} is in use and is not released")
+        }
+    }
+
+    /**
+     * End the app, so that systemd restarts it, if bluetoothd answers a fresh connection while the bus
+     * refuses this app's own. Called only from the reconciliation loop: a second caller's session would
+     * meet the first one's at the session gate and be read as a silent bluetoothd.
+     */
+    private suspend fun exitIfBluezAnswers() {
+        val answered = BlueZDeviceBus.session { it.ping() } == true
+        if (answered) {
+            // Decided again under the lock: a dial bluetoothd answered during the ping ends the run.
+            connectionMutex.withLock {
+                if (!connectCalls.exitDue(monotonicMs())) return
+                logError(
+                    TAG,
+                    "The system bus has refused this app's Bluetooth calls for at least " +
+                        "${ConnectCallLedger.EXIT_AFTER_MS / 1000} s (${connectCalls.busRefused} refusals since the " +
+                        "start) while bluetoothd answers a fresh connection: the 128 pending calls the bus allows this " +
+                        "app's connection are calls BlueZ never answered. Exiting so that systemd restarts the app"
+                )
+                platform.posix._exit(BUS_REFUSED_EXIT_STATUS)
+            }
+        } else {
+            connectionMutex.withLock { connectCalls.onBluezSilent(monotonicMs()) }
+            logInfo(
+                TAG,
+                "The system bus refuses this app's Bluetooth calls, but bluetoothd did not answer a ping on a " +
+                    "fresh connection either (or another bus session was running); not restarting, asking again " +
+                    "in ${ConnectCallLedger.SILENT_BLUEZ_REST_MS / 1000} s"
+            )
         }
     }
 
@@ -525,6 +585,9 @@ class BlueZConnectionService(
             while (isActive) {
                 delay(CentralLinkPolicy.SWEEP_INTERVAL_MS)
                 try {
+                    if (connectionMutex.withLock { connectCalls.exitDue(monotonicMs()) }) {
+                        exitIfBluezAnswers()
+                    }
                     val released = connectionMutex.withLock {
                         linkPolicy.releaseUnheld(gattClient.heldAddresses(), monotonicMs())
                     }
@@ -553,13 +616,15 @@ class BlueZConnectionService(
     private suspend fun logLinkStatus() {
         val held = gattClient.heldAddresses()
         val ready = gattClient.getReadyDeviceAddresses().toSet()
-        val (attempts, counted, dialTimeLeft) = connectionMutex.withLock {
+        val (policy, calls) = connectionMutex.withLock {
             Triple(
                 linkPolicy.pendingCount(),
                 linkPolicy.establishedCount(),
                 linkPolicy.dialTimeLeftMs(monotonicMs())
-            )
+            ) to (connectCalls.timedOut to connectCalls.busRefused)
         }
+        val (attempts, counted, dialTimeLeft) = policy
+        val (timedOut, busRefused) = calls
         val heardCount = heard.recent(monotonicMs()).size
         val reports = reportsHeard.getAndSet(0)
         fun Collection<String>.short() = sorted().joinToString(",") { it.take(8) }.ifEmpty { "-" }
@@ -567,7 +632,8 @@ class BlueZConnectionService(
                 "client=[${ready.short()}] client-not-ready=[${(held - ready).short()}] " +
                 "server=[${gattServer.getConnectedClients().short()}] bluez-links=[${orphans.tracked().short()}] " +
                 "attempts=$attempts policy-links=$counted heard=$heardCount reports=$reports" +
-                (dialTimeLeft?.let { " dial-budget=${dialTimeLeftText(it)}" } ?: ""))
+                (dialTimeLeft?.let { " dial-budget=${dialTimeLeftText(it)}" } ?: "") +
+                connectCallsText(timedOut, BlueZDeviceBus.releasesWritten, busRefused))
     }
 
     /**

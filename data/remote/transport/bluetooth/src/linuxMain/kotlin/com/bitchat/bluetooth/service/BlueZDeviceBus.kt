@@ -16,14 +16,18 @@ import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.newSingleThreadContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import platform.posix.getenv
+import kotlin.time.TimeSource
+import kotlin.time.Duration.Companion.seconds
 
 /**
- * Two questions for bluetoothd that gattlib cannot put: which devices it holds, and "disconnect this
- * one" for a link this app has no gattlib connection for.
+ * What gattlib cannot ask bluetoothd: which devices it holds, whether it answers at all, and
+ * "disconnect this one" for a link this app has no gattlib connection for or for a `Connect` gattlib
+ * has given up on ([release]).
  *
  * Every session opens a connection of its own to the system bus and closes it again. The GATT
  * server and the advertising service share the connection `dbus_bus_get` hands out and each runs a
@@ -54,10 +58,20 @@ internal object BlueZDeviceBus {
     @OptIn(ExperimentalCoroutinesApi::class, DelicateCoroutinesApi::class)
     private val busThread by lazy { newSingleThreadContext("bluez-bus") }
 
+    @OptIn(ExperimentalCoroutinesApi::class, DelicateCoroutinesApi::class)
+    private val releaseThread by lazy { newSingleThreadContext("bluez-release") }
+
+    private val released = AtomicInt(0)
+    val releasesWritten: Int get() = released.value
+
     // 1 while a session is on that thread, whether or not anybody still waits for it.
     private val sessionRunning = AtomicInt(0)
 
     private class Answer<T>(val value: T?)
+
+    // gattlib gives up 25 s after the dial began, BlueZ drops the device 25.8 to 30.6 s after it
+    // (measured), and the flush below can take 2 s more: later than this, nothing is released.
+    private val RELEASE_BY = 28.seconds
 
     /**
      * Runs [block] with a private system-bus connection and gives up waiting for it after
@@ -90,6 +104,40 @@ internal object BlueZDeviceBus {
     }
 
     /**
+     * Ask BlueZ to disconnect [address], whose `Connect` gattlib has stopped waiting for: while BlueZ
+     * still holds the device that makes it answer the call, and only an answer frees the system bus's
+     * record of it. Returns at once; runs on a thread of its own, not behind a [session].
+     */
+    @OptIn(DelicateCoroutinesApi::class)
+    fun release(address: String, dialStarted: TimeSource.Monotonic.ValueTimeMark) {
+        GlobalScope.launch(releaseThread) {
+            try {
+                var elapsed = dialStarted.elapsedNow()
+                if (elapsed > RELEASE_BY) {
+                    logInfo(TAG, "${address.take(8)}: too late to release (${elapsed.inWholeMilliseconds} ms after the dial began)")
+                    return@launch
+                }
+                withPrivateConnection { connection ->
+                    if (!hello(connection)) return@withPrivateConnection
+                    elapsed = dialStarted.elapsedNow()
+                    if (elapsed > RELEASE_BY) {
+                        logInfo(TAG, "${address.take(8)}: too late to release (${elapsed.inWholeMilliseconds} ms after the dial began)")
+                        return@withPrivateConnection
+                    }
+                    if (Session(connection, AtomicInt(0)).disconnect(address)) {
+                        released.incrementAndGet()
+                        logInfo(TAG, "Asked BlueZ to disconnect ${address.take(8)}: gattlib gave up on its Connect (${elapsed.inWholeMilliseconds} ms after the dial began)")
+                    } else {
+                        logInfo(TAG, "Disconnect for ${address.take(8)} was not written")
+                    }
+                }
+            } catch (t: Throwable) {
+                logError(TAG, "Could not release ${address.take(8)}: ${t.message ?: t::class.simpleName}")
+            }
+        }
+    }
+
+    /**
      * Wait for the session's result, and mark the session [abandoned] the moment the wait is given
      * up: by the limit, or because the caller itself was cancelled.
      *
@@ -109,37 +157,43 @@ internal object BlueZDeviceBus {
         }
 
     private fun <T> blockingSession(abandoned: AtomicInt, block: (Session) -> T): T? = try {
-        memScoped {
-            val error = alloc<DBusError>()
-            dbus_error_init(error.ptr)
-            val address = getenv("DBUS_SYSTEM_BUS_ADDRESS")?.toKString() ?: SYSTEM_BUS_ADDRESS
-            val connection = dbus_connection_open_private(address.cstr.ptr, error.ptr)
-            if (connection == null || dbus_error_is_set(error.ptr) != 0u) {
-                logError(TAG, "Could not open BlueZ's system bus: ${takeError(error.ptr)}")
-                connection?.let {
-                    dbus_connection_close(it)
-                    dbus_connection_unref(it)
-                }
-                return@memScoped null
-            }
-
-            // Before anything else: libdbus exits the process when a connection it was told to
-            // exit on is disconnected, and this one is closed below every time.
-            dbus_connection_set_exit_on_disconnect(connection, 0u)
+        withPrivateConnection { connection ->
             try {
-                if (!hello(connection)) return@memScoped null
+                if (!hello(connection)) return@withPrivateConnection null
                 block(Session(connection, abandoned))
             } catch (t: Throwable) {
                 logError(TAG, "BlueZ bus session failed: ${t.message ?: t::class.simpleName}")
                 null
-            } finally {
-                dbus_connection_close(connection)
-                dbus_connection_unref(connection)
             }
         }
     } catch (t: Throwable) {
         logError(TAG, "Could not start a BlueZ bus session: ${t.message ?: t::class.simpleName}")
         null
+    }
+
+    private inline fun <T> withPrivateConnection(block: (CPointer<DBusConnection>) -> T): T? = memScoped {
+        val error = alloc<DBusError>()
+        dbus_error_init(error.ptr)
+        val address = getenv("DBUS_SYSTEM_BUS_ADDRESS")?.toKString() ?: SYSTEM_BUS_ADDRESS
+        val connection = dbus_connection_open_private(address.cstr.ptr, error.ptr)
+        if (connection == null || dbus_error_is_set(error.ptr) != 0u) {
+            logError(TAG, "Could not open BlueZ's system bus: ${takeError(error.ptr)}")
+            connection?.let {
+                dbus_connection_close(it)
+                dbus_connection_unref(it)
+            }
+            return@memScoped null
+        }
+
+        // Before anything else: libdbus exits the process when a connection it was told to exit on
+        // is disconnected, and this one is closed below every time.
+        dbus_connection_set_exit_on_disconnect(connection, 0u)
+        try {
+            block(connection)
+        } finally {
+            dbus_connection_close(connection)
+            dbus_connection_unref(connection)
+        }
     }
 
     class Session internal constructor(
@@ -166,6 +220,22 @@ internal object BlueZDeviceBus {
         } catch (t: Throwable) {
             logError(TAG, "Could not read BlueZ devices: ${t.message ?: t::class.simpleName}")
             null
+        }
+
+        /** True when bluetoothd answered `Peer.Ping` on this connection. */
+        fun ping(): Boolean = try {
+            val reply = call(
+                connection,
+                destination = "org.bluez",
+                path = "/",
+                interfaceName = "org.freedesktop.DBus.Peer",
+                member = "Ping"
+            ) ?: return false
+            dbus_message_unref(reply)
+            true
+        } catch (t: Throwable) {
+            logError(TAG, "Could not ping BlueZ: ${t.message ?: t::class.simpleName}")
+            false
         }
 
         /**
