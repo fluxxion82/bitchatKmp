@@ -3,6 +3,7 @@ package com.bitchat.viewmodel.chat
 import com.bitchat.domain.app.model.ActiveState
 import com.bitchat.domain.app.model.UserState
 import com.bitchat.domain.base.CoroutinesContextFacade
+import com.bitchat.domain.chat.ObserveActiveChannel
 import com.bitchat.domain.chat.ObserveChannelMessages
 import com.bitchat.domain.chat.ObserveJoinedNamedChannels
 import com.bitchat.domain.chat.eventbus.InMemoryChatEventBus
@@ -64,6 +65,9 @@ class ChatViewModelChannelSwitchTest : BaseViewModelTest() {
 
     /** The saved user state's active chat, and the one before it. */
     private var active: Channel = Channel.NamedChannel("#test")
+
+    /** A state that is not a chat, such as Bluetooth being off, when a test sets one. */
+    private var blocking: UserState? = null
     private var previous: Channel? = null
 
     private fun message(id: String, at: Long = 0) =
@@ -81,19 +85,21 @@ class ChatViewModelChannelSwitchTest : BaseViewModelTest() {
     /** The use case every line and file is sent through. */
     private val sendMessage = mockk<com.bitchat.domain.chat.SendMessage>(relaxed = true)
 
+    private val getUserState = mockk<GetUserState> {
+        coEvery { this@mockk.invoke(Unit) } coAnswers {
+            userStateGate?.await()
+            blocking ?: UserState.Active(ActiveState.Chat(active))
+        }
+    }
+
     private fun buildViewModel() = ChatViewModel(
         observeChannelMessages = mockk<ObserveChannelMessages> {
             coEvery { this@mockk.invoke(any()) } answers { flowOf(lists[firstArg<Channel>()].orEmpty()) }
         },
         sendMessageUseCase = sendMessage,
         processChatCommand = com.bitchat.domain.chat.ProcessChatCommand(),
-        getUserState = mockk<GetUserState> {
-            coEvery { this@mockk.invoke(Unit) } coAnswers {
-                userStateGate?.await()
-                UserState.Active(ActiveState.Chat(active))
-            }
-        },
-        chatEventBus = bus,
+        getUserState = getUserState,
+        observeActiveChannel = ObserveActiveChannel(getUserState = getUserState, chatEventBus = bus),
         observeUserNickname = mockk<ObserveUserNickname> { coEvery { this@mockk.invoke(Unit) } returns flowOf("anon") },
         saveUserStateAction = mockk<com.bitchat.domain.user.SaveUserStateAction>(relaxed = true) {
             coEvery { this@mockk.invoke(capture(switched)) } returns Unit
@@ -156,6 +162,19 @@ class ChatViewModelChannelSwitchTest : BaseViewModelTest() {
 
         assertEquals(Channel.Mesh, viewModel.state.value.selectedLocationChannel)
         assertEquals(listOf("mesh 1", "mesh 2"), viewModel.state.value.messages.map { it.content })
+    }
+
+    @Test
+    fun `with Bluetooth off the chat follows the mesh for LoRa and the header keeps its channel`() = runTest(dispatcher) {
+        val viewModel = buildViewModel()
+        instantExecutorRule.scheduler.advanceUntilIdle()
+
+        blocking = UserState.BluetoothDisabled
+        bus.update(ChatEvent.ChannelChanged)
+        instantExecutorRule.scheduler.advanceUntilIdle()
+
+        assertEquals(listOf("mesh 1", "mesh 2"), viewModel.state.value.messages.map { it.content })
+        assertEquals(Channel.NamedChannel("#test"), viewModel.state.value.selectedLocationChannel)
     }
 
     @Test

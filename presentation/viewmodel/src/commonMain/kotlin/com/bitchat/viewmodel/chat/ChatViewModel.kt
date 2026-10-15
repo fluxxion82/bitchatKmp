@@ -22,11 +22,12 @@ import com.bitchat.domain.chat.FindMeshPeerByName
 import com.bitchat.domain.chat.GetMeshPeers
 import com.bitchat.domain.chat.JoinChannel
 import com.bitchat.domain.chat.LeaveChannel
+import com.bitchat.domain.chat.ObserveActiveChannel
 import com.bitchat.domain.chat.ObserveChannelMessages
 import com.bitchat.domain.chat.ProcessChatCommand
 import com.bitchat.domain.chat.SendMessage
 import com.bitchat.domain.chat.SetChannelPassword
-import com.bitchat.domain.chat.eventbus.ChatEventBus
+import com.bitchat.domain.chat.model.ActiveChannel
 import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.BitchatMessageType
 import com.bitchat.domain.chat.model.ChatCommand
@@ -54,7 +55,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.coroutines.EmptyCoroutineContext
@@ -69,7 +69,7 @@ class ChatViewModel(
     private val sendMessageUseCase: SendMessage,
     private val processChatCommand: ProcessChatCommand,
     private val getUserState: GetUserState,
-    private val chatEventBus: ChatEventBus,
+    private val observeActiveChannel: ObserveActiveChannel,
     private val observeUserNickname: ObserveUserNickname,
     private val saveUserStateAction: SaveUserStateAction,
     private val leaveChannel: LeaveChannel,
@@ -96,48 +96,23 @@ class ChatViewModel(
 
     init {
         viewModelScope.launch {
-            // Every ChannelChanged is handled, even two in a row: SaveUserStateAction announces a
-            // switch before it saves the new user state and again after, and the state read for
-            // the first can still be the old one. Dropping repeats (as distinctUntilChanged did)
-            // left the list on the old channel while the header and sends had moved on.
-            chatEventBus.events()
-                .onStart { emit(com.bitchat.domain.chat.model.ChatEvent.ChannelChanged) }
-                .collect { event ->
-                    when (event) {
-                        is com.bitchat.domain.chat.model.ChatEvent.ChannelChanged -> {
-                            val userState = getUserState()
-                            if (userState is UserState.Active) {
-                                val active = userState.activeState
-                                if (active is ActiveState.Chat) {
-                                    val channel = active.channel
-                                    _state.update {
-                                        it.copy(
-                                            selectedLocationChannel = channel,
-                                            currentGeohash = if (channel is Channel.Location) channel.geohash else null,
-                                            currentChannel = when (channel) {
-                                                is Channel.Location -> channel.geohash
-                                                Channel.Mesh -> null
-                                                else -> null
-                                            }
-                                        )
-                                    }
-
-                                    _currentChannel.value = channel
-                                } else {
-                                    _currentChannel.value = null
-                                }
-                            } else if (userState is UserState.BluetoothDisabled) {
-                                // When Bluetooth is disabled, still observe Mesh channel for LoRa messages
-                                println("📡 ChatViewModel: Bluetooth disabled, observing Mesh channel for LoRa")
-                                _currentChannel.value = Channel.Mesh
-                            } else {
-                                _currentChannel.value = null
+            observeActiveChannel().collect { active ->
+                if (active is ActiveChannel.Chat) {
+                    val channel = active.channel
+                    _state.update {
+                        it.copy(
+                            selectedLocationChannel = channel,
+                            currentGeohash = if (channel is Channel.Location) channel.geohash else null,
+                            currentChannel = when (channel) {
+                                is Channel.Location -> channel.geohash
+                                Channel.Mesh -> null
+                                else -> null
                             }
-                        }
-
-                        else -> {}
+                        )
                     }
                 }
+                _currentChannel.value = active.channel
+            }
         }
 
         viewModelScope.launch {
