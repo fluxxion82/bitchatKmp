@@ -58,8 +58,6 @@ kotlin {
                 implementation(libs.kotlinx.atomicfu)
                 implementation(libs.multiplatform.settings)
                 implementation(libs.multiplatform.settings.serialization)
-                implementation(libs.multiplatform.settings.observable)
-                implementation(libs.multiplatform.settings.coroutines)
             }
         }
         val commonTest by getting {
