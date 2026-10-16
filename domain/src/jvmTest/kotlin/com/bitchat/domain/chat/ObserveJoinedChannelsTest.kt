@@ -8,6 +8,7 @@ import com.bitchat.domain.chat.repository.ChatRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -72,5 +73,23 @@ class ObserveJoinedChannelsTest {
 
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `a matching event published during the first read is read after it`() = runTest {
+        val firstRead = CompletableDeferred<Unit>()
+        coEvery { chatRepository.getJoinedChannelsList() } coAnswers { firstRead.await(); listOf("#a") } andThen listOf("#a", "#b")
+
+        useCase(Unit).test {
+            chatEventBus.update(ChatEvent.ChannelJoined)
+            chatEventBus.update(ChatEvent.MessageReceived)
+            firstRead.complete(Unit)
+
+            assertEquals(setOf("#a"), awaitItem())
+            assertEquals(setOf("#a", "#b"), awaitItem())
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 2) { chatRepository.getJoinedChannelsList() }
     }
 }

@@ -9,6 +9,7 @@ import com.bitchat.domain.user.repository.UserRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -83,5 +84,23 @@ class ObserveUserNicknameTest {
 
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `a matching event published during the first read is read after it`() = runTest {
+        val firstRead = CompletableDeferred<Unit>()
+        coEvery { userRepository.getAppUser() } coAnswers { firstRead.await(); AppUser.ActiveAnonymous("alice") } andThen AppUser.ActiveAnonymous("bob")
+
+        useCase(Unit).test {
+            userEventBus.update(UserEvent.NicknameUpdated)
+            userEventBus.update(UserEvent.StateChanged)
+            firstRead.complete(Unit)
+
+            assertEquals("alice", awaitItem())
+            assertEquals("bob", awaitItem())
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 2) { userRepository.getAppUser() }
     }
 }

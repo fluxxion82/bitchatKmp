@@ -9,6 +9,7 @@ import com.bitchat.domain.base.defaultContextFacade
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -58,5 +59,23 @@ class ObserveAppThemeTest {
             cancelAndIgnoreRemainingEvents()
         }
         coVerify(exactly = 1) { appRepository.getAppTheme() }
+    }
+
+    @Test
+    fun `a matching event published during the first read is read after it`() = runTest {
+        val firstRead = CompletableDeferred<Unit>()
+        coEvery { appRepository.getAppTheme() } coAnswers { firstRead.await(); AppTheme.DARK } andThen AppTheme.LIGHT
+
+        useCase(Unit).test {
+            appEventBus.update(AppEvent.ThemeUpdated)
+            appEventBus.update(AppEvent.BackgroundModeChanged)
+            firstRead.complete(Unit)
+
+            assertEquals(AppTheme.DARK, awaitItem())
+            assertEquals(AppTheme.LIGHT, awaitItem())
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 2) { appRepository.getAppTheme() }
     }
 }

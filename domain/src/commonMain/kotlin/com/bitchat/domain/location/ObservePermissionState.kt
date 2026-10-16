@@ -5,9 +5,11 @@ import com.bitchat.domain.location.eventbus.LocationEventBus
 import com.bitchat.domain.location.model.LocationEvent
 import com.bitchat.domain.location.model.PermissionState
 import com.bitchat.domain.location.repository.LocationRepository
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
-import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.launch
 
 class ObservePermissionState(
     private val locationRepository: LocationRepository,
@@ -15,18 +17,19 @@ class ObservePermissionState(
 ) : Usecase<Unit, Flow<PermissionState>> {
 
     override suspend fun invoke(param: Unit): Flow<PermissionState> = channelFlow {
-        locationEventBus.events()
-            .onStart {
-                send(locationRepository.getPermissionState())
-            }
-            .collect { event ->
-                when (event) {
-                    LocationEvent.PermissionStateChanged -> {
-                        send(locationRepository.getPermissionState())
-                    }
+        // Subscribed before the first read: an event published during it must not be lost to a later one.
+        val events = Channel<LocationEvent>(Channel.BUFFERED)
+        launch(start = CoroutineStart.UNDISPATCHED) { locationEventBus.events().collect(events::send) }
 
-                    else -> Unit
+        send(locationRepository.getPermissionState())
+        for (event in events) {
+            when (event) {
+                LocationEvent.PermissionStateChanged -> {
+                    send(locationRepository.getPermissionState())
                 }
+
+                else -> Unit
             }
+        }
     }
 }

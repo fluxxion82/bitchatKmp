@@ -7,7 +7,9 @@ import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.ChatEvent
 import com.bitchat.domain.chat.repository.ChatRepository
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -49,5 +51,23 @@ class ObservePrivateChatsTest {
 
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `a matching event published during the first read is read after it`() = runTest {
+        val firstRead = CompletableDeferred<Unit>()
+        coEvery { chatRepository.getPrivateChats() } coAnswers { firstRead.await(); emptyMap() } andThen mapOf("aa" to emptyList())
+
+        useCase(Unit).test {
+            chatEventBus.update(ChatEvent.PrivateChatsUpdated)
+            chatEventBus.update(ChatEvent.MessageReceived)
+            firstRead.complete(Unit)
+
+            assertEquals(emptyMap<String, List<BitchatMessage>>(), awaitItem())
+            assertEquals(mapOf("aa" to emptyList<BitchatMessage>()), awaitItem())
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 2) { chatRepository.getPrivateChats() }
     }
 }

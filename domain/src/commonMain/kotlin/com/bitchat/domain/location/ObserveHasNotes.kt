@@ -8,9 +8,11 @@ import com.bitchat.domain.location.model.Channel
 import com.bitchat.domain.location.model.LocationEvent
 import com.bitchat.domain.location.repository.LocationRepository
 import com.bitchat.domain.user.repository.UserRepository
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.channels.Channel as EventChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
-import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.launch
 
 class ObserveHasNotes(
     private val locationRepository: LocationRepository,
@@ -19,20 +21,21 @@ class ObserveHasNotes(
 ) : Usecase<Unit, Flow<Boolean>> {
 
     override suspend fun invoke(param: Unit): Flow<Boolean> = channelFlow {
-        locationEventBus.events()
-            .onStart {
-                send(getHasNotes())
-            }
-            .collect { event ->
-                when (event) {
-                    LocationEvent.ChannelChanged,
-                    LocationEvent.NotesChanged -> {
-                        send(getHasNotes())
-                    }
+        // Subscribed before the first read: an event published during it must not be lost to a later one.
+        val events = EventChannel<LocationEvent>(EventChannel.BUFFERED)
+        launch(start = CoroutineStart.UNDISPATCHED) { locationEventBus.events().collect(events::send) }
 
-                    else -> Unit
+        send(getHasNotes())
+        for (event in events) {
+            when (event) {
+                LocationEvent.ChannelChanged,
+                LocationEvent.NotesChanged -> {
+                    send(getHasNotes())
                 }
+
+                else -> Unit
             }
+        }
     }
 
     private suspend fun getHasNotes(): Boolean {

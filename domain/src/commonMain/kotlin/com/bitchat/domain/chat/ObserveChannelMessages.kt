@@ -6,12 +6,14 @@ import com.bitchat.domain.chat.model.BitchatMessage
 import com.bitchat.domain.chat.model.ChatEvent
 import com.bitchat.domain.chat.repository.ChatRepository
 import com.bitchat.domain.location.model.Channel
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.Channel as EventChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ObserveChannelMessages(
@@ -37,13 +39,16 @@ class ObserveChannelMessages(
     private suspend fun observeGeohashChannel(geohash: String): Flow<List<BitchatMessage>> {
         return combine(
             channelFlow {
-                chatEventBus.events()
-                    .onStart { send(Unit) }
-                    .collect { event ->
-                        if (event is ChatEvent.GeohashMessagesUpdated && event.geohash == geohash) {
-                            send(Unit)
-                        }
+                // Subscribed before the first read: an event published during it must not be lost to a later one.
+                val events = EventChannel<ChatEvent>(EventChannel.BUFFERED)
+                launch(start = CoroutineStart.UNDISPATCHED) { chatEventBus.events().collect(events::send) }
+
+                send(Unit)
+                for (event in events) {
+                    if (event is ChatEvent.GeohashMessagesUpdated && event.geohash == geohash) {
+                        send(Unit)
                     }
+                }
             }.map { chatRepository.getGeohashMessages(geohash) },
             chatRepository.observeMiningStatus()
         ) { messages, miningId ->
@@ -54,32 +59,41 @@ class ObserveChannelMessages(
     }
 
     private fun observeMeshChannel(): Flow<List<BitchatMessage>> = channelFlow {
-        chatEventBus.events()
-            .onStart { send(chatRepository.getMeshMessages()) }
-            .collect { event ->
-                if (event is ChatEvent.MeshMessagesUpdated) {
-                    send(chatRepository.getMeshMessages())
-                }
+        // Subscribed before the first read: an event published during it must not be lost to a later one.
+        val events = EventChannel<ChatEvent>(EventChannel.BUFFERED)
+        launch(start = CoroutineStart.UNDISPATCHED) { chatEventBus.events().collect(events::send) }
+
+        send(chatRepository.getMeshMessages())
+        for (event in events) {
+            if (event is ChatEvent.MeshMessagesUpdated) {
+                send(chatRepository.getMeshMessages())
             }
+        }
     }
 
     private fun observePrivateDM(peerID: String): Flow<List<BitchatMessage>> = channelFlow {
-        chatEventBus.events()
-            .onStart { send(chatRepository.getPrivateChats()[peerID] ?: emptyList()) }
-            .collect { event ->
-                if (event is ChatEvent.PrivateChatsUpdated) {
-                    send(chatRepository.getPrivateChats()[peerID] ?: emptyList())
-                }
+        // Subscribed before the first read: an event published during it must not be lost to a later one.
+        val events = EventChannel<ChatEvent>(EventChannel.BUFFERED)
+        launch(start = CoroutineStart.UNDISPATCHED) { chatEventBus.events().collect(events::send) }
+
+        send(chatRepository.getPrivateChats()[peerID] ?: emptyList())
+        for (event in events) {
+            if (event is ChatEvent.PrivateChatsUpdated) {
+                send(chatRepository.getPrivateChats()[peerID] ?: emptyList())
             }
+        }
     }
 
     private fun observeNamedChannel(channelName: String): Flow<List<BitchatMessage>> = channelFlow {
-        chatEventBus.events()
-            .onStart { send(chatRepository.getNamedChannelMessages(channelName)) }
-            .collect { event ->
-                if (event is ChatEvent.NamedChannelMessagesUpdated && event.channelName == channelName) {
-                    send(chatRepository.getNamedChannelMessages(channelName))
-                }
+        // Subscribed before the first read: an event published during it must not be lost to a later one.
+        val events = EventChannel<ChatEvent>(EventChannel.BUFFERED)
+        launch(start = CoroutineStart.UNDISPATCHED) { chatEventBus.events().collect(events::send) }
+
+        send(chatRepository.getNamedChannelMessages(channelName))
+        for (event in events) {
+            if (event is ChatEvent.NamedChannelMessagesUpdated && event.channelName == channelName) {
+                send(chatRepository.getNamedChannelMessages(channelName))
             }
+        }
     }
 }
