@@ -897,7 +897,7 @@ class BluetoothMeshService(
             val before = handovers[send.recipientPeerID]
             handovers[send.recipientPeerID] = serviceScope.launch {
                 if (before != null) awaitHandover(before)
-                sendPacket(packet)
+                if (!sendPacket(packet)) failed(send, "no link carried it")
             }
         } catch (e: CancellationException) {
             throw e
@@ -909,8 +909,8 @@ class BluetoothMeshService(
 
     /**
      * Tells the delegate that a private message handed to this service has not gone out. Every message
-     * taken off the queue is handed to the Bluetooth links (only without a radio, or for a peer the
-     * mesh has: as it always was), leaves the air, or ends here.
+     * taken off the queue is taken by a Bluetooth link (only without a radio, or for a peer the mesh
+     * has), leaves the air, or ends here.
      */
     private fun failed(send: PrivateSend, reason: String) {
         logError("BluetoothMeshService", "Private message to ${send.recipientPeerID} not sent: $reason")

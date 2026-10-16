@@ -1691,6 +1691,20 @@ class BluetoothMeshServiceFallbackTest {
     }
 
     @Test
+    fun withoutARadioAMessageNoBluetoothLinkTakesIsReportedAsFailed() = runTest {
+        // The session stands while every link is gone: the links' false is all that says the
+        // message went nowhere, as it is for a radio message that falls back to them.
+        val fixture = FallbackServiceFixture()
+        fixture.establish()
+        fixture.connection.deliverPackets = false
+        assertTrue(fixture.service.sendPrivateMessage("hello", fixture.remoteID, "remote", "id-1"))
+
+        eventually("the message to be reported as not sent") {
+            fixture.delegate.failures.toList() == listOf("id-1" to "no link carried it")
+        }
+    }
+
+    @Test
     fun privateMessagesLeaveInTheOrderTheyWereHandedOverEachWithALaterTime() = runTest {
         val fixture = FallbackServiceFixture()
         fixture.establish()
