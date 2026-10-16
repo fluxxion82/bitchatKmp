@@ -46,7 +46,9 @@ The project's working rules, for agents that cannot see the owner's local instru
 ## Observers and events
 
 - An observer reads on start and reads again on a matching event (D4).
-- It subscribes to the bus before its first read, so an event published during that read is not lost when another takes the single replay slot. `ObserveUserState` and `ObserveFavorites` show how; the older observers still read first.
+- It subscribes to the bus before its first read, so an event published during that read is not lost when another takes the single replay slot. Every `Observe*` use case on a bus has this shape since D36.
+- The same holds for every other source an observer combines with. A `StateFlow` takes its value and its subscription in one step. A `callbackFlow` that reads first and registers its listener after does not.
+- A race between two threads needs two threads in its test: the boards run view models on `Default`, and a test dispatcher runs everything on one thread.
 - Before narrowing which events an observer reads again on, find every writer of what it observes, in every layer, and check that each publishes that event. The publishers of an event are not the writers of the state: a wipe reset the theme without `ThemeUpdated`.
 - A test that records behaviour nobody has decided says so in its name ("today"), so it is not read as a rule.
 - A test that a publish follows a write uses a fake store that changes only at that write, so a publish made before it fails the test.

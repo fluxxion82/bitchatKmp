@@ -5,28 +5,23 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-15 by cloud-claude (D36 pushed).
+Updated 2026-10-16 by local-claude (D36 landed locally).
 
 ## In flight
 
 | Branch | Holds | State | Waiting on |
 |---|---|---|---|
-| `main` | `5bfbd70`. Since `fd93095`: six commits of the owner's side (TUI unread chips, BlueZ connects, relayed-link binding, advertisement registration, geohash presence, BlueZ retry), then this slice: `d7a1aa4` (the wipe publishes `NicknameUpdated` and `FavoritesCleared`), `eaac5ff` (`ObserveActiveChannel`, `ActiveChannel`), `5bfbd70` (`ChatViewModel` uses it; the view-model Konsist rule) | Pushed 2026-10-15 | |
-| `claude/observers-subscribe-first` | D36: 15 older observers subscribe before their first read, 26 tests. One commit on `5bfbd70` | Pushed 2026-10-15 at `f5534c8` | local agents: build and review |
+| `main` | Locally `3953e0c`; `origin/main` is `5bfbd70`. Since `5bfbd70`: two commits of the owner's side, `43215e8` (`ChatRepo` follows Bluetooth after any user event) and `bbbf892` (a private text no Bluetooth link took is reported as failed), then D36: `98a1d50` (every `Observe*` use case on a bus subscribes before its first read), `3953e0c` (the mining status is kept in memory) | Landed locally 2026-10-16, not pushed | the owner: the push, Q16 |
+| `claude/observers-subscribe-first` | In `main` as `98a1d50`, with the geohash path added | To be deleted after the push | the owner |
 
-## D31 to D34, as landed
+## D36, as landed
 
-Both commits built and passed once the `LoRaAppInitializer` line was in; neither needed a production change. The review is in `reference/2026-10-15-local-review-d31-d32.md`.
+The branch built and passed; its 15 observers are right. The review is in `reference/2026-10-16-local-review-d36.md`. Two of the four paths left out did have the window, and both are fixed:
 
-- **`d7a1aa4`** is your D31 commit, plus the `LoRaAppInitializer` line, plus tighter wipe tests: the mocked user store changes only when the wipe clears it, so a publish made before the write fails them. That is a new line under Observers and events in `CONVENTIONS.md`.
-- **`eaac5ff`** is your D34 commit, unchanged.
-- **`5bfbd70`**:
-  - `ChatViewModel` collects `ObserveActiveChannel`. It updates the header only for `ActiveChannel.Chat` and follows `active.channel` always, which is the old behaviour for every state.
-  - The view-model `ArchitectureTest` fails if a production file names a `com.bitchat.domain.<feature>.eventbus` or `.repository` package.
-- **Side effect:** `LoRaAppInitializer` re-syncs the radio identity on `NicknameUpdated`, so after a wipe the LoRa heartbeat carries the new nickname.
-- **Older than the slice:**
-  - `ChatRepo` stops following Bluetooth after an unrelated user event. Filed as its own task.
-  - The wipe can wait up to about 20 s for LoRa's first start. Recorded, not changed.
+- **The geohash path of `ObserveChannelMessages`** sent its trigger before it subscribed. On the boards, view models run on `Default`, so the read could start before the subscription. It now has the same shape as the others; a test on `Default` fails on the old path.
+- **The mining status** that `ObservePowSettings` combines with was not a `StateFlow`. It came from the settings library, which reads first and registers its listener after, so mining that ended in between was never shown. It is a `StateFlow` in `LocalNostrPreferences` now. It is no longer stored, so a crash mid-mining no longer shows "mining" in the next run.
+
+Three lines in `CONVENTIONS.md` under Observers and events: every bus observer subscribes first; other sources an observer combines with need the same care; a race between threads needs threads in its test.
 
 ## What was built and run
 
@@ -34,19 +29,19 @@ By local-claude on macOS arm64, on the tree that landed:
 
 - `scripts/verify.sh full`: OK. That is `quick`, `desktop` (with `packageDmg`), `android`, `ios`, `embedded` and `tui` (debug and release links for linuxArm64), `desktop-tui`.
 - `scripts/tui-smoke.py`: the desktop terminal UI starts from the real Koin graph and shows its four screens.
-- Module tests, all green: `:domain:jvmTest` (216), `:presentation:viewmodel:jvmTest`, `:data:repo:desktopTest` (381), `:apps:desktop:test` (the desktop Koin check).
-- Eight changes each turned a test red (review, sections 1 and 2).
-- The three commits were not built one by one; the tree with all three was.
+- Module tests, all green: `:domain:jvmTest` (243), `:presentation:viewmodel:jvmTest`, `:data:repo:desktopTest`, `:data:local:platform:jvmTest`, `:apps:desktop:test`.
+- Run locally: with the old observer code under the new tests, exactly the 17 during-the-first-read tests fail. The old geohash path and the old mining flag each fail their new test.
+- The two commits were not built one by one; the tree with both was.
 
 Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **Local agents: build and review `claude/observers-subscribe-first` (`f5534c8`).** Domain only; no view model or data change. The table of observers, and what was left out and why, are in `LOG.md` (2026-10-15, D36 plan); what was built and run is in the entry after it.
+1. **cloud-claude: nothing to build until the owner answers Q16.** Read `reference/2026-10-16-local-review-d36.md` and the three lines under Observers and events in `CONVENTIONS.md`.
 
 ## Open questions
 
-None.
+- **Q16. The next cloud slice.** Recommended: a written proposal for the rest of D5, also covering what an observer does when a read fails (no build). The other candidates are in the review's section 5.
 
 ## Answered
 
@@ -69,8 +64,8 @@ None.
 
 - **D5 is partly done.** Channel and LoRa commands return typed failures. Exceptions still pass through: discovery, verification, the password write and the join in `JoinChannel`'s existing-channel path, and all three LoRa commands (tests pin that those propagate). Turning any into an `Outcome` changes a tested contract: write the mapping and the texts first.
 - **No view model imports a bus or a repository** since D32; the Konsist rule in `presentation/viewmodel` holds it.
-- **`ChatRepo` stops following Bluetooth after an unrelated user event** (review of D31 and D32, row 2): filed for the owner as its own task.
-- **The older observers read before they subscribe:** D36 is on it.
+- **`ChatRepo` follows Bluetooth after any user event** since `43215e8` (from the review of D31 and D32), on local `main`.
+- **Every `Observe*` use case on a bus subscribes first** since D36.
 - **File names:** `app/model/AppState.kt` holds `UserState` and `ActiveState`; rename it when those move to `user/model`. The rest is in the review's section 6.
 - **Unlocked collections** in `ChatRepo`, `LocalChannelPreferences`, `NostrClient` and the Apple Bluetooth services: local work, design first.
 - **Open from the plan:** (d) pass-through use cases, (e) scopes and dispatchers, (f) a transport port; where tracked rules live. Plan §3 is a list of old proposals, not instructions (see the note at the top of the plan).

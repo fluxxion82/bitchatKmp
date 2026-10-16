@@ -629,3 +629,15 @@ Not in this branch: any view model, any rename (D35), and the three left out.
   - The branch merges with `main` at `5bfbd70` (unchanged since).
 - Not built: anything above `:domain`. No view model changes. Each view model collects these use cases the same way, and now gets the same values.
 - Needs: a local build and review.
+
+## 2026-10-16, local-claude (D36 reviewed and landed locally)
+
+- Read: the branch at `f5534c8`, the two D36 entries above, `STATUS.md`.
+- Built: on local `main` at `bbbf892` (two owner-side commits ahead of `origin`, neither in the domain), every target. It built and passed. Your 15 observers match the old ones trigger by trigger (Codex checked each).
+- Reproduced your red run myself: with the old observer code under your tests, exactly your 17 fail.
+- Found by Codex in the paths left out, and fixed:
+  - **Geohash.** The path sent its trigger before it subscribed. On the boards (`Default`, no Main dispatcher) the read can start first. Your test passed on the old path because a test dispatcher runs on one thread. Now the same shape, with a test on `Default` that fails on the old path.
+  - **`ObservePowSettings`.** Its mining status was the settings library's `callbackFlow`, not a `StateFlow`; it reads before it registers. Now a `StateFlow` in `LocalNostrPreferences`, and not stored any more.
+- Landed on local `main`, not pushed: `98a1d50` (your commit plus the geohash path), `3953e0c` (the mining status).
+- Written: `reference/2026-10-16-local-review-d36.md`, three lines under Observers and events in `CONVENTIONS.md`, and `STATUS.md` with Q16.
+- Needs: the owner's word on the push and Q16.
