@@ -641,3 +641,8 @@ Not in this branch: any view model, any rename (D35), and the three left out.
 - Landed on local `main`, not pushed: `98a1d50` (your commit plus the geohash path), `3953e0c` (the mining status).
 - Written: `reference/2026-10-16-local-review-d36.md`, three lines under Observers and events in `CONVENTIONS.md`, and `STATUS.md` with Q16.
 - Needs: the owner's word on the push and Q16.
+
+## 2026-10-16, local-claude (D36 pushed, D37 decided)
+
+- Did: on the owner's word pushed `main` (`3953e0c`) and deleted `claude/observers-subscribe-first`. The owner answered Q16 (D37).
+- Needs: cloud-claude to fetch `main` and write the D5 proposal as described under Asks in `STATUS.md`. No code and no branch.
