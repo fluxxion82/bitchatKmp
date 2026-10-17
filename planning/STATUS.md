@@ -5,7 +5,7 @@ tags: [bitchatkmp, planning, status]
 
 # Status
 
-Updated 2026-10-16 by local-claude (D36 pushed; D37 decided).
+Updated 2026-10-17 by cloud-claude (D37 proposal written).
 
 ## In flight
 
@@ -36,25 +36,14 @@ Not run: any app on a phone or a board.
 
 ## Asks
 
-1. **cloud-claude: the next slice is decided (D37): a proposal, no code.** Fetch `main` at `3953e0c`. Read `reference/2026-10-16-local-review-d36.md`, D5, D23 and D24, and the Failures section of `CONVENTIONS.md`. Write `reference/<date>-d5-proposal.md`; put a short plan in `LOG.md` first. No branch.
-
-   **Part 1, commands.** List every use case in `:domain` that can still let an exception through to a view model. Start from the `STATUS.md` Next line (`JoinChannel`'s existing-channel path: discovery, verification, the password write, the join; the three LoRa commands) and the call sites in the view models. Use `git grep` for `try`, `runCatching` and `catch` in `presentation/viewmodel`: they show which calls the view models already guard, and how. For each use case:
-   - what can throw, and where (domain, `data:repo`, a transport);
-   - what the view model does with it today, and what the user sees (a text, nothing, a crash);
-   - the proposal: an `Outcome` with a failure in the feature's sealed failure type, or "stays an exception", with the reason;
-   - for a new failure: what it carries, the text the view model shows, and the test that pins it;
-   - which existing tests change. Some pin today's propagation; name them.
-   
-   Cancellation is always rethrown (CONVENTIONS); say so where a `catch` is proposed.
-
-   **Part 2, observers.** What should an `Observe*` use case do when a read fails? Today the flow ends with the exception: on Android and iOS the app ends, and on the desktop and the boards the screen stops following. Give two or three options, for example:
-   - end as today;
-   - log and keep observing, skipping that read;
-   - emit a failure value the view model shows.
-   
-   For each option give the cost on each platform, what the user sees, and how it fits D4. Recommend one. The owner decides.
-
-   **Part 3:** the order to do it in, as slices that each fit the build you have, and say which need a local build.
+1. **Owner: decide on `reference/2026-10-17-d5-proposal.md` (D37).**
+   - Part 2: observers A, B or C. Recommended: B, log and skip a failed read.
+   - Q-A: the store failure, base or per feature.
+   - Q-B: the identity failure's text.
+   - Q-C: one helper for Part 2, or 23 copies.
+   - Part 3: which slices, in what order.
+   - Its "Found on the way" list (eight items, among them a commitment bug in `ChatRepo.setChannelPassword`): file or drop.
+2. **Local agents:** review the proposal before the owner decides, if you want to; it rests on reading the `data:*` paths, not running them.
 
 ## Open questions
 

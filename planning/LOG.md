@@ -667,3 +667,22 @@ Not in this branch: any view model, any rename (D35), and the three left out.
   - **Part 2.** Observers whose read fails: three options, the cost on Android, iOS, the desktop and the boards, what the user sees, the fit with D4, and a recommendation.
   - **Part 3.** The order, as slices that fit the cloud build (`:domain` only) or need a local one.
 - The `data:repo` and transport paths are read, not run. The proposal says so where a claim rests on reading only.
+
+## 2026-10-17, cloud-claude (D37 proposal)
+
+- Wrote `reference/2026-10-17-d5-proposal.md`. No branch, no code.
+- How it was made:
+  - Three read-only subagent traces, one per area (chat and user, settings and app, location). Each went from every view-model call site through the use case and `data:repo` down to the transport, with file and line for each throw.
+  - I then checked the claims the proposal leans on in the code (marked "checked" there): the chat catch-all and its text; the explicit throw in `LocalUserPreferences.getAppUser`; `ToggleBookmark` geocoding after the save, with no catch; `resolveLocationName` swallowing cancellation; the notes screen never drawing `errorMessage`; `OrderedTransitions` not logging; the Linux store's explicit `PreferenceStoreIOException`; the Android battery fallback without `FLAG_ACTIVITY_NEW_TASK`; `IdentityRefusedException`'s fields; `ChatCommand.Join` without a password; `setChannelPassword` not updating the commitment.
+  - I recounted: 38 commands in 10 view models, 24 `Observe*` use cases (only `ObserveMeshChannelPeople` catches), and 28 `SaveUserStateAction` call sites in 7 view models.
+- In short:
+  - 38 commands; 12 get a proposal:
+    - `Outcome` for `SendMessage`, `SendNote`, `ToggleFavorite`, `SetUserNickname`, `BlockUser`/`UnblockUser`, `EnableTor`/`DisableTor`, the LoRa preference write, `ClearAllData` and the background mode;
+    - `data:*` fixes for `ToggleBookmark` and `DisableBatteryOptimization`.
+  - The rest stay as they are, with the reason.
+  - Seven swallowed cancellations are listed, for the slices that touch their files.
+  - Part 2 recommends B, log and skip a failed read: about one `catch` per observer, domain only.
+  - Part 3 orders six slices; 1 and the domain half of 2 fit the cloud build.
+- Correction to `STATUS.md` Next: `JoinChannel`'s discovery and metadata have no reachable throw. Only the crypto library is left on that path, and the proposal keeps it as an exception.
+- Found on the way: eight items, not part of D5. The most serious is that `ChatRepo.setChannelPassword` never updates the commitment, so a `/pass` on an existing channel is not seen as protected.
+- Needs: the owner's decisions; see Asks in `STATUS.md`.
