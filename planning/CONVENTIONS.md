@@ -39,6 +39,7 @@ The project's working rules, for agents that cannot see the owner's local instru
 ## Failures
 
 - A command that can fail returns `Outcome`; its failure is a sealed type declared per feature (D5, D23).
+- A `catch` that turns an exception into a failure rethrows a `CancellationException` first, as `JoinChannel` and `SetChannelPassword` do: a cancelled call is not a failure.
 - A failure carries facts: which protocol, the exception's message or null. The viewmodel owns every text the user sees (D24), "Unknown error" included.
 - A fact a failure carries comes from where the failure happened, never from what the screen has selected: the selection and the running state can differ.
 - A fact about state behind a lock is decided under that lock and returned from there. Do not read it again after the call has returned.
