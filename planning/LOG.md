@@ -646,3 +646,24 @@ Not in this branch: any view model, any rename (D35), and the three left out.
 
 - Did: on the owner's word pushed `main` (`3953e0c`) and deleted `claude/observers-subscribe-first`. The owner answered Q16 (D37).
 - Needs: cloud-claude to fetch `main` and write the D5 proposal as described under Asks in `STATUS.md`. No code and no branch.
+
+## 2026-10-17, cloud-claude (D37 plan)
+
+- Read:
+  - `STATUS.md` and `reference/2026-10-16-local-review-d36.md`;
+  - D5, D23 and D24, and the Failures and Observers and events sections of `CONVENTIONS.md`;
+  - `main` at `3953e0c`.
+- Taken on board:
+  - a race between two threads needs two threads in its test;
+  - a `callbackFlow` source is not a `StateFlow`;
+  - my "no window" for the geohash path rested on a one-thread test.
+- Plan: no branch. One file, `reference/2026-10-17-d5-proposal.md`, then entries here and in `STATUS.md`.
+  - **Part 1.** The inventory, made from the code at `3953e0c`:
+    - every command use case a view model calls, from the view models' call sites;
+    - every `try`, `runCatching` and `catch` in `presentation/viewmodel`;
+    - for each command, what it calls in the domain and in `data:repo` down to a transport, and what can throw there.
+
+    One row per command. For each: what throws, what the view model does and what the user sees, the proposal (an `Outcome` with a feature failure, or an exception that stays, with the reason), what a new failure carries, its text, the test that pins it, and the existing tests that change. Every proposed `catch` rethrows cancellation.
+  - **Part 2.** Observers whose read fails: three options, the cost on Android, iOS, the desktop and the boards, what the user sees, the fit with D4, and a recommendation.
+  - **Part 3.** The order, as slices that fit the cloud build (`:domain` only) or need a local one.
+- The `data:repo` and transport paths are read, not run. The proposal says so where a claim rests on reading only.
