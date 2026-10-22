@@ -60,6 +60,23 @@ the pinout.
 A **3.5" 4:3 640×480 IPS** panel fits the 3.7" window almost perfectly (slightly smaller active area) and keeps
 the original resolution. Waveshare sells one with a **DPI (parallel RGB666)** interface and I2C capacitive touch.
 
+### Candidate panels
+
+Size check: the original 3.7" 4:3 active area is about **75 × 56 mm**. A 3.5" 4:3 panel is about **71–72 × 53–55 mm**,
+so it shows a thin extra black border (~2 mm per side) inside the original window. Visually fine, but it needs a
+printed shim/bezel to centre it.
+
+| Panel | Interface | Fits which board | Fit in the lid |
+|-------|-----------|------------------|----------------|
+| [Waveshare 3.5inch DPI LCD](https://www.waveshare.com/3.5inch-dpi-lcd.htm) (SKU 19173; [Amazon B08TBF5PHH](https://www.amazon.com/Waveshare-3-5inch-Capacitive-LCD-DPI/dp/B08TBF5PHH)), 640×480 IPS, I2C cap touch, ~$35 | DPI666 via the 40-pin header | Raspberry Pi (Option A) | **As sold, no:** it's a HAT that plugs directly onto the Pi (panel + toughened cover glass on an adapter board, ~80 g). In the Zaurus the Pi sits in the base and the panel in the lid, so the panel would have to come off its adapter and get a new flex through the hinge. Whether its FPC is separable is unknown until one is in hand. **Great for the Phase 1 bench prototype.** |
+| [Waveshare 3.5inch HDMI LCD (E)](https://www.amazon.com/3-5inch-HDMI-Capacitive-LCD-Resolution/dp/B0B2LJY1S5), 640×480 IPS, cap touch | HDMI | Orange Pi Zero 2W (Option B) | Driver board + HDMI connector behind the panel; likely too thick for the lid *(verify)*. Bench use only. |
+| [Waveshare 3.5inch DSI LCD (E)](https://www.waveshare.com/3.5inch-dsi-lcd-e.htm), 640×480 IPS, cap touch | MIPI DSI | Boards with a DSI port: Pi 4/5, CM4/CM5 (Option C). **Not** the Pi Zero 2 W (no DSI) | Unknown; check its outline drawing. |
+| [Newhaven NHD-3.5-640480EF-MSXP-CTP](https://newhavendisplay.com/content/specs/NHD-3.5-640480EF-MSXP-CTP.pdf), 640×480 IPS, 810-nit sunlight-readable, FT5426 cap touch | MIPI DSI, 40-pin 0.5 mm FFC + 6-pin touch | DSI boards (Option C) | **Best candidate for the final build:** a bare panel (thinnest), full datasheet with an outline drawing, viewing area 71.68 × 54.56 mm. |
+
+Takeaway: the Waveshare DPI panel is the right *first* screen to buy, to prove 640×480, touch and the software. A
+clean in-case build is easiest with a **bare panel on its own FFC**, which points toward a DSI panel + a board with
+DSI (compute module), unless the Waveshare DPI panel turns out to be separable from its adapter.
+
 ### Option A — Raspberry Pi Zero 2 W + 3.5" 640×480 DPI panel (cleanest display)
 - 65 × 30 mm, RP3A0 (4× Cortex-A53), **512 MB**, Wi-Fi 4 + BT 4.2/BLE.
 - Raspberry Pis drive DPI panels straight from GPIO. No bridge chip, ~25 MHz pixel clock, flex-friendly through
