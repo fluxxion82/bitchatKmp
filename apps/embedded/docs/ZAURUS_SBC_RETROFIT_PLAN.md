@@ -179,6 +179,9 @@ the SBC over **USB**:
 
 ### Phase 0 — Teardown and measurement (1–2 weeks)
 - [ ] Back up anything on the stock device you care about. Open it carefully and photograph every layer.
+      Disassembly steps for the C-series screen: [furrtek.org Zaurus LCD repair](http://www.furrtek.org/?a=zauruslcd&i=2).
+      The orange flex cables break easily, and two small white plastic tabs can fall out when the case opens.
+      No published internal dimensions were found, so **measure before ordering the final panel.**
 - [ ] Measure the base cavity (with and without the battery), lid cavity, hinge cable channel, screw bosses and
       port openings. Record them in a drawing (even a hand sketch with numbers helps).
 - [ ] Keyboard flex: count pins and measure pitch; map the matrix with a multimeter.
