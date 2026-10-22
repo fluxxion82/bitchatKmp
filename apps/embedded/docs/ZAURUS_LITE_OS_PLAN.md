@@ -3,6 +3,9 @@
 Status: **draft / proposal**. Nothing here is built yet. Facts marked *(verify)* came from old or secondhand
 sources and should be checked before anyone relies on them.
 
+> See also [ZAURUS_SBC_RETROFIT_PLAN.md](ZAURUS_SBC_RETROFIT_PLAN.md): replacing the electronics with a modern
+> SBC is the more practical route to running bitchat. This plan is for the stock hardware.
+
 Goal: a small, English, "Raspberry Pi OS Lite"-style Linux for the Sharp Zaurus **SL-C860**, booting to a console
 with Wi-Fi, SSH and a package story, that can run bitchat and anything else the community wants.
 
