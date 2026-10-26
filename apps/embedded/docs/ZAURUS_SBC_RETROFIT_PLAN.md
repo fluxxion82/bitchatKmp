@@ -93,6 +93,26 @@ printed shim/bezel to centre it.
 | [Waveshare 3.5inch DSI LCD (E)](https://www.waveshare.com/3.5inch-dsi-lcd-e.htm), 640×480 IPS, cap touch | MIPI DSI | Boards with a DSI port: Pi 4/5, CM4/CM5 (Option C). **Not** the Pi Zero 2 W (no DSI) | Unknown; check its outline drawing. |
 | [Newhaven NHD-3.5-640480EF-MSXP-CTP](https://newhavendisplay.com/content/specs/NHD-3.5-640480EF-MSXP-CTP.pdf), 640×480 IPS, 810-nit sunlight-readable, FT5426 cap touch | MIPI DSI, 40-pin 0.5 mm FFC + 6-pin touch | DSI boards (Option C) | **Best candidate for the final build:** a bare panel (thinnest), full datasheet with an outline drawing, viewing area 71.68 × 54.56 mm. |
 
+Also checked: Newhaven's own HDMI version (NHD-3.5-HDMI-HR-RSXP, 640×480) is **92 × 63.9 × 15.34 mm** (17.09 mm with
+touch, `-CTU`), which is too wide for the 90.3 mm pocket and about 3× too thick for the lid. Bench use only.
+
+#### Driving the NHD (MIPI DSI) panel
+- **Neither the Orange Pi Zero 2W/Zero 3 nor the Pi Zero 2 W can drive it directly.** The H616/H618 only output
+  HDMI (and composite); the Pi Zero 2 W has no DSI connector.
+- **Orange Pi (or Pi Zero 2 W) route: an HDMI→MIPI DSI bridge** (e.g. Lontium LT6911C, HDMI 1.4 → 1–4-lane DSI) on a
+  small board in the base. Linux just sees a 640×480 HDMI monitor, so no display driver is needed. The catch: the
+  bridge has to be configured with the panel's FL7703NI init sequence and timings (Lontium firmware or a vendor
+  config), and it needs a backlight LED driver and the panel's 3.0 V supply. **Get a bridge vendor to confirm they can
+  configure it for this panel before buying anything.** Wiring: SBC mini-HDMI → flat HDMI ribbon → bridge (base) →
+  40-pin DSI flex through the hinge → panel.
+- **Compute-module route:** a Raspberry Pi CM4/CM5 (or another DSI-capable board) drives it natively. Newhaven
+  describes the panel as Raspberry Pi compatible *(verify what driver/overlay they provide)*.
+- **Touch (either route):** the FT5426 is on its own 6-pin tail. It goes to I2C + an interrupt GPIO (+ reset) on
+  the SBC and uses the mainline `edt-ft5x06` driver.
+
+Lid status: the PCBs behind the pocket dividers only connect to the old screen's ribbon cables, so they come out
+with it and free that space. Bezel window: ~80.7 × 57.3 mm.
+
 Takeaway: the Waveshare DPI panel is the right *first* screen to buy, to prove 640×480, touch and the software. A
 clean in-case build is easiest with a **bare panel on its own FFC**, which points toward a DSI panel + a board with
 DSI (compute module), unless the Waveshare DPI panel turns out to be separable from its adapter.
