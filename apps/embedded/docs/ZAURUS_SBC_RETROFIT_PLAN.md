@@ -97,6 +97,21 @@ printed shim/bezel to centre it.
 Also checked: Newhaven's own HDMI version (NHD-3.5-HDMI-HR-RSXP, 640×480) is **92 × 63.9 × 15.34 mm** (17.09 mm with
 touch, `-CTU`), which is too wide for the 90.3 mm pocket and about 3× too thick for the lid. Bench use only.
 
+#### More candidates (second search; numbers from distributor listings / kernel sources, **(u)** = unverified)
+
+| Part | Res / interface | Outline W×H×T (mm) | Drive | Notes |
+|------|-----------------|--------------------|-------|-------|
+| **Sharp LS037V7DW01** (DW05 = resistive-touch variant) | 3.7" 480×640 portrait, transflective, parallel RGB18, **no SPI init** (strap pins only) | 65 × 89.2 × 4.4 (u) | Pi Zero 2 W DPI; OPi needs an HDMI→RGB bridge | **Closest match to the original** (same 3.7" VGA size; our pocket is 90.3 × 65.5). Mainline `panel-sharp-ls037v7dw01` driver. Obsolete: eBay/old stock only, ~$65 (u). Needs 90° rotation in software. |
+| Ortustech COM37H3M05DTC / 99UTC | 3.7" 480×640, RGB24, mainline `panel-simple` | 65 × 89; 99UTC (touch) ~5.8 thick | Same as above | Fits in outline, but the touch version is ~0.5 mm too thick (u). Obsolete. |
+| **BuyDisplay ER-TFT035-7** / Focus LCDs E35GG-I-CW350-N | 3.5" 640×480 IPS landscape, NV3052C, RGB24 + 3-wire SPI init, 54-pin FPC | 76.84 × 63.84 × 3.2 (no touch) | Pi Zero 2 W DPI + bit-banged SPI init; OPi via a matching HDMI board | **Current production**, datasheet available, mainline `panel-newvision-nv3052c` driver. Optional cap/resistive touch (thickness with touch u). ~5 mm side margins to mask. |
+| BuyDisplay ER-TFT035-9 | 3.5" 640×480 IPS, MIPI DSI (NV3051) | 76.74 × 63.79 × 3.0 | CM4/CM5, or an HDMI→DSI bridge | Thin and cheap (~$11 at qty 10), but DSI only. |
+| **3.5" 640×480 HDMI kit** (VS035T-001A 54-pin panel + UT-HDMI035-style board; BitBuilt group buy) | HDMI board → panel FPC | Panel ~76.8 × 63.8 class (u) | **OPi Zero 2W (or Pi) over plain HDMI** | **Simplest Orange Pi route:** board in the base, only the panel FPC crosses the hinge. Buy panel + board as a matched pair (some panels need an init sequence). |
+| Anbernic RG35XX / Fascontek FS035VG158 / Leadtek LTK035C5444T spares | 3.5" 640×480 IPS, RGB24 + SPI init (NV3052C driver) | (u) | Pi DPI + SPI init | Cheap spares with a Linux driver, but no published outline/pinout. |
+
+Pi Zero 2 W + DPI pin budget: DPI18 uses GPIO 0–21 (including hardware I2C/SPI0), which leaves GPIO 22–27 for the
+panel's SPI init, touch (i2c-gpio) and reset. That's enough for the display, but not for LoRa too, so LoRa moves to the
+companion MCU (§5). About 25 wires must cross the hinge for DPI.
+
 #### Driving the NHD (MIPI DSI) panel
 - **Neither the Orange Pi Zero 2W/Zero 3 nor the Pi Zero 2 W can drive it directly.** The H616/H618 only output
   HDMI (and composite); the Pi Zero 2 W has no DSI connector.
