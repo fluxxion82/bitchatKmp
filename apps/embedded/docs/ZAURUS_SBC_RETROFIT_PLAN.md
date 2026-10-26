@@ -109,6 +109,20 @@ LoRa has to connect to the Pi itself, so the screen must leave the Pi's SPI pins
     FPC to its pads), so first measure the free space in the lid where the old screen PCBs were.
   - Last resort: serialize the display like laptops do (an LVDS/FPD-Link serializer in the base, a deserializer in
     the lid) over a few thin wires, or carefully enlarge the hinge hole.
+- **The hinge hole is very small (owner):** only a narrow ribbon fits. Keep the electronics in the base and send a
+  *serial* display signal through the hinge, like flip phones do:
+  1. **MIPI DSI panel** (e.g. BuyDisplay ER-TFT035-9, 640×480, NV3051, 3.0 mm; or the Newhaven NHD-3.5-640480EF).
+     Through the hinge: 4 lanes + clock = 10 wires (fewer with 1–2 lanes), plus panel power, reset, backlight LED+/−
+     (boost driver stays in the base) and touch I2C/INT. That's ~16–20 lines on a custom flex: ~5–6 mm wide at
+     0.3 mm pitch, ~8–10 mm at 0.5 mm. It needs 100 Ω differential pairs and a short length.
+     - DSI source, option (a): an HDMI→DSI bridge (LT6911C) in the base, fed by the Pi Zero 2 W (or OPi Zero 2W).
+       LoRa stays on the Pi's SPI. Risk: the bridge needs the panel init code.
+     - Option (b): a Raspberry Pi CM4/CM5 with native DSI. Mainline Linux already has `panel-newvision-nv3051d`
+       (640×480, 4-lane, used by Anbernic RG351V/RG353P), a good starting point for NV3051-based panels.
+  2. **SPI panel** (480×320, e.g. ILI9486/ILI9488/ST7796): ~6 display lines + power + touch ≈ 10–12 lines. It's the
+     simplest option, runs on the Pi's SPI1 with LoRa on SPI0, but has lower resolution and ~10 fps.
+  3. **Laptop-style LVDS serializer/deserializer pair** for a parallel RGB panel: ~10 signal wires. Custom boards at
+     both ends.
 - Measurements that decide this: hinge hole W × H, original hinge flex width and trace count, free areas in the lid
   (size and depth) where the old screen PCBs sat, lid inside depth behind the panel.
 - **Quick test:** an off-the-shelf 0.5 mm FFC through the channel. Fine for bench and fit checks; plain FFC may not
