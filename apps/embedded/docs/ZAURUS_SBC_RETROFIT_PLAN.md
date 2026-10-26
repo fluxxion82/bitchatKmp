@@ -98,6 +98,19 @@ LoRa has to connect to the Pi itself, so the screen must leave the Pi's SPI pins
 - **Fewer wires:** a small lid-side adapter maps the panel's 54 pins to ~32 lines: 18-bit colour (unused LSBs tied
   on the adapter), clock/HS/VS/DE, the panel's SPI-init lines if the driver board uses them, VCC, LED+/LED−, grounds.
   Width at 0.5 mm pitch: 30 pins ≈ 16 mm, 40 ≈ 21 mm, 54 ≈ 28 mm.
+- **If the 54-pin ribbon can't fit (owner's assessment):** send HDMI through the hinge instead, with the driver board
+  in the lid.
+  - Use an FPV-style flat HDMI cable: 20-pin 0.5 mm shielded FPC, ~11 mm wide *(u)*, with plug-on mini-HDMI adapter
+    boards. Only the bare ribbon has to thread through. A normal mini-HDMI cable's molded plugs won't pass.
+  - Power doesn't need the micro-USB cable: solder two thin wires (5 V/GND, 28 AWG silicone) to the driver board's
+    supply pads.
+  - Catch: the LESOWN board is 51.3 × 45.7 mm and the mini-HDMI adapter is ~12 mm tall, which is unlikely to fit beside
+    the panel in the lid. That would need a smaller HDMI board (or desoldering the board's HDMI socket and wiring the
+    FPC to its pads), so first measure the free space in the lid where the old screen PCBs were.
+  - Last resort: serialize the display like laptops do (an LVDS/FPD-Link serializer in the base, a deserializer in
+    the lid) over a few thin wires, or carefully enlarge the hinge hole.
+- Measurements that decide this: hinge hole W × H, original hinge flex width and trace count, free areas in the lid
+  (size and depth) where the old screen PCBs sat, lid inside depth behind the panel.
 - **Quick test:** an off-the-shelf 0.5 mm FFC through the channel. Fine for bench and fit checks; plain FFC may not
   survive many swivel cycles.
 
