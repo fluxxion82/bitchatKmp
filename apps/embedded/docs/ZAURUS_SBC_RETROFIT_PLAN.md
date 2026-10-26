@@ -39,6 +39,21 @@ the good unit (the C700/C750/C760/C860 share the same case design *(verify)*).
 
 ## 3. Physical constraints (measure these first)
 
+### Measured so far (SL-C860, ±1 mm, by hand)
+
+| What | Measured | NHD-3.5-640480EF-MSXP-CTP (per listings) | Fit |
+|------|----------|-------------------------------------------|-----|
+| Original screen module (lid) | 88.64 × 64 × 5.3 mm | Outline 76.9 × 63.9 × 4.95 mm | Width: ~11.7 mm spare (needs side spacers). **Height: ~0 mm spare; re-measure the pocket itself.** Thickness: ~0.35 mm spare. |
+| Case viewport | ~80.7 × 57.3 mm | Viewing area 71.08 × 53.56 mm | ~4.8 mm black margin left/right, ~1.9 mm top/bottom. The panel outline is *narrower* than the viewport, so a black mask/bezel insert is needed to hide the panel edges. |
+
+Still to check:
+- The NHD drawing's **active-area offset**. Panel borders are usually wider on the FFC side, and with ~0 mm spare in
+  height the active area can't be shifted to centre it in the viewport.
+- Which edge the original flex exits from, and where the NHD's 40-pin FFC and 6-pin touch tail exit (the fold-back
+  needs space).
+- What the other electronics in the lid are (LCD driver/backlight board, hinge/rotation switch, other), and
+  which can go once the old panel is removed.
+
 - Closed size about **120 × 83 × 24 mm**, ~250 g *(from a C760 listing; verify on the C860)*.
 - Battery (EA-BL11): about **5 × 3 × 1 cm**, 3.7 V, reported as 1700–1800 mAh *(verify)*.
 - Base half: keyboard on top, mainboard + battery underneath. This is where the SBC has to go.
