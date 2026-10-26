@@ -165,6 +165,21 @@ small 4-wire tail *(u)*. Some eBay listings sell the digitizer alone ("mit Klebe
 on a tiny custom breakout PCB with the matching ZIF connector, assembled by JLCPCB/PCBWay. This is effectively lid
 board v0.
 
+**Choosing the ZIF connector** (one per panel variant; panels on order: one DW01 without touch, one DW05 with touch):
+1. Measure each FPC end: contact count; first-to-last contact centre distance = (N−1) × pitch (51 @ 0.3 mm → 15.0 mm,
+   61 @ 0.3 mm → 18.0 mm, 51 @ 0.5 mm → 25.0 mm, 61 @ 0.5 mm → 30.0 mm); FPC thickness at the contacts (usually 0.2 mm
+   for 0.3 mm pitch, 0.3 mm for 0.5 mm pitch); which face has the exposed contacts.
+2. Parametric search on LCSC (best, because JLCPCB can then assemble it), DigiKey or Mouser, category "FFC, FPC
+   Connectors": positions, pitch, FPC thickness, contact side (top/bottom, or dual to avoid the question),
+   right-angle SMT, flip-lock or back-flip actuator. Families to check: Hirose FH26W / FH35C (0.3 mm), Hirose FH12
+   (0.5 mm), Molex Easy-On 0.3 mm, plus generic LCSC equivalents.
+3. Have the board assembled. 0.3 mm pitch is not hand-solderable for most people.
+
+**Touch on the DW05:** it has a single ribbon, so the four touch lines (XL/XR/YU/YD) are on the 61-pin FPC. The breakout
+PCB routes them to pads that wire to the Adafruit TSC2007's X+/X−/Y+/Y− 0.1" pins (not its 1 mm FPC socket), and the
+TSC2007's SDA/SCL/IRQ/3V/GND go to the Pi. A later revision puts the bare TSC2007 chip on the lid board. The DW01 has
+no touch, so use it for display bring-up only.
+
 **Pi Zero 2 W pin budget:** DPI RGB666 takes GPIO 0–21 (including the hardware I2C, SPI and PWM pins). GPIO 22–27 are
 left: INI, RESB, backlight enable, touch SDA/SCL (`i2c-gpio`) and touch IRQ. That's exactly six, with nothing spare.
 If more pins are needed, tie RESB to INI, or move touch to the RP2040.
