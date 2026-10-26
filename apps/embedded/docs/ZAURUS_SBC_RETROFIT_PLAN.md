@@ -123,6 +123,26 @@ LoRa has to connect to the Pi itself, so the screen must leave the Pi's SPI pins
      simplest option, runs on the Pi's SPI1 with LoRa on SPI0, but has lower resolution and ~10 fps.
   3. **Laptop-style LVDS serializer/deserializer pair** for a parallel RGB panel: ~10 signal wires. Custom boards at
      both ends.
+- **Existing hinge cables:** two flex cables, each ~5 mm wide, go through the hinge with several bends on the way to
+  the base.
+  - **Don't fold the LESOWN 54-pin ribbon** to fit. Creases plus swivel motion crack traces, and the panel's own tail
+    is too short anyway.
+  - **Preferred: reuse the two original flexes in place.** Don't pull them out; that avoids re-threading the bends.
+    Cut them free from the old screen boards (or unplug them), then build a small adapter PCB at each end with matching
+    connectors, and send our signals over the original conductors.
+  - What fits depends on the total trace count:
+
+    | Total usable traces | Fits |
+    |---------------------|------|
+    | ≥ ~30 | LESOWN panel as parallel RGB at 16-bit colour (16 data + CLK/HS/VS/DE + its 3-wire SPI init + reset + VCC, LED+/−, GNDs). Driver board stays in the base; unused colour bits are tied on the lid adapter. |
+    | ~16–20 | A DSI panel (via an HDMI→DSI bridge in the base, or a CM4/CM5). Original flex impedance is unknown, but 640×480 is a low data rate. |
+    | ~10–12 | An SPI panel (480×320) + touch. |
+
+  - Before cutting anything: photograph both flexes, count traces (note the wide ones, which are power/ground), find
+    the pitch and connector type at each end (connector or soldered), and check end-to-end continuity with a
+    multimeter.
+  - If reuse fails: custom flex PCBs copying the originals' outline (scan them), threaded the same way. This probably
+    means taking the hinge apart.
 - Measurements that decide this: hinge hole W × H, original hinge flex width and trace count, free areas in the lid
   (size and depth) where the old screen PCBs sat, lid inside depth behind the panel.
 - **Quick test:** an off-the-shelf 0.5 mm FFC through the channel. Fine for bench and fit checks; plain FFC may not
