@@ -149,8 +149,39 @@ Software:
 - The panel is portrait (480×640). Rotate 90° in software (`fbcon=rotate:1` for the console; the Compose app's GL
   path for the GUI). The LR/UD straps only flip it 180°.
 
-Bench prototype before any PCB: a generic 51-pin 0.3 mm FPC-to-pin breakout + jumper wires to the Pi header + an
-adjustable LED driver module. Keep the 28 V backlight lines away from everything else.
+Bench prototype before any PCB: a generic FPC-to-pin breakout + jumper wires to the Pi header + an adjustable LED
+driver module. Keep the 28 V backlight lines away from everything else.
+
+**DW05 (touch) note:** the touch version's listing gives **61 pins** (vs 51 on the DW01), so the touch lines are
+probably on the same FPC *(u)*. Get the **DW05** spec for the pin map and pitch. To check the pitch by hand, measure
+the contact width: ~18.3 mm ≈ 0.3 mm pitch, ~30.5 mm ≈ 0.5 mm.
+
+**Pi Zero 2 W pin budget:** DPI RGB666 takes GPIO 0–21 (including the hardware I2C, SPI and PWM pins). GPIO 22–27 are
+left: INI, RESB, backlight enable, touch SDA/SCL (`i2c-gpio`) and touch IRQ. That's exactly six, with nothing spare.
+If more pins are needed, tie RESB to INI, or move touch to the RP2040.
+
+**Adapter parts, bench prototype:**
+
+| Part | Purpose | Notes |
+|------|---------|-------|
+| 61-pin FPC-to-DIP breakout board with ZIF connector (pitch per datasheet) | Gets the panel's FPC onto 2.54 mm pins | Match pitch and contact side (top/bottom) |
+| Raspberry Pi Zero 2 W with a soldered header | Host | |
+| Boost constant-current LED driver for ~28–32 V, 16–20 mA (TPS61160/TPS61169 eval module or LCD-backlight driver board) | Backlight | Must have open-LED overvoltage protection |
+| **TSC2007** breakout (e.g. Adafruit's STEMMA QT TSC2007 board, u) | 4-wire resistive touch → I2C | Mainline `tsc2007` driver; needs the PENIRQ line on a GPIO |
+| 10 kΩ resistors | Straps: MO low (VGA), LR/UD high (normal scan) | |
+| Short jumper wires, plenty of ground wires | DPI at 19.2 MHz works over ~10 cm | Keep the clock wire short |
+
+**Adapter parts, custom PCBs (Phase 3):**
+- **Lid board:**
+  - 61-pin ZIF connector;
+  - TPS61160-class boost driver with inductor (~22 µH), Schottky diode, a ≥50 V output cap and a sense resistor
+    (≈ 0.2 V / 18 mA ≈ 11 Ω);
+  - TSC2007 + decoupling;
+  - a load switch for the panel's 3.3 V (power sequencing), strap resistors, decoupling caps;
+  - a ~30-pin 0.5 mm ZIF connector for the hinge FFC.
+- **Hinge:** ~30-pin 0.5 mm FFC, length measured through the swivel.
+- **Base board:** ~30-pin 0.5 mm ZIF connector, pads to solder onto the Pi's 40-pin header, and 22–33 Ω series resistors
+  on PCLK/data (less ringing and EMI).
 
 #### Driving the NHD (MIPI DSI) panel
 - **Neither the Orange Pi Zero 2W/Zero 3 nor the Pi Zero 2 W can drive it directly.** The H616/H618 only output
