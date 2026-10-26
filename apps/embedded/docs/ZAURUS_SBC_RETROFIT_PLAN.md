@@ -156,6 +156,15 @@ driver module. Keep the 28 V backlight lines away from everything else.
 probably on the same FPC *(u)*. Get the **DW05** spec for the pin map and pitch. To check the pitch by hand, measure
 the contact width: ~18.3 mm ≈ 0.3 mm pitch, ~30.5 mm ≈ 0.5 mm.
 
+**"Touch screen digitizer" in listings:** this is the resistive touch sheet glued on top of the LCD. Sharp's own spec
+title for the DW01 is "Transflective LCD module with touch panel", so many DW01s already have one, probably on its own
+small 4-wire tail *(u)*. Some eBay listings sell the digitizer alone ("mit Kleber" = with adhesive). If the tail is a
+4-pin 1.0 mm FPC, it plugs straight into the Adafruit TSC2007 breakout (product 5423), which has a 1 mm FPC connector.
+
+**FPC breakout:** no off-the-shelf 51- or 61-pin breakout turned up (only 45-pin 0.3 mm and 60-pin 0.5 mm boards). Plan
+on a tiny custom breakout PCB with the matching ZIF connector, assembled by JLCPCB/PCBWay. This is effectively lid
+board v0.
+
 **Pi Zero 2 W pin budget:** DPI RGB666 takes GPIO 0–21 (including the hardware I2C, SPI and PWM pins). GPIO 22–27 are
 left: INI, RESB, backlight enable, touch SDA/SCL (`i2c-gpio`) and touch IRQ. That's exactly six, with nothing spare.
 If more pins are needed, tie RESB to INI, or move touch to the RP2040.
