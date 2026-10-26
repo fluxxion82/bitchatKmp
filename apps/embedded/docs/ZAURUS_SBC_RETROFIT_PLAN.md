@@ -80,6 +80,27 @@ the pinout.
 A **3.5" 4:3 640×480 IPS** panel fits the 3.7" window almost perfectly (slightly smaller active area) and keeps
 the original resolution. Waveshare sells one with a **DPI (parallel RGB666)** interface and I2C capacitive touch.
 
+### Current direction (LoRa on the Pi is a requirement)
+
+LoRa has to connect to the Pi itself, so the screen must leave the Pi's SPI pins free:
+- **HDMI panel kit (e.g. LESOWN M35-A01S) → primary.** It uses no GPIO, so the RFM95W/SX1276 goes on the Pi's SPI0 like
+  the existing LoRa profile (new pin map for the Pi). Touch (TSC2007, I2C) and the keyboard MCU also fit.
+- **Sharp LS037V7DW01/DW05 over DPI → secondary / v2.** DPI takes GPIO 0–21, which includes both SPI buses, and the
+  six left over are already used by the panel and touch. LoRa would have to move to a USB microcontroller (new
+  `linuxArm64` transport code). Keep the Sharp panels for experiments, or for a later board with more pins (CM4/CM5).
+
+### Hinge cable plan
+- The original hinge flex already carries a parallel display bus, so a cable of similar width fits by definition.
+  **Measure the original flex:** width at its narrowest point inside the hinge, trace count, and the connector
+  pin count/pitch at each end. Lay it on a flatbed scanner next to a ruler.
+- **Best option:** a custom flex PCB with the same outline as the original (JLCPCB/PCBWay make polyimide flex), with our
+  pinout and small adapter boards at each end. This keeps the factory routing and the twist/loop the swivel needs.
+- **Fewer wires:** a small lid-side adapter maps the panel's 54 pins to ~32 lines: 18-bit colour (unused LSBs tied
+  on the adapter), clock/HS/VS/DE, the panel's SPI-init lines if the driver board uses them, VCC, LED+/LED−, grounds.
+  Width at 0.5 mm pitch: 30 pins ≈ 16 mm, 40 ≈ 21 mm, 54 ≈ 28 mm.
+- **Quick test:** an off-the-shelf 0.5 mm FFC through the channel. Fine for bench and fit checks; plain FFC may not
+  survive many swivel cycles.
+
 ### Candidate panels
 
 Size check: the original 3.7" 4:3 active area is about **75 × 56 mm**. A 3.5" 4:3 panel is about **71–72 × 53–55 mm**,
