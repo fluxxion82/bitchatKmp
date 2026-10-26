@@ -112,6 +112,46 @@ Pi Zero 2 W + DPI pin budget: DPI18 uses GPIO 0–21 (including hardware I2C/SPI
 panel's SPI init, touch (i2c-gpio) and reset. That's enough for the display, but not for LoRa too, so LoRa moves to the
 companion MCU (§5). About 25 wires must cross the hinge for DPI.
 
+#### Connecting the Sharp LS037V7DW01 to the Pi Zero 2 W (chosen candidate)
+
+There's no off-the-shelf adapter for this panel, so we build a small one. Signal chain:
+
+```
+LS037V7DW01 ──51-pin 0.3 mm FPC──▶ LID BOARD ──~30-pin 0.5 mm FFC through hinge──▶ BASE BOARD ──▶ Pi Zero 2 W GPIO
+ (lid)                              (lid, in the freed       (thin, flexible, loops    (soldered to the
+                                     space beside the panel)  like the original)         Pi's 40-pin header)
+```
+
+What we know about the panel (needs the full Sharp spec, LCP-06008A, to confirm):
+- **FPC:** 51 pins, 0.3 mm pitch *(reseller listing, u)*. Pin 1 LED+, pin 3 LED−, pins 24–26 VCC 3.3 V, several GND. RGB/control
+  pin positions are not confirmed yet.
+- **Logic:** 3.3 V (3.0–3.6 V), the same as the Pi's GPIO, so no level shifting.
+- **Backlight:** white LED string, **~27.9 V at 16–20 mA**. Needs a small boost constant-current LED driver (TPS61160-class),
+  PWM-dimmed from a Pi GPIO.
+- **Control pins** (from the Linux binding): INI (power on), RESB (reset), MO (low = 480×640 VGA), LR and UD (scan
+  direction). MO/LR/UD can be tied with resistors, leaving INI and RESB on GPIOs.
+- **Timing** (mainline `panel-sharp-ls037v7dw01.c`): 19.2 MHz pixel clock, 480×640, hfp 1 / hsync 2 / hbp 28, vfp 1 /
+  vsync 1 / vbp 1. Well within the Pi's DPI range.
+- **Touch:** the DW05 variant has a 4-wire resistive layer → a TSC2007 (I2C, mainline driver) on the lid board, or the 4
+  lines to the RP2040's ADC.
+
+Boards:
+- **Lid board:** 51-pin 0.3 mm ZIF connector for the panel, LED boost driver, 3.3 V load switch (for power sequencing),
+  strap resistors, touch controller, and an FFC connector for the hinge cable.
+- **Hinge cable (~30 lines):** 18 RGB data + PCLK + HSYNC + VSYNC (+ DE) + INI + RESB + backlight PWM + touch I2C/IRQ +
+  3.3 V + 5 V + several GND. An off-the-shelf 0.5 mm FFC first, a custom flex later if it doesn't survive the swivel.
+- **Base board:** FFC connector → the Pi's GPIO in DPI RGB666 mode (GPIO 0–21), INI/RESB/PWM/touch on GPIO 22–27.
+
+Software:
+- `dtoverlay=vc4-kms-dpi-generic` with the timings above and `rgb666-padhi`, INI/RESB driven by a small script. Or, better:
+  a small overlay that binds the mainline `sharp,ls037v7dw01` panel driver to the Pi's DPI output, so the kernel handles
+  power-up and reset. Check that Raspberry Pi OS builds `CONFIG_DRM_PANEL_SHARP_LS037V7DW01`; if not, build it as a module.
+- The panel is portrait (480×640). Rotate 90° in software (`fbcon=rotate:1` for the console; the Compose app's GL
+  path for the GUI). The LR/UD straps only flip it 180°.
+
+Bench prototype before any PCB: a generic 51-pin 0.3 mm FPC-to-pin breakout + jumper wires to the Pi header + an
+adjustable LED driver module. Keep the 28 V backlight lines away from everything else.
+
 #### Driving the NHD (MIPI DSI) panel
 - **Neither the Orange Pi Zero 2W/Zero 3 nor the Pi Zero 2 W can drive it directly.** The H616/H618 only output
   HDMI (and composite); the Pi Zero 2 W has no DSI connector.
