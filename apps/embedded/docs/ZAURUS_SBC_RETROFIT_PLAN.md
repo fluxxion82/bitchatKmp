@@ -91,6 +91,7 @@ printed shim/bezel to centre it.
 | [Waveshare 3.5inch DPI LCD](https://www.waveshare.com/3.5inch-dpi-lcd.htm) (SKU 19173; [Amazon B08TBF5PHH](https://www.amazon.com/Waveshare-3-5inch-Capacitive-LCD-DPI/dp/B08TBF5PHH)), 640×480 IPS, I2C cap touch, ~$35 | DPI666 via the 40-pin header | Raspberry Pi (Option A) | **As sold, no:** it's a HAT that plugs directly onto the Pi (panel + toughened cover glass on an adapter board, ~80 g). In the Zaurus the Pi sits in the base and the panel in the lid, so the panel would have to come off its adapter and get a new flex through the hinge. Whether its FPC is separable is unknown until one is in hand. **Great for the Phase 1 bench prototype.** |
 | [Waveshare 3.5inch HDMI LCD (E)](https://www.amazon.com/3-5inch-HDMI-Capacitive-LCD-Resolution/dp/B0B2LJY1S5), 640×480 IPS, cap touch | HDMI | Orange Pi Zero 2W (Option B) | Driver board + HDMI connector behind the panel; likely too thick for the lid *(verify)*. Bench use only. |
 | [Waveshare 3.5inch DSI LCD (E)](https://www.waveshare.com/3.5inch-dsi-lcd-e.htm), 640×480 IPS, cap touch | MIPI DSI | Boards with a DSI port: Pi 4/5, CM4/CM5 (Option C). **Not** the Pi Zero 2 W (no DSI) | Unknown; check its outline drawing. |
+| [Waveshare 3.5inch TFT Touch Shield](https://www.waveshare.com/product/displays/lcd-oled/lcd-oled-2/3.5inch-tft-touch-shield.htm), **480×320**, ILI9486, XPT2046 resistive touch | SPI (~10 slow signals) | **Any board**, incl. Orange Pi and Pi Zero 2 W, with no bridge | Outline 86.0 × 57.2 mm fits the 90.3 × 65.5 pocket; display area 74.2 × 49.8 mm leaves ~3.3 mm / ~3.8 mm margins in the 80.7 × 57.3 window. **Thickness not published:** it's an Arduino shield (header pins, SD slot under the PCB), so it only fits the 5.3 mm pocket with the headers removed, or the panel taken off the PCB. Hinge-friendly wiring. Trade-offs: half the pixels of the original (60×20 vs 80×30 text at 8×16), ~10–15 fps, and the Compose app needs work to render to an SPI panel (the TUI works on the console as-is). |
 | [Newhaven NHD-3.5-640480EF-MSXP-CTP](https://newhavendisplay.com/content/specs/NHD-3.5-640480EF-MSXP-CTP.pdf), 640×480 IPS, 810-nit sunlight-readable, FT5426 cap touch | MIPI DSI, 40-pin 0.5 mm FFC + 6-pin touch | DSI boards (Option C) | **Best candidate for the final build:** a bare panel (thinnest), full datasheet with an outline drawing, viewing area 71.68 × 54.56 mm. |
 
 Also checked: Newhaven's own HDMI version (NHD-3.5-HDMI-HR-RSXP, 640×480) is **92 × 63.9 × 15.34 mm** (17.09 mm with
@@ -135,8 +136,10 @@ DSI (compute module), unless the Waveshare DPI panel turns out to be separable f
 - Cost: **the only display output on the board is mini-HDMI.** That leaves two choices:
   - an HDMI→RGB/MIPI bridge board (e.g. TFP401- or Lontium-based) in the base, then a flex to the panel. It
     adds size, ~0.5 W and one more board;
-  - or a **3.5" SPI panel (480×320)**, which this repo already supports (the Elecrow SPI screen). It's slow
-    but fine for text/TUI, and loses the 640×480 resolution and 4:3 fit.
+  - or a **3.5" SPI panel (480×320)**, e.g. the Waveshare 3.5inch TFT Touch Shield (see the candidate table). It's slow
+    but fine for text/TUI, and loses the 640×480 resolution and 4:3 fit. Correction to an earlier draft: the repo
+    has **not** run an SPI *display* before. The old Elecrow screen was HDMI video with SPI (XPT2046) *touch*. The
+    touch side is supported; the display side is new work (see the shield row).
 
 ### Option C — Compute module on a custom carrier (best end result, v2)
 - A Raspberry Pi CM4/CM5-class module on a PCB shaped like the Zaurus mainboard, with DSI/DPI, charger, MCU,
